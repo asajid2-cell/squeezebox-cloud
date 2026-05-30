@@ -777,8 +777,6 @@ async function maintainVisiblePlaybackQueue(lms, status, track) {
   syncVisibleQueueWithCurrentTrack(track);
   await topOffGeneratedQueue(lms, status.id);
   if (appState.playback.smartQueue || appState.playback.shuffle) {
-    if (appState.playback.repeat !== "off") updatePlayback({ repeat: "off" });
-    lms.control(status.id, "repeat", "off").catch(() => null);
     lms.control(status.id, "shuffle", false).catch(() => null);
   }
   const needsPlaybackNudge = shouldNudgePlayback(status, track);
@@ -821,8 +819,6 @@ function addGeneratedQueueItem(track, mode = appState.playback.smartShuffleSourc
 
 async function playNextVisibleQueueItem(lms, playerId) {
   if (appState.playback.smartQueue || appState.playback.shuffle) {
-    if (appState.playback.repeat !== "off") updatePlayback({ repeat: "off" });
-    lms.control(playerId, "repeat", "off").catch(() => null);
     lms.control(playerId, "shuffle", false).catch(() => null);
   }
   await topOffGeneratedQueue(lms, playerId);
@@ -877,6 +873,7 @@ function syncVisibleQueueWithCurrentTrack(track) {
 }
 
 function shouldNudgePlayback(status, track) {
+  if (appState.playback.repeat === "one") return false;
   if (status.mode === "stop" || status.mode === "stopped") return true;
   if (status.mode === "pause") return false;
   const duration = Number(track?.duration || 0);

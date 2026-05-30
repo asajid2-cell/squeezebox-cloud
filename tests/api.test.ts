@@ -365,14 +365,25 @@ describe("Cloud Squeeze API", () => {
     appState.playback = { ...appState.playback, shuffle: false, smartQueue: true, smartShuffleSource: "spotify", history: [] };
     addQueueItem({ title: "Smart Existing", artist: "Tester", requestedBy: "smart shuffle", uri: "spotify:track:existing" });
     addQueueItem({ title: "Manual Existing", artist: "Tester", requestedBy: "guest", path: "/music/manual.mp3" });
+    const controls: Array<{ action: string; value: string }> = [];
 
-    const response = await request(createApp({ lms: mockLms }))
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string, value: string) {
+          controls.push({ action, value });
+          return "ok";
+        }
+      }
+    }))
       .post("/api/player/playback")
       .send({ repeat: "one" })
       .expect(200);
 
     expect(response.body.playback.repeat).toBe("one");
     expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Smart Existing", "Manual Existing"]);
+    expect(controls).toContainEqual({ action: "repeat", value: "one" });
+    expect(controls).not.toContainEqual({ action: "repeat", value: "off" });
   });
 
   it("manual queueing is non destructive while generated shuffle is active", async () => {
@@ -398,6 +409,27 @@ describe("Cloud Squeeze API", () => {
 
     expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Manual Heavy", "Generated A", "Generated B"]);
     expect(played).toContainEqual({ action: "play-next", track: expect.objectContaining({ title: "Manual Heavy" }) });
+  });
+
+  it("manual next does not disable repeat one", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: true, smartQueue: false, smartShuffleSource: "spotify", repeat: "one", history: [] };
+    addQueueItem({ title: "Generated A", artist: "Tester", requestedBy: "shuffle", uri: "spotify:track:generated-a" });
+    const controls: Array<{ action: string; value: string }> = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string, value: string) {
+          controls.push({ action, value });
+          return "ok";
+        }
+      }
+    });
+
+    await request(app).post("/api/player/next").expect(200);
+
+    expect(appState.playback.repeat).toBe("one");
+    expect(controls).not.toContainEqual({ action: "repeat", value: "off" });
   });
 
   it("manual play now regenerates generated shuffle around the new seed", async () => {
