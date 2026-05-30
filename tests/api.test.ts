@@ -43,6 +43,9 @@ const mockLms = {
   async spotifyLibrary() {
     return [{ id: "spotify:playlist:1", title: "Test Playlist", artist: "Spotify", source: "Spotify playlist", uri: "spotify:playlist:1", kind: "playlist" }];
   },
+  async spotifyChildren() {
+    return [{ id: "spotify:track:child", title: "Playlist Track", artist: "Spotify", source: "Spotify", uri: "spotify:track:child", kind: "track" }];
+  },
   async artwork() {
     return { contentType: "image/jpeg", bytes: Buffer.from("fake-jpeg") };
   },
@@ -157,6 +160,14 @@ describe("Cloud Squeeze API", () => {
   });
 
   it("sends local tracks to LMS playback controls", async () => {
+    const played: Array<{ action: string; track: { title?: string } }> = [];
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string }, action: string) {
+        played.push({ action, track });
+        return "ok";
+      }
+    };
     const response = await request(createApp({ lms: mockLms }))
       .post("/api/player/track")
       .send({ action: "play-next", track: { title: "Local", artist: "Tester", path: "/music/test/local.mp3" } })
@@ -164,6 +175,11 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.ok).toBe(true);
     expect(response.body.action).toBe("play-next");
     expect(response.body.queued.title).toBe("Local");
+    await request(createApp({ lms }))
+      .post("/api/player/track")
+      .send({ action: "play-next", track: { title: "Manual Next", artist: "Tester", path: "/music/test/manual.mp3" } })
+      .expect(200);
+    expect(played).toContainEqual({ action: "play-next", track: expect.objectContaining({ title: "Manual Next" }) });
   });
 
   it("keeps queued tracks visible until next consumes them", async () => {
@@ -187,7 +203,8 @@ describe("Cloud Squeeze API", () => {
     const next = await request(app).post("/api/player/next").expect(200);
 
     expect(next.body.action).toBe("visible-queue-next");
-    expect(played).toEqual([{ action: "play-now", track: expect.objectContaining({ title: "Visible Queue Song" }) }]);
+    expect(played).toContainEqual({ action: "add-queue", track: expect.objectContaining({ title: "Visible Queue Song" }) });
+    expect(played).toContainEqual({ action: "play-now", track: expect.objectContaining({ title: "Visible Queue Song" }) });
     expect(appState.queue.some((item) => item.title === "Visible Queue Song")).toBe(false);
   });
 
@@ -237,6 +254,13 @@ describe("Cloud Squeeze API", () => {
   it("returns Spotify library sections from Spotty", async () => {
     const response = await request(createApp({ lms: mockLms })).get("/api/spotify/library?type=playlists").expect(200);
     expect(response.body.results[0].kind).toBe("playlist");
+  });
+
+  it("opens Spotify playlist children instead of queueing playlist containers", async () => {
+    const response = await request(createApp({ lms: mockLms }))
+      .get("/api/spotify/children?uri=spotify%3Aplaylist%3A1&kind=playlist")
+      .expect(200);
+    expect(response.body.results[0]).toMatchObject({ title: "Playlist Track", kind: "track" });
   });
 
   it("accepts only validated audio uploads", async () => {
@@ -306,8 +330,53 @@ describe("Cloud Squeeze API", () => {
       .send({ source: "spotify", count: 1 })
       .expect(200);
     expect(response.body.queued[0].source).toBe("Spotify");
-    expect(response.body.playback.shuffle).toBe(true);
+    expect(response.body.playback.smartQueue).toBe(true);
+    expect(response.body.playback.smartShuffleSource).toBe("spotify");
     expect(played).toHaveLength(0);
+  });
+
+  it("regenerates smart queue from the selected source and preserves user queue rows", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: true, smartShuffleSource: "mixed", history: [] };
+    addQueueItem({ title: "Guest Pick", artist: "Tester", requestedBy: "guest", path: "/music/guest.mp3" });
+    addQueueItem({ title: "Old Local Smart", artist: "Tester", requestedBy: "smart shuffle", path: "/music/local.mp3" });
+
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async spotifySearch() {
+          return [{ id: "spotify:fresh", title: "Fresh Spotify", artist: "Tester", source: "Spotify", uri: "spotify:track:fresh", kind: "track" }];
+        }
+      }
+    });
+    const response = await request(app)
+      .post("/api/player/playback")
+      .send({ smartQueue: true, smartShuffleSource: "spotify" })
+      .expect(200);
+
+    expect(response.body.queue).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ title: "Guest Pick", requestedBy: "guest" }),
+        expect.objectContaining({ title: "Fresh Spotify", requestedBy: "smart shuffle", uri: "spotify:track:fresh" })
+      ])
+    );
+    expect(response.body.queue).not.toEqual(expect.arrayContaining([expect.objectContaining({ title: "Old Local Smart" })]));
+    expect(response.body.queue.filter((item: { requestedBy: string; uri?: string }) => item.requestedBy === "smart shuffle").every((item: { uri?: string }) => item.uri?.startsWith("spotify:track:"))).toBe(true);
+  });
+
+  it("turns off smart queue without removing user requested songs", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: true, smartShuffleSource: "mixed", history: [] };
+    addQueueItem({ title: "Manual Next", artist: "Tester", requestedBy: "guest", path: "/music/manual.mp3" });
+    addQueueItem({ title: "Generated Next", artist: "Tester", requestedBy: "smart shuffle", uri: "spotify:track:generated" });
+
+    const response = await request(createApp({ lms: mockLms }))
+      .post("/api/player/playback")
+      .send({ smartQueue: false, shuffle: false })
+      .expect(200);
+
+    expect(response.body.playback.smartQueue).toBe(false);
+    expect(response.body.queue).toEqual([expect.objectContaining({ title: "Manual Next", requestedBy: "guest" })]);
   });
 
   it("plays the next smart shuffle item from the visible queue", async () => {

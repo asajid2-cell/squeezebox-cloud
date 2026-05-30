@@ -37,7 +37,7 @@ const fallbackState: AppState = {
     albumReview: "No album review available yet.",
     lyrics: "Lyrics will appear when available."
   },
-  playback: { shuffle: false, repeat: "off", smartShuffleSource: "mixed", lastShuffleRefillAt: 0, lastShuffleSeed: "", history: [] },
+  playback: { shuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "mixed", lastShuffleRefillAt: 0, lastShuffleSeed: "", lastSmartQueueBase: "", history: [] },
   admin: { publicRequests: true, maxQueuePerUser: 3, moderation: "basic", scheduleEnabled: true }
 };
 
@@ -72,11 +72,31 @@ export async function fetchSpotifyLibrary(type: "playlists" | "albums" | "artist
   return data.results || [];
 }
 
+export async function fetchSpotifyChildren(track: Partial<Track>, limit = 200): Promise<Track[]> {
+  const params = new URLSearchParams();
+  if (track.browseId) params.set("browseId", String(track.browseId));
+  if (track.uri) params.set("uri", String(track.uri));
+  if (track.kind) params.set("kind", String(track.kind));
+  params.set("limit", String(limit));
+  const response = await fetch(`${apiBase}/spotify/children?${params.toString()}`);
+  if (!response.ok) return [];
+  const data = await response.json();
+  return data.results || [];
+}
+
 export async function fetchCollections(source = "all"): Promise<LibraryCollection[]> {
   const response = await fetch(`${apiBase}/library/collections?source=${encodeURIComponent(source)}`);
   if (!response.ok) return [];
   const data = await response.json();
   return data.collections || [];
+}
+
+export async function fetchCollectionTracks(collection: string, folder: string, source = "all", limit = 1000): Promise<Track[]> {
+  const params = new URLSearchParams({ collection, folder, source, limit: String(limit) });
+  const response = await fetch(`${apiBase}/library/collection?${params.toString()}`);
+  if (!response.ok) return [];
+  const data = await response.json();
+  return data.results || [];
 }
 
 export async function uploadTrack(file: File) {

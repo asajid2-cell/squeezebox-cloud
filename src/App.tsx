@@ -28,9 +28,11 @@ import {
   checkMusicInfo,
   checkSpeaker,
   checkSpotify,
+  fetchCollectionTracks,
   clearAdminSession,
   fetchCollections,
   fetchConnectionGuide,
+  fetchSpotifyChildren,
   fetchSpotifyLibrary,
   fetchState,
   getSpotifyConnect,
@@ -47,7 +49,6 @@ import {
   searchSpotify,
   seekPlayer,
   setPlayerVolume,
-  smartShuffle,
   updateQueueItem,
   uploadTrack,
 } from "./lib/api";
@@ -238,13 +239,7 @@ function PublicScreen({
   if (activeScreen === "Playlists") {
     return (
       <div className="content-grid focus-grid">
-        <PlaylistsPanel
-          onOpenFolder={(folder) => {
-            setQuery(folder);
-            setSourceFilter("local");
-            setActiveScreen("Library");
-          }}
-        />
+        <PlaylistsPanel onRefresh={onRefresh} />
         <RightRail state={state} />
       </div>
     );
@@ -315,12 +310,24 @@ function NowPlayingPanel({
 }
 
 function PlaybackOptions({ state, disabled, onRefresh }: { state: AppState; disabled: boolean; onRefresh: () => void }) {
-  const playback = state.playback || { shuffle: false, repeat: "off", smartShuffleSource: "mixed" as const };
+  const playback = state.playback || { shuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "mixed" as const };
   const repeatIcon = playback.repeat === "one" ? <Repeat1 size={17} /> : <Repeat size={17} />;
+  const shuffleLabel = playback.smartQueue ? "Smart shuffle" : playback.shuffle ? "Shuffle on" : "Shuffle";
 
   async function setRepeat() {
     const next = playback.repeat === "off" ? "all" : playback.repeat === "all" ? "one" : "off";
     await savePlayback({ repeat: next });
+    await onRefresh();
+  }
+
+  async function cycleShuffle() {
+    const next =
+      playback.smartQueue
+        ? { shuffle: false, smartQueue: false }
+        : playback.shuffle
+          ? { shuffle: false, smartQueue: true }
+          : { shuffle: true, smartQueue: false };
+    await savePlayback(next);
     await onRefresh();
   }
 
@@ -332,13 +339,13 @@ function PlaybackOptions({ state, disabled, onRefresh }: { state: AppState; disa
   return (
     <div className="playback-options" aria-label="Playback options">
       <button
-        className={playback.shuffle ? "active-option" : ""}
+        className={playback.shuffle || playback.smartQueue ? "active-option" : ""}
         disabled={disabled}
-        title="Use LMS shuffle for the active queue"
-        onClick={() => savePlayback({ shuffle: !playback.shuffle }).then(onRefresh)}
+        title="Cycles between shuffle, smart shuffle, and off"
+        onClick={cycleShuffle}
       >
         <Shuffle size={17} />
-        Shuffle
+        {shuffleLabel}
       </button>
       <button className={playback.repeat !== "off" ? "active-option" : ""} disabled={disabled} title="Repeat off, all, or one" onClick={setRepeat}>
         {repeatIcon}
@@ -351,10 +358,6 @@ function PlaybackOptions({ state, disabled, onRefresh }: { state: AppState; disa
           </button>
         ))}
       </div>
-      <button className="smart-shuffle" disabled={disabled} title="Queue related Spotify picks and optional local matches from the current song" onClick={() => smartShuffle(playback.smartShuffleSource).then(onRefresh)}>
-        <Shuffle size={17} />
-        Smart shuffle
-      </button>
     </div>
   );
 }
@@ -711,11 +714,15 @@ function SearchPanel({
   );
 }
 
-function PlaylistsPanel({ onOpenFolder }: { onOpenFolder: (folder: string) => void }) {
+function PlaylistsPanel({ onRefresh }: { onRefresh: () => void }) {
   const [collections, setCollections] = useState<LibraryCollection[]>([]);
   const [source, setSource] = useState<"local" | "spotify">("local");
   const [spotifyType, setSpotifyType] = useState<"playlists" | "albums" | "artists" | "tracks" | "home">("playlists");
   const [spotifyItems, setSpotifyItems] = useState<Track[]>([]);
+  const [selectedLocal, setSelectedLocal] = useState<LibraryCollection | null>(null);
+  const [selectedSpotify, setSelectedSpotify] = useState<Track | null>(null);
+  const [detailTracks, setDetailTracks] = useState<Track[]>([]);
+  const [loadingDetail, setLoadingDetail] = useState(false);
 
   useEffect(() => {
     fetchCollections().then(setCollections);
@@ -725,18 +732,65 @@ function PlaylistsPanel({ onOpenFolder }: { onOpenFolder: (folder: string) => vo
     if (source === "spotify") fetchSpotifyLibrary(spotifyType, 80).then(setSpotifyItems);
   }, [source, spotifyType]);
 
+  async function openLocal(collection: LibraryCollection) {
+    setSelectedSpotify(null);
+    setSelectedLocal(collection);
+    setLoadingDetail(true);
+    try {
+      setDetailTracks(await fetchCollectionTracks(collection.collection, collection.folder, "all", 1500));
+    } finally {
+      setLoadingDetail(false);
+    }
+  }
+
+  async function openSpotify(track: Track) {
+    if (track.kind === "track") {
+      await playTrack("add-queue", track);
+      await onRefresh();
+      return;
+    }
+    setSelectedLocal(null);
+    setSelectedSpotify(track);
+    setLoadingDetail(true);
+    try {
+      setDetailTracks(await fetchSpotifyChildren(track, 250));
+    } finally {
+      setLoadingDetail(false);
+    }
+  }
+
+  const selectedTitle = selectedLocal?.folder || selectedSpotify?.title || "";
+  const selectedSubtitle = selectedLocal?.collection || selectedSpotify?.artist || selectedSpotify?.source || "";
+
   return (
     <section className="panel playlist-panel" aria-label="Playlists">
-      <h2>Collections</h2>
+      <div className="playlist-title-row">
+        <div>
+          <h2>{selectedTitle ? selectedTitle : "Collections"}</h2>
+          {selectedTitle && <small>{selectedSubtitle}</small>}
+        </div>
+        {selectedTitle && (
+          <button
+            className="ghost-add"
+            onClick={() => {
+              setSelectedLocal(null);
+              setSelectedSpotify(null);
+              setDetailTracks([]);
+            }}
+          >
+            Back
+          </button>
+        )}
+      </div>
       <div className="source-tabs">
-        <button className={source === "local" ? "primary-small" : ""} onClick={() => setSource("local")}>
+        <button className={source === "local" ? "primary-small" : ""} onClick={() => { setSource("local"); setSelectedSpotify(null); setDetailTracks([]); }}>
           Local
         </button>
-        <button className={source === "spotify" ? "primary-small" : ""} onClick={() => setSource("spotify")}>
+        <button className={source === "spotify" ? "primary-small" : ""} onClick={() => { setSource("spotify"); setSelectedLocal(null); setDetailTracks([]); }}>
           Spotify
         </button>
       </div>
-      {source === "spotify" && (
+      {source === "spotify" && !selectedTitle && (
         <div className="suggestion-row" aria-label="Spotify playlist filters">
           {(["playlists", "albums", "artists", "tracks", "home"] as const).map((type) => (
             <button key={type} className={spotifyType === type ? "is-selected" : ""} onClick={() => setSpotifyType(type)}>
@@ -745,15 +799,23 @@ function PlaylistsPanel({ onOpenFolder }: { onOpenFolder: (folder: string) => vo
           ))}
         </div>
       )}
-      {source === "local" && collections.length === 0 && (
+      {selectedTitle && (
+        <PlaylistTracks
+          title={selectedTitle}
+          tracks={detailTracks}
+          loading={loadingDetail}
+          onRefresh={onRefresh}
+        />
+      )}
+      {!selectedTitle && source === "local" && collections.length === 0 && (
         <EmptyState title="No collections found" detail="Import music folders or rescan the LMS library." />
       )}
-      {source === "spotify" && spotifyItems.length === 0 && (
+      {!selectedTitle && source === "spotify" && spotifyItems.length === 0 && (
         <EmptyState title="No Spotify items found" detail="Spotty did not return items for this library section yet." />
       )}
-      {source === "local" && <div className="collection-list">
+      {!selectedTitle && source === "local" && <div className="collection-list">
         {collections.map((item) => (
-          <button className="collection-row" key={`${item.collection}-${item.folder}`} onClick={() => onOpenFolder(item.folder)}>
+          <button className="collection-row" key={`${item.collection}-${item.folder}`} onClick={() => openLocal(item)}>
             <div>
               <strong>{item.folder}</strong>
               <small>{item.collection}</small>
@@ -764,9 +826,9 @@ function PlaylistsPanel({ onOpenFolder }: { onOpenFolder: (folder: string) => vo
           </button>
         ))}
       </div>}
-      {source === "spotify" && <div className="collection-list">
+      {!selectedTitle && source === "spotify" && <div className="collection-list">
         {spotifyItems.map((track) => (
-          <button className="collection-row spotify-collection" key={track.id} onClick={() => playTrack("add-queue", track)}>
+          <button className="collection-row spotify-collection" key={track.id} onClick={() => openSpotify(track)}>
             <div className="cover-thumb">{track.art && <img src={track.art} alt="" />}</div>
             <div>
               <strong>{track.title}</strong>
@@ -778,6 +840,57 @@ function PlaylistsPanel({ onOpenFolder }: { onOpenFolder: (folder: string) => vo
         ))}
       </div>}
     </section>
+  );
+}
+
+function PlaylistTracks({
+  title,
+  tracks,
+  loading,
+  onRefresh
+}: {
+  title: string;
+  tracks: Track[];
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  async function queueAll(action: "add-queue" | "play-next") {
+    for (const track of tracks.filter((item) => !item.kind || item.kind === "track").slice(0, 200)) {
+      await playTrack(action, track);
+    }
+    await onRefresh();
+  }
+
+  return (
+    <div className="playlist-detail" aria-label={`${title} tracks`}>
+      <div className="playlist-detail-actions">
+        <span>{loading ? "Loading tracks" : `${tracks.length} tracks`}</span>
+        <button className="ghost-add" disabled={tracks.length === 0} onClick={() => queueAll("play-next")}>Play next</button>
+        <button className="ghost-add" disabled={tracks.length === 0} onClick={() => queueAll("add-queue")}>Queue all</button>
+      </div>
+      {loading && <EmptyState title="Opening playlist" detail="Loading songs from the selected collection." />}
+      {!loading && tracks.length === 0 && <EmptyState title="No songs found" detail="This playlist did not expose tracks yet." />}
+      <div className="result-list">
+        {tracks.map((track) => (
+          <div className="result-row" key={track.id}>
+            <div className="cover-thumb">{track.art && <img src={track.art} alt="" />}</div>
+            <div>
+              <strong>{track.title}</strong>
+              <small>
+                {track.artist} - {track.album || track.source}
+                {track.folder ? ` / ${track.folder}` : ""}
+              </small>
+            </div>
+            <span>{track.duration ? formatTime(track.duration) : "--:--"}</span>
+            <div className="track-actions">
+              <button className="ghost-add" onClick={() => playTrack("play-now", track).then(onRefresh)}>Play now</button>
+              <button className="ghost-add" onClick={() => playTrack("play-next", track).then(onRefresh)}>Play next</button>
+              <button className="ghost-add" onClick={() => playTrack("add-queue", track).then(onRefresh)}>Queue</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

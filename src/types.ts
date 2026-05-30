@@ -13,6 +13,7 @@ export type Track = {
   path?: string;
   uri?: string;
   lmsTrackId?: string | number;
+  browseId?: string;
   collection?: string;
   folder?: string;
 };
@@ -53,10 +54,12 @@ export type AppState = {
   };
   playback: {
     shuffle: boolean;
+    smartQueue?: boolean;
     repeat: "off" | "one" | "all";
     smartShuffleSource: "mixed" | "spotify" | "local";
     lastShuffleRefillAt?: number;
     lastShuffleSeed?: string;
+    lastSmartQueueBase?: string;
     history?: string[];
   };
   admin: {

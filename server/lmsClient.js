@@ -142,13 +142,8 @@ export class LmsClient {
       "play-next": "insert",
       "add-queue": "add"
     };
-    const playableUri = target.value.startsWith("spotify:") ? target.value.replace(/^spotify:/, "spotify://") : target.value;
-    if (playableUri.startsWith("file://")) {
-      const result = await this.jsonRequest([playerId, ["playlist", cmdMap[action] || "add", playableUri]]);
-      if (action === "play-now") await this.control(playerId, "play");
-      return result;
-    }
-    const result = await this.jsonRequest([playerId, ["playlist", cmdMap[action] || "add", playableUri]]);
+    const playableUri = spottyPlaybackUri(target.value);
+    const result = await this.command(`${encodeURIComponent(playerId)} playlist ${cmdMap[action] || "add"} ${playableUri}`);
     if (action === "play-now") await this.control(playerId, "play");
     return result;
   }
@@ -262,6 +257,22 @@ export class LmsClient {
     return spotifyPlayableItems(items, selection.kind).map((item) => spotifyItemToTrack(item));
   }
 
+  async spotifyChildren(playerId, { browseId = "", uri = "", kind = "playlist" } = {}, limit = 100, offset = 0) {
+    if (!playerId) return [];
+    const count = Math.max(1, Math.min(300, Number(limit) || 100));
+    const start = Math.max(0, Number(offset) || 0);
+    const candidates = [browseId, uri].filter(Boolean);
+    if (uri && !candidates.includes(uri.replace(/^spotify:/, "spotify://"))) candidates.push(uri.replace(/^spotify:/, "spotify://"));
+    for (const id of candidates) {
+      const response = await this.jsonRequest([playerId, ["spotty", "items", start, count, "menu:spotty", `item_id:${id}`]]).catch(() => null);
+      const items = response?.result?.item_loop || response?.result?.loop_loop || [];
+      const tracks = spotifyPlayableItems(items, "track").map((item) => spotifyItemToTrack(item));
+      if (tracks.length > 0) return tracks;
+    }
+    if (uri && kind === "track") return [{ id: uri, uri, title: "Spotify track", artist: "Spotify", source: "Spotify", kind: "track" }];
+    return [];
+  }
+
   async spotifyStatus() {
     try {
       const spotty = await this.detectSpottyFromConfig();
@@ -347,6 +358,10 @@ function streamUrl(trackPath) {
   return `http://${config.lanLmsHost}:${config.port}/api/stream/${encoded}/${name}`;
 }
 
+function spottyPlaybackUri(value) {
+  return String(value || "").replace(/^spotify:(track|episode):/i, "spotify://$1:");
+}
+
 function trackFromStreamUrl(value) {
   try {
     const url = new URL(String(value || ""));
@@ -380,6 +395,7 @@ function spotifyItemToTrack(item) {
     album: parsed.album,
     source: kind === "track" ? "Spotify" : `Spotify ${kind}`,
     uri,
+    browseId: item.actions?.go?.params?.item_id || item.presetParams.item_id || item.params?.item_id || uri,
     art: item.presetParams.icon || item.icon || null,
     duration: null,
     kind

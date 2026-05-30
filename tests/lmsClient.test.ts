@@ -191,8 +191,12 @@ describe("LMS client parsing", () => {
 
   it("falls back to the app stream URL before LMS has indexed the upload", async () => {
     const requests: unknown[] = [];
+    const commands: string[] = [];
     const client = new LmsClient();
-    client.command = async () => "ok";
+    client.command = async (command: string) => {
+      commands.push(command);
+      return "ok";
+    };
     client.jsonRequest = async (params: unknown) => {
       requests.push(params);
       return { result: {} };
@@ -201,20 +205,34 @@ describe("LMS client parsing", () => {
     await client.playTrack("player-1", { title: "Upload", source: "Uploaded", uploaded: true, path: "/music/uploads/upload.mp3" }, "play-now");
 
     const encodedPath = Buffer.from("/music/uploads/upload.mp3").toString("base64url");
-    expect(requests.at(-1)).toEqual(["player-1", ["playlist", "play", `http://192.168.1.142:4177/api/stream/${encodedPath}/upload.mp3`]]);
+    expect(commands).toContain(`player-1 playlist play http://192.168.1.142:4177/api/stream/${encodedPath}/upload.mp3`);
   });
 
   it("inserts Spotify URI tracks as the next LMS item", async () => {
-    const requests: unknown[] = [];
+    const commands: string[] = [];
     const client = new LmsClient();
-    client.jsonRequest = async (params: unknown) => {
-      requests.push(params);
-      return { result: {} };
+    client.command = async (command: string) => {
+      commands.push(command);
+      return "ok";
     };
 
     await client.playTrack("player-1", { title: "Punisher", uri: "spotify:track:abc123" }, "play-next");
 
-    expect(requests.at(-1)).toEqual(["player-1", ["playlist", "insert", "spotify://track:abc123"]]);
+    expect(commands.at(-1)).toBe("player-1 playlist insert spotify://track:abc123");
+  });
+
+  it("loads Spotify tracks through LMS playlist commands for Spotty", async () => {
+    const commands: string[] = [];
+    const client = new LmsClient();
+    client.command = async (command: string) => {
+      commands.push(command);
+      return "ok";
+    };
+
+    await client.playTrack("player-1", { title: "Headlines", uri: "spotify:track:abc123" }, "play-now");
+
+    expect(commands).toContain("player-1 playlist play spotify://track:abc123");
+    expect(commands).toContain("player-1 play");
   });
 
   it("maps Spotty search results to playable Spotify tracks", async () => {

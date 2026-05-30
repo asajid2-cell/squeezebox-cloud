@@ -578,6 +578,34 @@ input[type="range"] {
   min-height: 382px;
   padding: 24px 20px;
 }
+.playlist-title-row {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.playlist-title-row h2 {
+  margin-bottom: 3px;
+}
+.playlist-title-row small {
+  color: var(--muted);
+}
+.playlist-detail {
+  display: grid;
+  gap: 12px;
+}
+.playlist-detail-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 4px 0;
+}
+.playlist-detail-actions span {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 13px;
+}
 .collection-list {
   display: grid;
   gap: 8px;

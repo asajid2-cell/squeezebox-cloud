@@ -61,10 +61,12 @@ export const appState = {
   },
   playback: {
     shuffle: false,
+    smartQueue: false,
     repeat: "off",
     smartShuffleSource: "mixed",
     lastShuffleRefillAt: 0,
     lastShuffleSeed: "",
+    lastSmartQueueBase: "",
     history: []
   },
   admin: {

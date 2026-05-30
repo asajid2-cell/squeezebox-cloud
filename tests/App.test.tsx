@@ -49,6 +49,26 @@ beforeEach(() => {
       if (url.includes("/api/spotify/search")) {
         return jsonResponse({ results: [{ id: "sp1", title: "Headlines", artist: "Drake", album: "Take Care", source: "Spotify", uri: "spotify:track:abc123" }] });
       }
+      if (url.includes("/api/library/collections")) {
+        return jsonResponse({
+          collections: [{ collection: "2025 Comp / Leaks", folder: "Goodbye ERA", count: 2, sample: ["First Leak", "Second Leak"] }]
+        });
+      }
+      if (url.includes("/api/library/collection")) {
+        return jsonResponse({
+          results: [{ id: "local-playlist-1", title: "First Leak", artist: "Juice WRLD", source: "Local library", path: "/music/first.mp3" }]
+        });
+      }
+      if (url.includes("/api/spotify/library")) {
+        return jsonResponse({
+          results: [{ id: "spotify:playlist:1", title: "Drake Mix", artist: "Spotify", source: "Spotify playlist", uri: "spotify:playlist:1", kind: "playlist", browseId: "8.1" }]
+        });
+      }
+      if (url.includes("/api/spotify/children")) {
+        return jsonResponse({
+          results: [{ id: "spotify:track:child", title: "Playlist Child", artist: "Drake", source: "Spotify", uri: "spotify:track:child", kind: "track" }]
+        });
+      }
       if (url.includes("/api/player/track") && options?.method === "POST") {
         return jsonResponse({ ok: true });
       }
@@ -142,6 +162,19 @@ describe("Cloud Squeeze UI", () => {
     await userEvent.type(screen.getByLabelText("Search music"), "drake");
     await waitFor(() => expect(screen.getByText("Headlines")).toBeInTheDocument());
     expect(screen.getByText(/Drake - Take Care/)).toBeInTheDocument();
+  });
+
+  it("opens local and Spotify playlists before queueing individual tracks", async () => {
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Playlists" }));
+    await userEvent.click(await screen.findByText("Goodbye ERA"));
+    expect(await screen.findByText("First Leak")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Queue all" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Back" }));
+    await userEvent.click(screen.getByRole("button", { name: "Spotify" }));
+    await userEvent.click(await screen.findByText("Drake Mix"));
+    expect(await screen.findByText("Playlist Child")).toBeInTheDocument();
   });
 });
 

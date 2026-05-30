@@ -64,6 +64,21 @@ export async function getCollections(root = undefined, source = "all") {
   return [...groups.values()].sort((a, b) => `${a.collection} ${a.folder}`.localeCompare(`${b.collection} ${b.folder}`, undefined, { numeric: true }));
 }
 
+export async function getCollectionTracks({ collection = "", folder = "", source = "all", limit = 1000 } = {}) {
+  const tracks = await scanLibrary(undefined, 5000, source);
+  const normalizedCollection = normalize(collection);
+  const normalizedFolder = normalize(folder);
+  const max = Math.max(1, Math.min(2000, Number(limit) || 1000));
+  return tracks
+    .filter((track) => {
+      const trackCollection = normalize(track.collection || "Local library");
+      const trackFolder = normalize(track.folder || track.album || "Ungrouped");
+      return (!normalizedCollection || trackCollection === normalizedCollection) && (!normalizedFolder || trackFolder === normalizedFolder);
+    })
+    .sort((a, b) => String(a.path || a.title).localeCompare(String(b.path || b.title), undefined, { numeric: true }))
+    .slice(0, max);
+}
+
 export function fileToTrack(filePath) {
   const parsed = path.parse(filePath);
   const meta = pathMeta(filePath);
