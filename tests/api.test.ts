@@ -307,7 +307,7 @@ describe("Cloud Squeeze API", () => {
         .post("/api/player/playback")
         .send({ shuffle: true, repeat: "all", smartShuffleSource: "mixed" })
         .expect(200);
-      expect(response.body.playback).toMatchObject({ shuffle: true, repeat: "all", smartShuffleSource: "mixed" });
+      expect(response.body.playback).toMatchObject({ shuffle: true, repeat: "off", smartShuffleSource: "mixed" });
     } finally {
       config.musicSourceDir = previousMusicDir;
     }
@@ -316,7 +316,18 @@ describe("Cloud Squeeze API", () => {
   it("regular shuffle populates a visible generated queue", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "spotify", history: [] };
-    const response = await request(createApp({ lms: mockLms }))
+    appState.nowPlaying = { ...appState.nowPlaying, id: "spotify://track:abc123", title: "Headlines", artist: "Drake", uri: "spotify://track:abc123" };
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async spotifySearch() {
+          return [
+            { id: "spotify:current", title: "Headlines", artist: "Drake", source: "Spotify", uri: "spotify:track:abc123", kind: "track" },
+            { id: "spotify:other", title: "Nonstop", artist: "Drake", source: "Spotify", uri: "spotify:track:other", kind: "track" }
+          ];
+        }
+      }
+    }))
       .post("/api/player/playback")
       .send({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" })
       .expect(200);
@@ -324,6 +335,28 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.playback).toMatchObject({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" });
     expect(response.body.queue).toEqual(
       expect.arrayContaining([expect.objectContaining({ requestedBy: "shuffle", uri: expect.stringMatching(/^spotify:track:/) })])
+    );
+    expect(response.body.queue).not.toEqual(expect.arrayContaining([expect.objectContaining({ uri: "spotify:track:abc123" })]));
+    expect(response.body.playback.repeat).toBe("off");
+  });
+
+  it("exposes recent queue and playback debug events", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "spotify", history: [] };
+    const app = createApp({ lms: mockLms });
+
+    await request(app)
+      .post("/api/player/playback")
+      .send({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" })
+      .expect(200);
+    const logs = await request(app).get("/api/debug/logs?limit=10").expect(200);
+
+    expect(logs.body.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "playback.request" }),
+        expect.objectContaining({ type: "queue.activate-generated" }),
+        expect.objectContaining({ type: "playback.result" })
+      ])
     );
   });
 

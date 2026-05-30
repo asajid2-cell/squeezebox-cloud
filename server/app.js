@@ -51,6 +51,9 @@ const serviceRefreshMs = 60000;
 const trackInfoRefreshMs = 30000;
 const refreshState = { promise: null, updatedAt: 0, servicesAt: 0, trackInfoAt: 0, trackKey: "" };
 const prewarmState = { key: "", at: 0 };
+const debugLog = [];
+const debugLogLimit = 500;
+const debugLogPath = process.env.CLOUD_SQUEEZE_LOG_PATH || "/tmp/cloud-squeeze-events.jsonl";
 
 export function createApp({ lms = new LmsClient() } = {}) {
   const app = express();
@@ -63,6 +66,11 @@ export function createApp({ lms = new LmsClient() } = {}) {
 
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, service: "cloud-squeeze" });
+  });
+
+  app.get("/api/debug/logs", (req, res) => {
+    const limit = Math.max(1, Math.min(500, Number(req.query.limit) || 120));
+    res.json({ events: debugLog.slice(-limit) });
   });
 
   app.get("/api/state", async (_req, res) => {
@@ -153,16 +161,20 @@ export function createApp({ lms = new LmsClient() } = {}) {
     }
     try {
       const playerId = await hotPlayerId(lms);
+      logEvent("track.request", { action, track: trackSummary(track), playerId });
       let queued = null;
       if (action === "add-queue") {
         queued = addQueueItem({ ...track, requestedBy: "guest" });
+        logEvent("queue.add", { action, queued: trackSummary(queued), queue: queueSummary() });
         runPlaybackCommand(lms, playerId, queued, "add-queue");
       } else if (action === "play-next") {
         queued = addQueueItemNext({ ...track, requestedBy: "guest" });
+        logEvent("queue.add-next", { action, queued: trackSummary(queued), queue: queueSummary() });
         runPlaybackCommand(lms, playerId, queued, "play-next");
       } else {
         setMode("play");
         updateNowPlaying(optimisticTrack(track));
+        logEvent("track.play-now.optimistic", { track: trackSummary(track), queue: queueSummary() });
         runPlaybackCommand(lms, playerId, track, "play-now");
       }
       res.json({ ok: true, action, queued, queue: appState.queue, player: appState.player, nowPlaying: appState.nowPlaying });
@@ -378,9 +390,11 @@ export function createApp({ lms = new LmsClient() } = {}) {
   app.post("/api/player/next", async (_req, res) => {
     try {
       const status = await refreshLms(lms);
+      logEvent("transport.next.request", { queue: queueSummary(), playback: appState.playback, nowPlaying: trackSummary(appState.nowPlaying) });
       const played = await playNextVisibleQueueItem(lms, status.id);
       if (!played) await control(lms, "next");
       refreshLms(lms, { force: true }).catch(() => null);
+      logEvent("transport.next.result", { action: played ? "visible-queue-next" : "lms-next", played: trackSummary(played), queue: queueSummary(), playback: appState.playback });
       res.json({ ok: true, action: played ? "visible-queue-next" : "next", queue: appState.queue, player: appState.player, nowPlaying: appState.nowPlaying });
     } catch (error) {
       res.status(502).json({ error: error.message, player: appState.player, nowPlaying: appState.nowPlaying });
@@ -426,6 +440,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
     const next = {};
     try {
       const playerId = await hotPlayerId(lms);
+      logEvent("playback.request", { body: req.body, before: appState.playback, queue: queueSummary() });
       const sourceChanged =
         ["mixed", "spotify", "local"].includes(req.body?.smartShuffleSource) &&
         req.body.smartShuffleSource !== appState.playback.smartShuffleSource;
@@ -455,6 +470,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       const queued = queueModeChanged
         ? await activateGeneratedQueue(lms, playerId, { smart: appState.playback.smartQueue, shuffle: appState.playback.shuffle, mode: appState.playback.smartShuffleSource })
         : [];
+      logEvent("playback.result", { after: appState.playback, queued: queued.map(trackSummary), queue: queueSummary() });
       res.json({ ok: true, playback: appState.playback, queued, queue: appState.queue });
     } catch (error) {
       res.status(502).json({ error: error.message, playback: appState.playback });
@@ -467,8 +483,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
       const mode = ["mixed", "spotify", "local"].includes(req.body?.source) ? req.body.source : appState.playback.smartShuffleSource;
       const count = Math.max(1, Math.min(8, Number(req.body?.count) || 5));
       const seed = String(req.body?.seed || appState.nowPlaying.artist || appState.nowPlaying.title || "").trim();
+      logEvent("smart-shuffle.request", { mode, count, seed, queue: queueSummary() });
       const queued = await activateGeneratedQueue(lms, status.id, { smart: true, mode, count, seed });
       await refreshLms(lms);
+      logEvent("smart-shuffle.result", { queued: queued.map(trackSummary), queue: queueSummary(), playback: appState.playback });
       res.json({ ok: true, mode, seed, queued, playback: appState.playback });
     } catch (error) {
       res.status(502).json({ error: error.message, queued: [] });
@@ -492,8 +510,53 @@ async function hotPlayerId(lms) {
 
 function runPlaybackCommand(lms, playerId, track, action) {
   lms.playTrack(playerId, track, action)
-    .then(() => refreshLms(lms, { force: true }).catch(() => null))
-    .catch((error) => updatePlayerStatus({ ...appState.player, detail: `Playback command failed: ${error.message}` }));
+    .then(() => {
+      logEvent("lms.playTrack.ok", { action, track: trackSummary(track), queue: queueSummary() });
+      return refreshLms(lms, { force: true }).catch(() => null);
+    })
+    .catch((error) => {
+      logEvent("lms.playTrack.error", { action, track: trackSummary(track), error: error.message });
+      updatePlayerStatus({ ...appState.player, detail: `Playback command failed: ${error.message}` });
+    });
+}
+
+function logEvent(type, data = {}) {
+  const event = {
+    at: new Date().toISOString(),
+    type,
+    data
+  };
+  debugLog.push(event);
+  if (debugLog.length > debugLogLimit) debugLog.splice(0, debugLog.length - debugLogLimit);
+  fs.promises.appendFile(debugLogPath, `${JSON.stringify(event)}\n`).catch(() => null);
+}
+
+function queueSummary() {
+  return appState.queue.map((item, index) => ({
+    index,
+    id: item.id,
+    title: item.title,
+    artist: item.artist,
+    requestedBy: item.requestedBy,
+    uri: item.uri,
+    path: item.path,
+    etaMinutes: item.etaMinutes
+  }));
+}
+
+function trackSummary(track) {
+  if (!track) return null;
+  return {
+    id: track.id,
+    title: track.title,
+    artist: track.artist,
+    album: track.album,
+    requestedBy: track.requestedBy,
+    source: track.source,
+    uri: track.uri,
+    path: track.path,
+    lmsTrackId: track.lmsTrackId
+  };
 }
 
 function optimisticTrack(track) {
@@ -628,8 +691,10 @@ async function activateGeneratedQueue(lms, playerId, { smart = false, shuffle: s
     lastSmartQueueBase: trackKey(appState.nowPlaying)
   });
   await lms.control(playerId, "shuffle", false).catch(() => null);
+  await lms.control(playerId, "repeat", "off").catch(() => null);
   const queued = await buildGeneratedQueue(lms, playerId, queueSeed, mode, count, smart ? "smart shuffle" : "shuffle");
-  updatePlayback({ lastShuffleRefillAt: Date.now() });
+  updatePlayback({ lastShuffleRefillAt: Date.now(), repeat: "off" });
+  logEvent("queue.activate-generated", { type: smart ? "smart shuffle" : "shuffle", mode, queued: queued.map(trackSummary), queue: queueSummary() });
   return queued;
 }
 
@@ -701,8 +766,17 @@ async function maintainVisiblePlaybackQueue(lms, status, track) {
   if (!status?.id) return;
   await regenerateGeneratedQueueForTrack(lms, status.id, track);
   syncVisibleQueueWithCurrentTrack(track);
+  await topOffGeneratedQueue(lms, status.id);
+  if (appState.playback.smartQueue || appState.playback.shuffle) {
+    if (appState.playback.repeat !== "off") updatePlayback({ repeat: "off" });
+    lms.control(status.id, "repeat", "off").catch(() => null);
+    lms.control(status.id, "shuffle", false).catch(() => null);
+  }
   const needsPlaybackNudge = shouldNudgePlayback(status, track);
-  if (needsPlaybackNudge && appState.queue.length > 0) await playNextVisibleQueueItem(lms, status.id);
+  if (needsPlaybackNudge && appState.queue.length > 0) {
+    logEvent("queue.auto-advance", { reason: "near-track-end", queue: queueSummary(), nowPlaying: trackSummary(track) });
+    await playNextVisibleQueueItem(lms, status.id);
+  }
 }
 
 async function ensureSmartShuffleQueue(lms, playerId, { force = false } = {}) {
@@ -716,7 +790,18 @@ async function ensureSmartShuffleQueue(lms, playerId, { force = false } = {}) {
   const seed = String(appState.nowPlaying.artist || appState.nowPlaying.title || appState.playback.lastShuffleSeed || "drake").trim();
   const queued = await buildGeneratedQueue(lms, playerId, seed, appState.playback.smartShuffleSource, desired, requestType);
   updatePlayback({ lastShuffleRefillAt: now, lastShuffleSeed: seed });
+  if (queued.length > 0) logEvent("queue.refill", { requestType, desired, queued: queued.map(trackSummary), queue: queueSummary() });
   return queued;
+}
+
+async function topOffGeneratedQueue(lms, playerId) {
+  if ((!appState.playback.smartQueue && !appState.playback.shuffle) || !playerId) return [];
+  const requestType = appState.playback.smartQueue ? "smart shuffle" : "shuffle";
+  const generatedCount = appState.queue.filter((item) => item.requestedBy === requestType).length;
+  if (generatedCount >= 4) return [];
+  updatePlayback({ lastShuffleRefillAt: 0 });
+  logEvent("queue.top-off.request", { requestType, generatedCount, queue: queueSummary() });
+  return ensureSmartShuffleQueue(lms, playerId, { force: true });
 }
 
 async function regenerateGeneratedQueueForTrack(lms, playerId, track) {
@@ -739,11 +824,15 @@ function addGeneratedQueueItem(track, mode = appState.playback.smartShuffleSourc
 }
 
 async function playNextVisibleQueueItem(lms, playerId) {
+  await topOffGeneratedQueue(lms, playerId);
   const next = appState.queue[0];
   if (!next) {
     await ensureSmartShuffleQueue(lms, playerId, { force: true });
     const refilled = appState.queue[0];
-    if (!refilled) return null;
+    if (!refilled) {
+      logEvent("queue.next-empty", { playback: appState.playback, queue: queueSummary() });
+      return null;
+    }
     return playQueuedItem(lms, playerId, refilled);
   }
   return playQueuedItem(lms, playerId, next);
@@ -752,6 +841,7 @@ async function playNextVisibleQueueItem(lms, playerId) {
 async function playQueuedItem(lms, playerId, item) {
   removeQueueItem(item.id);
   rememberShuffleTrack(item);
+  logEvent("queue.play-item", { item: trackSummary(item), queueAfterRemove: queueSummary(), playback: appState.playback });
   await lms.playTrack(playerId, item, "play-now");
   return item;
 }
@@ -794,7 +884,13 @@ function shouldNudgePlayback(status, track) {
 }
 
 function trackKey(track) {
-  return String(track?.uri || track?.path || track?.lmsTrackId || track?.id || `${track?.title || ""}:${track?.artist || ""}`).toLowerCase();
+  return normalizeTrackKey(track?.uri || track?.path || track?.lmsTrackId || track?.id || `${track?.title || ""}:${track?.artist || ""}`);
+}
+
+function normalizeTrackKey(value) {
+  return String(value || "")
+    .replace(/^spotify:\/\/(track|episode):/i, "spotify:$1:")
+    .toLowerCase();
 }
 
 function isPlayableSpotifyTrack(track) {
