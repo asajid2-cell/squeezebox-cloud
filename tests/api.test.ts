@@ -375,6 +375,53 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Smart Existing", "Manual Existing"]);
   });
 
+  it("manual queueing is non destructive while generated shuffle is active", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: true, smartQueue: false, smartShuffleSource: "spotify", repeat: "off", history: [] };
+    addQueueItem({ title: "Generated A", artist: "Tester", requestedBy: "shuffle", uri: "spotify:track:generated-a" });
+    addQueueItem({ title: "Generated B", artist: "Tester", requestedBy: "shuffle", uri: "spotify:track:generated-b" });
+    const played: Array<{ action: string; track: { title?: string } }> = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async playTrack(_playerId: string, track: { title?: string }, action: string) {
+          played.push({ action, track });
+          return "ok";
+        }
+      }
+    });
+
+    const response = await request(app)
+      .post("/api/player/track")
+      .send({ action: "play-next", track: { title: "Manual Heavy", artist: "Tester", path: "/music/manual-heavy.mp3" } })
+      .expect(200);
+
+    expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Manual Heavy", "Generated A", "Generated B"]);
+    expect(played).toContainEqual({ action: "play-next", track: expect.objectContaining({ title: "Manual Heavy" }) });
+  });
+
+  it("manual play now regenerates generated shuffle around the new seed", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: true, smartQueue: false, smartShuffleSource: "spotify", repeat: "off", history: [] };
+    addQueueItem({ title: "Generated A", artist: "Tester", requestedBy: "shuffle", uri: "spotify:track:generated-a" });
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async spotifySearch() {
+          return [{ id: "spotify:new-seed", title: "New Seed Pick", artist: "New Artist", source: "Spotify", uri: "spotify:track:new-seed", kind: "track" }];
+        }
+      }
+    });
+
+    const response = await request(app)
+      .post("/api/player/track")
+      .send({ action: "play-now", track: { title: "Manual Play", artist: "New Artist", uri: "spotify:track:manual-play", source: "Spotify" } })
+      .expect(200);
+
+    expect(response.body.queue).toEqual(expect.arrayContaining([expect.objectContaining({ title: "New Seed Pick", requestedBy: "shuffle" })]));
+    expect(response.body.queue).not.toEqual(expect.arrayContaining([expect.objectContaining({ title: "Generated A" })]));
+  });
+
   it("queues smart shuffle picks from Spotify and local sources", async () => {
     const played: Array<{ action: string; track: { uri?: string } }> = [];
     const uniqueShuffleLms = {

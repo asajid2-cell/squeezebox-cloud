@@ -173,8 +173,18 @@ export function createApp({ lms = new LmsClient() } = {}) {
         runPlaybackCommand(lms, playerId, queued, "play-next");
       } else {
         setMode("play");
-        updateNowPlaying(optimisticTrack(track));
+        const optimistic = optimisticTrack(track);
+        updateNowPlaying(optimistic);
         logEvent("track.play-now.optimistic", { track: trackSummary(track), queue: queueSummary() });
+        if (appState.playback.shuffle || appState.playback.smartQueue) {
+          removeGeneratedQueueItems();
+          await activateGeneratedQueue(lms, playerId, {
+            smart: appState.playback.smartQueue,
+            shuffle: appState.playback.shuffle,
+            mode: appState.playback.smartShuffleSource,
+            seed: optimistic.artist || optimistic.title
+          });
+        }
         runPlaybackCommand(lms, playerId, track, "play-now");
       }
       res.json({ ok: true, action, queued, queue: appState.queue, player: appState.player, nowPlaying: appState.nowPlaying });
@@ -764,7 +774,6 @@ async function maintainSmartShuffle(lms, status, track) {
 
 async function maintainVisiblePlaybackQueue(lms, status, track) {
   if (!status?.id) return;
-  await regenerateGeneratedQueueForTrack(lms, status.id, track);
   syncVisibleQueueWithCurrentTrack(track);
   await topOffGeneratedQueue(lms, status.id);
   if (appState.playback.smartQueue || appState.playback.shuffle) {
@@ -804,19 +813,6 @@ async function topOffGeneratedQueue(lms, playerId) {
   return ensureSmartShuffleQueue(lms, playerId, { force: true });
 }
 
-async function regenerateGeneratedQueueForTrack(lms, playerId, track) {
-  if ((!appState.playback.smartQueue && !appState.playback.shuffle) || !playerId || !track) return [];
-  const base = trackKey(track);
-  if (!base || base === appState.playback.lastSmartQueueBase) return [];
-  removeGeneratedQueueItems();
-  updatePlayback({
-    lastSmartQueueBase: base,
-    lastShuffleSeed: String(track.artist || track.title || appState.playback.lastShuffleSeed || "drake").trim(),
-    lastShuffleRefillAt: 0
-  });
-  return ensureSmartShuffleQueue(lms, playerId, { force: true });
-}
-
 function addGeneratedQueueItem(track, mode = appState.playback.smartShuffleSource, requestedBy = "shuffle") {
   if (!track?.title || queuedTrackExists(track)) return null;
   if (!trackMatchesShuffleSource(track, mode)) return null;
@@ -824,6 +820,11 @@ function addGeneratedQueueItem(track, mode = appState.playback.smartShuffleSourc
 }
 
 async function playNextVisibleQueueItem(lms, playerId) {
+  if (appState.playback.smartQueue || appState.playback.shuffle) {
+    if (appState.playback.repeat !== "off") updatePlayback({ repeat: "off" });
+    lms.control(playerId, "repeat", "off").catch(() => null);
+    lms.control(playerId, "shuffle", false).catch(() => null);
+  }
   await topOffGeneratedQueue(lms, playerId);
   const next = appState.queue[0];
   if (!next) {
