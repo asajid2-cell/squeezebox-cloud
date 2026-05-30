@@ -1,0 +1,11 @@
+node_modules/
+dist/
+test-results/
+playwright-report/
+tmp/
+.env
+.env.*
+!.env.example
+*.log
+npm-debug.log*
+PUBLIC_REPO_AUDIT.md
