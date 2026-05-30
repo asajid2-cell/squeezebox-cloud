@@ -47,6 +47,9 @@ const loginSchema = z.object({
 
 const adminPassword = process.env.CLOUD_SQUEEZE_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD || "admin";
 const adminToken = process.env.CLOUD_SQUEEZE_ADMIN_TOKEN || "cloud-squeeze-admin";
+const serviceRefreshMs = 60000;
+const trackInfoRefreshMs = 30000;
+const refreshState = { promise: null, updatedAt: 0, servicesAt: 0, trackInfoAt: 0, trackKey: "" };
 
 export function createApp({ lms = new LmsClient() } = {}) {
   const app = express();
@@ -62,7 +65,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
   });
 
   app.get("/api/state", async (_req, res) => {
-    await refreshLms(lms);
+    await refreshLms(lms, { minAgeMs: appState.player.mode === "play" ? 650 : 1600 });
     res.json(getPublicState());
   });
 
@@ -148,18 +151,19 @@ export function createApp({ lms = new LmsClient() } = {}) {
       return;
     }
     try {
-      const status = await refreshLms(lms);
+      const playerId = await hotPlayerId(lms);
       let queued = null;
       if (action === "add-queue") {
         queued = addQueueItem({ ...track, requestedBy: "guest" });
-        await lms.playTrack(status.id, queued, "add-queue").catch(() => null);
+        runPlaybackCommand(lms, playerId, queued, "add-queue");
       } else if (action === "play-next") {
         queued = addQueueItemNext({ ...track, requestedBy: "guest" });
-        await lms.playTrack(status.id, queued, "play-next").catch(() => null);
+        runPlaybackCommand(lms, playerId, queued, "play-next");
       } else {
-        await lms.playTrack(status.id, track, "play-now");
+        setMode("play");
+        updateNowPlaying(optimisticTrack(track));
+        runPlaybackCommand(lms, playerId, track, "play-now");
       }
-      await refreshLms(lms);
       res.json({ ok: true, action, queued, queue: appState.queue, player: appState.player, nowPlaying: appState.nowPlaying });
     } catch (error) {
       res.status(502).json({ error: error.message });
@@ -172,12 +176,12 @@ export function createApp({ lms = new LmsClient() } = {}) {
 
   app.get("/api/spotify/search", async (req, res) => {
     try {
-      await refreshLms(lms);
+      const playerId = await hotPlayerId(lms);
       if (!appState.services.spotify.configured) {
         res.json({ results: [] });
         return;
       }
-      res.json({ results: await lms.spotifySearch(appState.player.id, String(req.query.q || ""), req.query.limit || 20) });
+      res.json({ results: await lms.spotifySearch(playerId, String(req.query.q || ""), req.query.limit || 20) });
     } catch (error) {
       res.status(502).json({ error: error.message, results: [] });
     }
@@ -185,14 +189,14 @@ export function createApp({ lms = new LmsClient() } = {}) {
 
   app.get("/api/spotify/library", async (req, res) => {
     try {
-      await refreshLms(lms);
+      const playerId = await hotPlayerId(lms);
       if (!appState.services.spotify.configured) {
         res.json({ results: [] });
         return;
       }
       res.json({
         results: await lms.spotifyLibrary(
-          appState.player.id,
+          playerId,
           String(req.query.type || "playlists"),
           req.query.limit || 50,
           req.query.offset || 0
@@ -205,14 +209,14 @@ export function createApp({ lms = new LmsClient() } = {}) {
 
   app.get("/api/spotify/children", async (req, res) => {
     try {
-      await refreshLms(lms);
+      const playerId = await hotPlayerId(lms);
       if (!appState.services.spotify.configured) {
         res.json({ results: [] });
         return;
       }
       res.json({
         results: await lms.spotifyChildren(
-          appState.player.id,
+          playerId,
           { browseId: String(req.query.browseId || ""), uri: String(req.query.uri || ""), kind: String(req.query.kind || "playlist") },
           req.query.limit || 200,
           req.query.offset || 0
@@ -375,7 +379,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       const status = await refreshLms(lms);
       const played = await playNextVisibleQueueItem(lms, status.id);
       if (!played) await control(lms, "next");
-      await refreshLms(lms);
+      refreshLms(lms, { force: true }).catch(() => null);
       res.json({ ok: true, action: played ? "visible-queue-next" : "next", queue: appState.queue, player: appState.player, nowPlaying: appState.nowPlaying });
     } catch (error) {
       res.status(502).json({ error: error.message, player: appState.player, nowPlaying: appState.nowPlaying });
@@ -393,7 +397,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       } else {
         await control(lms, "previous");
       }
-      await refreshLms(lms);
+      refreshLms(lms, { force: true }).catch(() => null);
       res.json({ ok: true, action, mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying });
     } catch (error) {
       res.status(502).json({ error: error.message, player: appState.player, nowPlaying: appState.nowPlaying });
@@ -413,14 +417,14 @@ export function createApp({ lms = new LmsClient() } = {}) {
     if (wasPlaying && appState.player.id) await lms.control(appState.player.id, "play").catch(() => null);
     updateNowPlaying({ elapsed: seconds });
     if (wasPlaying) setMode("play");
-    await refreshLms(lms);
-    res.json({ ok: true, seconds, player: appState.player, nowPlaying: appState.nowPlaying });
+      refreshLms(lms, { force: true }).catch(() => null);
+      res.json({ ok: true, seconds, player: appState.player, nowPlaying: appState.nowPlaying });
   });
 
   app.post("/api/player/playback", async (req, res) => {
     const next = {};
     try {
-      const status = await refreshLms(lms);
+      const playerId = await hotPlayerId(lms);
       const sourceChanged =
         ["mixed", "spotify", "local"].includes(req.body?.smartShuffleSource) &&
         req.body.smartShuffleSource !== appState.playback.smartShuffleSource;
@@ -434,7 +438,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       }
       if (["off", "one", "all"].includes(req.body?.repeat)) {
         next.repeat = req.body.repeat;
-        await lms.control(status.id, "repeat", req.body.repeat).catch(() => null);
+        lms.control(playerId, "repeat", req.body.repeat).catch(() => null);
       }
       if (["mixed", "spotify", "local"].includes(req.body?.smartShuffleSource)) {
         next.smartShuffleSource = req.body.smartShuffleSource;
@@ -443,11 +447,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
         removeSmartQueueItems();
       }
       updatePlayback(next);
-      await lms.control(status.id, "shuffle", Boolean(appState.playback.shuffle && !appState.playback.smartQueue)).catch(() => null);
+      lms.control(playerId, "shuffle", Boolean(appState.playback.shuffle && !appState.playback.smartQueue)).catch(() => null);
       const queued = appState.playback.smartQueue
-        ? await activateSmartQueue(lms, status.id, { mode: appState.playback.smartShuffleSource })
+        ? await activateSmartQueue(lms, playerId, { mode: appState.playback.smartShuffleSource })
         : [];
-      await refreshLms(lms);
       res.json({ ok: true, playback: appState.playback, queued, queue: appState.queue });
     } catch (error) {
       res.status(502).json({ error: error.message, playback: appState.playback });
@@ -476,6 +479,35 @@ export function createApp({ lms = new LmsClient() } = {}) {
   return app;
 }
 
+async function hotPlayerId(lms) {
+  if (appState.player.connected && appState.player.id && appState.player.id !== "mock-player") return appState.player.id;
+  await refreshLms(lms, { force: true, skipTrackInfo: true });
+  if (!appState.player.id || appState.player.id === "mock-player") throw new Error("No LMS player connected");
+  return appState.player.id;
+}
+
+function runPlaybackCommand(lms, playerId, track, action) {
+  lms.playTrack(playerId, track, action)
+    .then(() => refreshLms(lms, { force: true }).catch(() => null))
+    .catch((error) => updatePlayerStatus({ ...appState.player, detail: `Playback command failed: ${error.message}` }));
+}
+
+function optimisticTrack(track) {
+  return {
+    id: track.uri || track.path || track.lmsTrackId || track.id || `optimistic:${track.title}`,
+    title: track.title || "Loading track",
+    artist: track.artist || "Unknown artist",
+    album: track.album || "",
+    source: track.source || (track.uri ? "Spotify" : "LMS"),
+    duration: Number(track.duration) || 0,
+    elapsed: 0,
+    canSeek: false,
+    art: track.art || null,
+    uri: track.uri,
+    path: track.path
+  };
+}
+
 async function checkUrl(url) {
   try {
     const response = await fetch(url, { signal: AbortSignal.timeout(2500) });
@@ -495,26 +527,52 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-async function refreshLms(lms, { maintainPlayback = false } = {}) {
-  try {
-    const [status, spotifyStatus] = await Promise.all([
-      lms.status(),
-      lms.spotifyStatus().catch((error) => ({ configured: false, reachable: false, detail: error.message }))
-    ]);
-    updateSpotifyStatus(spotifyStatus);
-    updateStablePlayerStatus(status);
-    if (status.connected) {
-      const track = await lms.nowPlaying(status.id);
-      const info = await enrichTrackInfo(track);
-      updateNowPlaying(track?.art || !info.art ? track : { ...track, art: info.art });
-      updateTrackInfo(info);
-      if (maintainPlayback) await maintainVisiblePlaybackQueue(lms, status, track);
+async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force = false, skipTrackInfo = false } = {}) {
+  const now = Date.now();
+  if (!force && refreshState.promise) return refreshState.promise;
+  if (!force && minAgeMs > 0 && now - refreshState.updatedAt < minAgeMs) return appState.player;
+  refreshState.promise = (async () => {
+    try {
+      const shouldRefreshServices = force || now - refreshState.servicesAt > serviceRefreshMs;
+      const [status, spotifyStatus] = await Promise.all([
+        lms.status(),
+        shouldRefreshServices
+          ? lms.spotifyStatus().catch((error) => ({ configured: false, reachable: false, detail: error.message }))
+          : Promise.resolve(null)
+      ]);
+      if (spotifyStatus) {
+        updateSpotifyStatus(spotifyStatus);
+        refreshState.servicesAt = Date.now();
+      }
+      updateStablePlayerStatus(status);
+      if (status.connected) {
+        const track = await lms.nowPlaying(status.id);
+        const key = trackKey(track);
+        const shouldRefreshTrackInfo =
+          !skipTrackInfo &&
+          track &&
+          (key !== refreshState.trackKey || Date.now() - refreshState.trackInfoAt > trackInfoRefreshMs);
+        if (shouldRefreshTrackInfo) {
+          const info = await enrichTrackInfo(track);
+          updateNowPlaying(track?.art || !info.art ? track : { ...track, art: info.art });
+          updateTrackInfo(info);
+          refreshState.trackInfoAt = Date.now();
+          refreshState.trackKey = key;
+        } else {
+          updateNowPlaying(track);
+        }
+        if (maintainPlayback) await maintainVisiblePlaybackQueue(lms, status, track);
+      }
+      refreshState.updatedAt = Date.now();
+      return appState.player;
+    } catch (error) {
+      updateStablePlayerStatus({ connected: false, online: false, detail: error.message });
+      return appState.player;
+    } finally {
+      refreshState.promise = null;
     }
-    return appState.player;
-  } catch (error) {
-    updateStablePlayerStatus({ connected: false, online: false, detail: error.message });
-    return appState.player;
-  }
+  })();
+  return refreshState.promise;
 }
 
 function updateStablePlayerStatus(status) {
@@ -565,7 +623,7 @@ async function buildSmartShuffle(lms, playerId, seed, mode, count) {
   const exclude = shuffleExclusionSet();
   const hardExclude = currentAndQueueExclusionSet();
   const [spotify, localFocused, localWide] = await Promise.all([
-    mode !== "local" ? spotifyShuffleCandidates(lms, playerId, normalizedSeed).catch(() => []) : [],
+    mode !== "local" ? spotifyShuffleCandidates(lms, playerId, normalizedSeed, count).catch(() => []) : [],
     mode !== "spotify" ? searchLibrary(normalizedSeed, undefined, 120).catch(() => []) : [],
     mode !== "spotify" ? searchLibrary("", undefined, 500).catch(() => []) : []
   ]);
@@ -592,7 +650,7 @@ async function buildSmartShuffle(lms, playerId, seed, mode, count) {
   return queued;
 }
 
-async function spotifyShuffleCandidates(lms, playerId, seed) {
+async function spotifyShuffleCandidates(lms, playerId, seed, count = 5) {
   const terms = shuffle([
     seed,
     appState.nowPlaying.artist,
@@ -609,8 +667,8 @@ async function spotifyShuffleCandidates(lms, playerId, seed) {
   ])
     .map((term) => String(term || "").trim())
     .filter(Boolean);
-  const selected = [...new Set(terms)].slice(0, 4);
-  const batches = await Promise.all(selected.map((term) => lms.spotifySearch(playerId, term, 35).catch(() => [])));
+  const selected = [...new Set(terms)].slice(0, 2);
+  const batches = await Promise.all(selected.map((term) => lms.spotifySearch(playerId, term, Math.max(12, count * 4)).catch(() => [])));
   return batches.flat();
 }
 

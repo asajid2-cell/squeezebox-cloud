@@ -9,6 +9,7 @@ export class LmsClient {
     this.host = options.host || config.lmsHost;
     this.port = options.port || config.lmsCliPort;
     this.timeoutMs = options.timeoutMs || 3500;
+    this.cache = new Map();
   }
 
   command(command) {
@@ -65,6 +66,31 @@ export class LmsClient {
   async nowPlaying(playerId) {
     if (!playerId) return null;
     const encoded = encodeURIComponent(playerId);
+    const richStatus = await this.jsonRequest([playerId, ["status", "-", 1, "tags:Kcuoal"]]).catch(() => null);
+    const status = richStatus?.result || {};
+    const statusTrack = Array.isArray(status.playlist_loop) ? status.playlist_loop[0] : null;
+    if ((!statusTrack && !status.current_title) || (statusTrack && !statusTrack.artist && !status.remoteMeta?.artist)) {
+      return this.nowPlayingFromCli(encoded, playerId);
+    }
+    const artworkUrl = statusTrack?.artwork_url || status.remoteMeta?.artwork_url || "";
+    const coverId = statusTrack?.coverid || status.remoteMeta?.coverid || "";
+    const safeCoverId = coverId && coverId !== "0" ? String(coverId) : "";
+    const decodedTitle = firstSafeDisplayValue([statusTrack?.title, status.current_title], "Unknown title");
+    const streamTrack = trackFromStreamUrl(statusTrack?.url || statusTrack?.id || decodedTitle);
+    return {
+      id: streamTrack?.id || statusTrack?.url || statusTrack?.id || `lms:${decodedTitle}`,
+      title: streamTrack?.title || decodedTitle,
+      artist: streamTrack?.artist || firstSafeDisplayValue([statusTrack?.artist, status.remoteMeta?.artist], "Unknown artist"),
+      album: streamTrack?.album || firstSafeDisplayValue([statusTrack?.album, status.remoteMeta?.album], ""),
+      duration: Number(statusTrack?.duration) || Number(status.duration) || 0,
+      elapsed: Number(status.time) || 0,
+      canSeek: Boolean(status.can_seek),
+      art: streamTrack?.art || (artworkUrl ? proxiedArtworkUrl(artworkUrl) : safeCoverId ? `api/artwork/${encodeURIComponent(safeCoverId)}` : null),
+      source: streamTrack?.source || "LMS"
+    };
+  }
+
+  async nowPlayingFromCli(encoded, playerId) {
     const [title, artist, album, duration, elapsed, richStatus] = await Promise.all([
       this.command(`${encoded} title ?`),
       this.command(`${encoded} artist ?`),
@@ -159,8 +185,15 @@ export class LmsClient {
   }
 
   async resolveIndexedTrack(track) {
+    const cacheKey = track.path ? `trackId:${normalizePath(track.path)}` : "";
+    const cached = cacheKey ? this.getCached(cacheKey) : null;
+    if (cached) return cached;
     const exact = await this.resolveTrackIdByUrl(track.path);
-    if (exact) return { type: "track_id", value: exact };
+    if (exact) {
+      const target = { type: "track_id", value: exact };
+      if (cacheKey) this.setCached(cacheKey, target, 15 * 60 * 1000);
+      return target;
+    }
 
     const title = track.title || path.parse(track.path).name;
     const searchTerms = uniqueSearchTerms([title, path.parse(track.path).name, path.basename(track.path, path.extname(track.path))]);
@@ -174,10 +207,18 @@ export class LmsClient {
       const candidateUrl = normalizePath(decodeSafe(String(item.url || "")));
       return candidateUrl.endsWith(normalizedPath) || candidateUrl.endsWith(`/${normalizedBasename}`);
     });
-    if (match?.id) return { type: "track_id", value: match.id };
+    if (match?.id) {
+      const target = { type: "track_id", value: match.id };
+      if (cacheKey) this.setCached(cacheKey, target, 15 * 60 * 1000);
+      return target;
+    }
 
     const urlMatch = candidates.find((item) => normalizePath(decodeSafe(String(item.url || ""))).includes(normalizedBasename));
-    if (urlMatch?.id) return { type: "track_id", value: urlMatch.id };
+    if (urlMatch?.id) {
+      const target = { type: "track_id", value: urlMatch.id };
+      if (cacheKey) this.setCached(cacheKey, target, 15 * 60 * 1000);
+      return target;
+    }
 
     return null;
   }
@@ -202,6 +243,9 @@ export class LmsClient {
     if (!playerId || !String(query || "").trim()) return [];
     const count = Math.max(1, Math.min(50, Number(limit) || 20));
     const search = String(query).trim();
+    const cacheKey = `spotifySearch:${playerId}:${search.toLowerCase()}:${count}`;
+    const cached = this.getCached(cacheKey);
+    if (cached) return cached;
     let response = await this.jsonRequest([
       playerId,
       ["spotty", "items", 0, count, "menu:spotty", "item_id:1.0", `search:${search}`, "cachesearch:1"]
@@ -235,13 +279,18 @@ export class LmsClient {
 
     const categoryPlayable = playable.filter((item) => item.resultKind !== "track");
     const firstPageTrackCount = Math.max(6, count - Math.min(12, categoryPlayable.length));
-    return uniqueByUri([...directPlayable.slice(0, firstPageTrackCount), ...categoryPlayable, ...directPlayable.slice(firstPageTrackCount)])
+    const results = uniqueByUri([...directPlayable.slice(0, firstPageTrackCount), ...categoryPlayable, ...directPlayable.slice(firstPageTrackCount)])
       .map((item) => spotifyItemToTrack(item))
       .slice(0, count);
+    this.setCached(cacheKey, results, 45000);
+    return results;
   }
 
   async spotifyLibrary(playerId, type = "playlists", limit = 50, offset = 0) {
     if (!playerId) return [];
+    const cacheKey = `spotifyLibrary:${playerId}:${type}:${limit}:${offset}`;
+    const cached = this.getCached(cacheKey);
+    if (cached) return cached;
     const itemMap = {
       playlists: { id: "8", kind: "playlist" },
       albums: { id: "6", kind: "album" },
@@ -254,11 +303,16 @@ export class LmsClient {
     const start = Math.max(0, Number(offset) || 0);
     const response = await this.jsonRequest([playerId, ["spotty", "items", start, count, "menu:spotty", `item_id:${selection.id}`]]);
     const items = response?.result?.item_loop || response?.result?.loop_loop || [];
-    return spotifyPlayableItems(items, selection.kind).map((item) => spotifyItemToTrack(item));
+    const results = spotifyPlayableItems(items, selection.kind).map((item) => spotifyItemToTrack(item));
+    this.setCached(cacheKey, results, 60000);
+    return results;
   }
 
   async spotifyChildren(playerId, { browseId = "", uri = "", kind = "playlist" } = {}, limit = 100, offset = 0) {
     if (!playerId) return [];
+    const cacheKey = `spotifyChildren:${playerId}:${browseId}:${uri}:${kind}:${limit}:${offset}`;
+    const cached = this.getCached(cacheKey);
+    if (cached) return cached;
     const count = Math.max(1, Math.min(300, Number(limit) || 100));
     const start = Math.max(0, Number(offset) || 0);
     const candidates = [browseId, uri].filter(Boolean);
@@ -267,7 +321,10 @@ export class LmsClient {
       const response = await this.jsonRequest([playerId, ["spotty", "items", start, count, "menu:spotty", `item_id:${id}`]]).catch(() => null);
       const items = response?.result?.item_loop || response?.result?.loop_loop || [];
       const tracks = spotifyPlayableItems(items, "track").map((item) => spotifyItemToTrack(item));
-      if (tracks.length > 0) return tracks;
+      if (tracks.length > 0) {
+        this.setCached(cacheKey, tracks, 60000);
+        return tracks;
+      }
     }
     if (uri && kind === "track") return [{ id: uri, uri, title: "Spotify track", artist: "Spotify", source: "Spotify", kind: "track" }];
     return [];
@@ -342,6 +399,20 @@ export class LmsClient {
     });
     if (!response.ok) throw new Error(`LMS JSON request failed: ${response.status}`);
     return response.json();
+  }
+
+  getCached(key) {
+    const item = this.cache.get(key);
+    if (!item || item.expiresAt < Date.now()) {
+      this.cache.delete(key);
+      return null;
+    }
+    return structuredClone(item.value);
+  }
+
+  setCached(key, value, ttlMs) {
+    if (this.cache.size > 200) this.cache.clear();
+    this.cache.set(key, { value: structuredClone(value), expiresAt: Date.now() + ttlMs });
   }
 }
 

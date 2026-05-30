@@ -8,9 +8,17 @@ import { config, updateLibraryStatus } from "./state.js";
 const extensions = ["mp3", "flac", "m4a", "wav", "ogg", "aac"];
 const maxUploadBytes = Number(process.env.MAX_UPLOAD_BYTES || 80 * 1024 * 1024);
 const execFileAsync = promisify(execFile);
+const scanCache = new Map();
+const scanCacheMs = Number(process.env.LIBRARY_SCAN_CACHE_MS || 30000);
 
 export async function scanLibrary(root = null, limit = 5000, source = "all") {
   if (!root) return scanAllLibraries(limit, source);
+  const cacheKey = `${normalizeFsPath(root)}:${source}`;
+  const cached = scanCache.get(cacheKey);
+  if (cached && Date.now() - cached.createdAt < scanCacheMs) {
+    updateLibraryStatus(cached.status);
+    return cached.tracks.slice(0, limit);
+  }
   const isUploadRoot = normalizeFsPath(root) === normalizeFsPath(config.uploadDir);
   const scanExtensions = isUploadRoot ? ["mp3"] : extensions;
   const patterns = scanExtensions.map((ext) => `**/*.${ext}`);
@@ -24,9 +32,11 @@ export async function scanLibrary(root = null, limit = 5000, source = "all") {
       dot: true,
       deep: 8
     });
-    const tracks = files.sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).slice(0, limit).map(fileToTrack);
-    updateLibraryStatus({ root, reachable: true, trackCount: files.length });
-    return tracks;
+    const tracks = files.sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).map(fileToTrack);
+    const status = { root, reachable: true, trackCount: files.length };
+    scanCache.set(cacheKey, { tracks, status, createdAt: Date.now() });
+    updateLibraryStatus(status);
+    return tracks.slice(0, limit);
   } catch (error) {
     updateLibraryStatus({ root, reachable: false, trackCount: 0, error: error.message });
     return [];
@@ -161,6 +171,7 @@ export async function saveUploadedTrack({ originalName, bytes }) {
   } else {
     await transcodeUploadToMp3(safe, bytes, target);
   }
+  scanCache.clear();
   return fileToTrack(target);
 }
 
