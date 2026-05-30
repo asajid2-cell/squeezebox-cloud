@@ -313,6 +313,35 @@ describe("Cloud Squeeze API", () => {
     }
   });
 
+  it("regular shuffle populates a visible generated queue", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "spotify", history: [] };
+    const response = await request(createApp({ lms: mockLms }))
+      .post("/api/player/playback")
+      .send({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" })
+      .expect(200);
+
+    expect(response.body.playback).toMatchObject({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" });
+    expect(response.body.queue).toEqual(
+      expect.arrayContaining([expect.objectContaining({ requestedBy: "shuffle", uri: expect.stringMatching(/^spotify:track:/) })])
+    );
+  });
+
+  it("repeat changes do not regenerate or remove generated queue rows", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: true, smartShuffleSource: "spotify", history: [] };
+    addQueueItem({ title: "Smart Existing", artist: "Tester", requestedBy: "smart shuffle", uri: "spotify:track:existing" });
+    addQueueItem({ title: "Manual Existing", artist: "Tester", requestedBy: "guest", path: "/music/manual.mp3" });
+
+    const response = await request(createApp({ lms: mockLms }))
+      .post("/api/player/playback")
+      .send({ repeat: "one" })
+      .expect(200);
+
+    expect(response.body.playback.repeat).toBe("one");
+    expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Smart Existing", "Manual Existing"]);
+  });
+
   it("queues smart shuffle picks from Spotify and local sources", async () => {
     const played: Array<{ action: string; track: { uri?: string } }> = [];
     const uniqueShuffleLms = {
