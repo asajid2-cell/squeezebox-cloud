@@ -345,7 +345,7 @@ export class LmsClient {
       const response = await this.jsonRequest([playerId, ["spotty", "items", start, requestCount, "menu:spotty", `item_id:${selection.id}`]]);
       const items = response?.result?.item_loop || response?.result?.loop_loop || [];
       const results = spotifyPlayableItems(items, selection.kind).map((item) => spotifyItemToTrack(item));
-      this.setCached(requestKey, results, spotifyBrowseCacheMs);
+      if (results.length > 0) this.setCached(requestKey, results, spotifyBrowseCacheMs);
       return results;
     });
     const deadline = stale.length > 0 ? spotifyBrowseDeadlineMs : spotifyColdBrowseDeadlineMs;

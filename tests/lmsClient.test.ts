@@ -459,6 +459,24 @@ describe("LMS client parsing", () => {
     expect(requests).toBe(1);
   });
 
+  it("does not cache empty Spotify library pages", async () => {
+    let requests = 0;
+    const client = new LmsClient();
+    client.jsonRequest = async () => {
+      requests += 1;
+      return requests === 1
+        ? { result: { item_loop: [] } }
+        : { result: { item_loop: [{ text: "Album One\nby Spotify", presetParams: { favorites_url: "spotify:album:one", favorites_title: "Album One" } }] } };
+    };
+
+    const empty = await client.spotifyLibrary("player-1", "albums", 5, 0);
+    const filled = await client.spotifyLibrary("player-1", "albums", 5, 0);
+
+    expect(empty).toEqual([]);
+    expect(filled).toEqual([expect.objectContaining({ title: "Album One", kind: "album" })]);
+    expect(requests).toBe(2);
+  });
+
   it("serves stale Spotify library cache when a browse refresh is slow", async () => {
     const client = new LmsClient();
     const cacheKey = "spotifyLibrary:player-1:albums:8:0";

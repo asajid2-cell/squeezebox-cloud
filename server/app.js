@@ -255,13 +255,16 @@ export function createApp({ lms = new LmsClient() } = {}) {
         res.json({ results: [] });
         return;
       }
+      const type = String(req.query.type || "playlists");
+      const limit = req.query.limit || 50;
+      const offset = req.query.offset || 0;
+      let results = await lms.spotifyLibrary(playerId, type, limit, offset);
+      if (results.length === 0) {
+        await delay(650);
+        results = await lms.spotifyLibrary(playerId, type, limit, offset);
+      }
       res.json({
-        results: await lms.spotifyLibrary(
-          playerId,
-          String(req.query.type || "playlists"),
-          req.query.limit || 50,
-          req.query.offset || 0
-        )
+        results
       });
     } catch (error) {
       res.status(502).json({ error: error.message, results: [] });
