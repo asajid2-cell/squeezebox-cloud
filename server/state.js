@@ -153,6 +153,7 @@ export function moveQueueItem(id, direction) {
   const index = appState.queue.findIndex((item) => item.id === id);
   if (index < 0) return null;
   const target = direction === "up" ? index - 1 : direction === "down" ? index + 1 : Number(direction);
+  if ((direction === "up" && index === 0) || (direction === "down" && index === appState.queue.length - 1)) return appState.queue[index];
   if (!Number.isInteger(target) || target < 0 || target >= appState.queue.length) return undefined;
   const [item] = appState.queue.splice(index, 1);
   appState.queue.splice(target, 0, item);

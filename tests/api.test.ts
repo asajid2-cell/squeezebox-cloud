@@ -95,6 +95,7 @@ describe("Cloud Squeeze API", () => {
     const app = createApp({ lms: mockLms });
     const item = await request(app).post("/api/queue").send({ title: "Move Me", artist: "Tester" }).expect(201);
 
+    await request(app).post(`/api/queue/${item.body.id}/move`).send({ direction: "up" }).expect(200);
     await request(app).post(`/api/queue/${item.body.id}/move`).send({ direction: "sideways" }).expect(400);
     await request(app).post(`/api/queue/${item.body.id}/move`).send({ index: 99 }).expect(400);
     await request(app).post("/api/queue/not-real/move").send({ direction: "up" }).expect(404);
