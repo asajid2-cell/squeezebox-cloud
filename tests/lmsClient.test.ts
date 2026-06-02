@@ -105,6 +105,48 @@ describe("LMS client parsing", () => {
     expect(track.album).toBe("Single");
   });
 
+  it("returns idle metadata when LMS is stopped with an empty playlist", async () => {
+    const client = new LmsClient();
+    client.command = async () => "p title stale";
+    client.jsonRequest = async () => ({
+      result: {
+        mode: "stop",
+        playlist_tracks: 0,
+        playlist_loop: [{ title: "stale", artist: "stale" }]
+      }
+    });
+
+    const track = await client.nowPlaying("player-1");
+
+    expect(track).toMatchObject({
+      id: "idle",
+      title: "No track playing",
+      artist: "Connect a player or request a song",
+      canSeek: false,
+      art: null
+    });
+  });
+
+  it("does not use CLI fallback metadata for stopped players", async () => {
+    const commands: string[] = [];
+    const client = new LmsClient();
+    client.command = async (command: string) => {
+      commands.push(command);
+      return "p title stale";
+    };
+    client.jsonRequest = async () => ({
+      result: {
+        mode: "stopped",
+        playlist_tracks: 1
+      }
+    });
+
+    const track = await client.nowPlaying("player-1");
+
+    expect(track.title).toBe("No track playing");
+    expect(commands).toHaveLength(0);
+  });
+
   it("maps app stream URLs back to uploaded track metadata", async () => {
     const previousUploadDir = config.uploadDir;
     config.uploadDir = "/music/uploads";

@@ -98,6 +98,7 @@ export class LmsClient {
     const encoded = encodeURIComponent(playerId);
     const richStatus = await this.jsonRequest([playerId, ["status", "-", 1, "tags:Kcuoal"]]).catch(() => null);
     const status = richStatus?.result || {};
+    if (isIdleStatus(status)) return idleTrack();
     const statusTrack = Array.isArray(status.playlist_loop) ? status.playlist_loop[0] : null;
     if ((!statusTrack && !status.current_title) || (statusTrack && !statusTrack.artist && !status.remoteMeta?.artist)) {
       return this.nowPlayingFromCli(encoded, playerId);
@@ -130,6 +131,7 @@ export class LmsClient {
       this.jsonRequest([playerId, ["status", "-", 1, "tags:Kcuoal"]]).catch(() => null)
     ]);
     const status = richStatus?.result || {};
+    if (isIdleStatus(status)) return idleTrack();
     const statusTrack = Array.isArray(status.playlist_loop) ? status.playlist_loop[0] : null;
     const artworkUrl = statusTrack?.artwork_url || status.remoteMeta?.artwork_url || "";
     const coverId = statusTrack?.coverid || status.remoteMeta?.coverid || "";
@@ -504,6 +506,26 @@ function streamUrl(trackPath) {
 
 function spottyPlaybackUri(value) {
   return String(value || "").replace(/^spotify:(track|episode):/i, "spotify://$1:");
+}
+
+function isIdleStatus(status) {
+  const mode = String(status?.mode || "").toLowerCase();
+  const playlistTracks = Number(status?.playlist_tracks);
+  return mode === "stop" || mode === "stopped" || playlistTracks === 0;
+}
+
+function idleTrack() {
+  return {
+    id: "idle",
+    title: "No track playing",
+    artist: "Connect a player or request a song",
+    album: "",
+    source: "LMS",
+    duration: 0,
+    elapsed: 0,
+    canSeek: false,
+    art: null
+  };
 }
 
 function trackFromStreamUrl(value) {
