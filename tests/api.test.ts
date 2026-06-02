@@ -113,11 +113,19 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.volume).toBe(33);
   });
 
+  it("rejects invalid volume values", async () => {
+    await request(createApp({ lms: mockLms })).post("/api/player/volume").send({ volume: "loud" }).expect(400);
+  });
+
   it("seeks the current player position", async () => {
     const response = await request(createApp({ lms: mockLms })).post("/api/player/seek").send({ seconds: 42 }).expect(200);
     expect(response.body.ok).toBe(true);
     expect(response.body.seconds).toBe(42);
     expect(response.body.nowPlaying.canSeek).toBe(true);
+  });
+
+  it("rejects invalid seek values", async () => {
+    await request(createApp({ lms: mockLms })).post("/api/player/seek").send({ seconds: "later" }).expect(400);
   });
 
   it("uses the LMS previous command when previous is pressed", async () => {
@@ -433,6 +441,15 @@ describe("Cloud Squeeze API", () => {
     } finally {
       config.musicSourceDir = previousMusicDir;
     }
+  });
+
+  it("rejects malformed playback settings instead of silently ignoring them", async () => {
+    const response = await request(createApp({ lms: mockLms }))
+      .post("/api/player/playback")
+      .send({ repeat: "bad", shuffle: "yes", smartQueue: "no", smartShuffleSource: "bad" })
+      .expect(400);
+
+    expect(response.body.error).toBe("Invalid playback settings");
   });
 
   it("regular shuffle randomizes only the visible queue", async () => {

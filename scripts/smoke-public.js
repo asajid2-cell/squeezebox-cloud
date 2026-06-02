@@ -26,6 +26,7 @@ try {
   assert(Array.isArray(search.results) && search.results.length > 0, "public library search returned no results");
 
   await assertMalformedJson();
+  await assertInvalidPlaybackSettings();
   await assertQueueCrud();
   await assertPlayableDuplicateRejection();
   await assertSpotifyContainersOpenToTracks();
@@ -260,6 +261,14 @@ async function assertMalformedJson() {
   const body = await response.json().catch(() => ({}));
   assert(response.status === 400, `malformed JSON returned ${response.status}, expected 400`);
   assert(body.error === "Invalid JSON request body", "malformed JSON response was not compact JSON");
+}
+
+async function assertInvalidPlaybackSettings() {
+  const rejected = await requestJson("/player/playback", {
+    method: "POST",
+    body: { repeat: "bad", shuffle: "yes", smartQueue: "no", smartShuffleSource: "bad" }
+  }, { expectedStatus: 400 });
+  assert(rejected.error === "Invalid playback settings", "invalid playback settings returned an unexpected error");
 }
 
 async function cleanupQueue() {

@@ -41,6 +41,21 @@ const queueUpdateSchema = z.object({
   requestedBy: z.string().min(1).optional()
 });
 
+const volumeSchema = z.object({
+  volume: z.coerce.number().finite()
+});
+
+const seekSchema = z.object({
+  seconds: z.coerce.number().finite()
+});
+
+const playbackSchema = z.object({
+  shuffle: z.boolean().optional(),
+  smartQueue: z.boolean().optional(),
+  repeat: z.enum(["off", "one", "all"]).optional(),
+  smartShuffleSource: z.enum(["mixed", "spotify", "local"]).optional()
+}).strict();
+
 const loginSchema = z.object({
   password: z.string().min(1)
 });
@@ -485,13 +500,23 @@ export function createApp({ lms = new LmsClient() } = {}) {
   });
 
   app.post("/api/player/volume", async (req, res) => {
-    const volume = setVolume(req.body?.volume);
+    const parsed = volumeSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid volume", issues: parsed.error.issues });
+      return;
+    }
+    const volume = setVolume(parsed.data.volume);
     await control(lms, "volume", volume);
     res.json({ ok: true, volume });
   });
 
   app.post("/api/player/seek", async (req, res) => {
-    const seconds = Math.max(0, Number(req.body?.seconds) || 0);
+    const parsed = seekSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid seek position", issues: parsed.error.issues });
+      return;
+    }
+    const seconds = Math.max(0, parsed.data.seconds);
     const wasPlaying = appState.player.mode === "play";
     await control(lms, "seek", seconds);
     if (wasPlaying && appState.player.id) await lms.control(appState.player.id, "play").catch(() => null);
@@ -504,27 +529,33 @@ export function createApp({ lms = new LmsClient() } = {}) {
   app.post("/api/player/playback", async (req, res) => {
     const next = {};
     try {
+      const parsed = playbackSchema.safeParse(req.body || {});
+      if (!parsed.success) {
+        res.status(400).json({ error: "Invalid playback settings", issues: parsed.error.issues });
+        return;
+      }
+      const body = parsed.data;
       const playerId = await hotPlayerId(lms);
-      logEvent("playback.request", { body: req.body, before: appState.playback, queue: queueSummary() });
+      logEvent("playback.request", { body, before: appState.playback, queue: queueSummary() });
       const sourceChanged =
-        ["mixed", "spotify", "local"].includes(req.body?.smartShuffleSource) &&
-        req.body.smartShuffleSource !== appState.playback.smartShuffleSource;
-      const shuffleChanged = typeof req.body?.shuffle === "boolean" && req.body.shuffle !== appState.playback.shuffle;
-      const smartQueueChanged = typeof req.body?.smartQueue === "boolean" && req.body.smartQueue !== appState.playback.smartQueue;
-      if (typeof req.body?.shuffle === "boolean") {
-        next.shuffle = req.body.shuffle;
-        if (req.body.shuffle) next.smartQueue = false;
+        body.smartShuffleSource &&
+        body.smartShuffleSource !== appState.playback.smartShuffleSource;
+      const shuffleChanged = typeof body.shuffle === "boolean" && body.shuffle !== appState.playback.shuffle;
+      const smartQueueChanged = typeof body.smartQueue === "boolean" && body.smartQueue !== appState.playback.smartQueue;
+      if (typeof body.shuffle === "boolean") {
+        next.shuffle = body.shuffle;
+        if (body.shuffle) next.smartQueue = false;
       }
-      if (typeof req.body?.smartQueue === "boolean") {
-        next.smartQueue = req.body.smartQueue;
-        if (req.body.smartQueue) next.shuffle = false;
+      if (typeof body.smartQueue === "boolean") {
+        next.smartQueue = body.smartQueue;
+        if (body.smartQueue) next.shuffle = false;
       }
-      if (["off", "one", "all"].includes(req.body?.repeat)) {
-        next.repeat = req.body.repeat;
-        lms.control(playerId, "repeat", req.body.repeat).catch(() => null);
+      if (body.repeat) {
+        next.repeat = body.repeat;
+        lms.control(playerId, "repeat", body.repeat).catch(() => null);
       }
-      if (["mixed", "spotify", "local"].includes(req.body?.smartShuffleSource)) {
-        next.smartShuffleSource = req.body.smartShuffleSource;
+      if (body.smartShuffleSource) {
+        next.smartShuffleSource = body.smartShuffleSource;
       }
       const queueModeChanged = sourceChanged || shuffleChanged || smartQueueChanged;
       if (queueModeChanged && (next.smartQueue === false || next.shuffle === false || next.shuffle === true || sourceChanged)) {
