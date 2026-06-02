@@ -34,6 +34,7 @@ try {
   await assertInvalidPlaybackSettings();
   await assertQueueCrud();
   await assertPlayableDuplicateRejection();
+  await assertQueueLimit();
   await assertSpotifyContainersCannotPlayDirectly();
   const spotifyReachable = spotifyStatus.reachable !== false && state.services?.spotify?.reachable !== false;
   if (!spotifyReachable) {
@@ -60,6 +61,7 @@ try {
 }
 
 async function assertBatchQueueAndShuffle() {
+  await cleanupQueue();
   const batch = await requestJson("/player/tracks", {
     method: "POST",
     body: {
@@ -75,6 +77,7 @@ async function assertBatchQueueAndShuffle() {
     (batch.queued || []).map((item) => item.title).join("|") === "Smoke Verify One|Smoke Verify Two",
     "batch queue did not preserve order"
   );
+  await cleanupQueue();
 
   const playNext = await requestJson("/player/tracks", {
     method: "POST",
@@ -119,6 +122,7 @@ async function assertBatchQueueAndShuffle() {
 }
 
 async function assertSmartShuffleSources({ spotifyReachable } = {}) {
+  await cleanupQueue();
   const localSearch = await requestJson("/library/search?source=local&limit=1");
   const manualTrack = (localSearch.results || []).find((item) => item.path);
   assert(manualTrack, "local library did not expose a playable track for smart shuffle keeper");
@@ -203,6 +207,7 @@ async function assertQueueCrud() {
 }
 
 async function assertPlayableDuplicateRejection() {
+  await cleanupQueue();
   const title = `Smoke Verify Duplicate ${Date.now()}`;
   const first = await requestJson("/player/tracks", {
     method: "POST",
@@ -222,6 +227,37 @@ async function assertPlayableDuplicateRejection() {
     }
   }, { expectedStatus: 409 });
   assert(duplicate.error === "Those songs are already in the queue", "batch duplicate rejection returned an unexpected error");
+  await cleanupQueue();
+}
+
+async function assertQueueLimit() {
+  await cleanupQueue();
+  const tracks = Array.from({ length: 4 }, (_, index) => ({
+    title: `Smoke Verify Limit ${index + 1}`,
+    artist: "CloudSqueeze",
+    uri: `spotify:track:smokelimit${index + 1}`,
+    source: "Spotify",
+    kind: "track"
+  }));
+  const rejected = await requestJson("/player/tracks", {
+    method: "POST",
+    body: { action: "add-queue", tracks }
+  }, { expectedStatus: 429 });
+  assert(String(rejected.error || "").includes("max 3"), "queue limit did not report the configured max");
+
+  const allowed = await requestJson("/player/tracks", {
+    method: "POST",
+    body: { action: "add-queue", tracks: tracks.slice(0, 3) }
+  });
+  for (const item of allowed.queued || []) createdQueueIds.push(item.id);
+  assert((allowed.queued || []).length === 3, "queue limit did not allow exactly three guest rows");
+
+  const spoofed = await requestJson("/queue", {
+    method: "POST",
+    body: { title: "Smoke Verify Limit Spoof", artist: "CloudSqueeze", requestedBy: "admin" }
+  }, { expectedStatus: 429 });
+  assert(String(spoofed.error || "").includes("max 3"), "queue endpoint allowed requestedBy spoofing past the limit");
+  await cleanupQueue();
 }
 
 async function assertSpotifyContainersOpenToTracks() {
