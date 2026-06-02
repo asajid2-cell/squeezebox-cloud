@@ -216,6 +216,37 @@ describe("LMS client parsing", () => {
     config.lmsConfigDir = previousConfigDir;
   });
 
+  it("caches Spotify status probes briefly", async () => {
+    const previousConfigDir = config.lmsConfigDir;
+    config.lmsConfigDir = path.resolve("tests", "fixtures", "lms-config");
+    const client = new LmsClient();
+    let commands = 0;
+    let jsonRequests = 0;
+    client.command = async (command: string) => {
+      commands += 1;
+      if (command === "player count ?") return "player count 1";
+      if (command === "player id 0 ?") return "player id 0 player-1";
+      return "ok";
+    };
+    client.jsonRequest = async () => {
+      jsonRequests += 1;
+      return {
+        result: {
+          item_loop: [{ action: "none", type: "text", style: "itemNoAction", text: "Empty" }]
+        }
+      };
+    };
+
+    const first = await client.spotifyStatus();
+    const second = await client.spotifyStatus();
+
+    expect(first).toEqual(second);
+    expect(first.reachable).toBe(false);
+    expect(commands).toBe(2);
+    expect(jsonRequests).toBe(1);
+    config.lmsConfigDir = previousConfigDir;
+  });
+
   it("plays local tracks by resolved LMS track id", async () => {
     const requests: unknown[] = [];
     const client = new LmsClient();

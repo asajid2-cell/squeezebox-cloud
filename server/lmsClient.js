@@ -6,6 +6,7 @@ import { fileToTrack } from "./library.js";
 
 const spotifySearchCacheMs = 2 * 60 * 1000;
 const spotifyBrowseCacheMs = 5 * 60 * 1000;
+const spotifyStatusCacheMs = Number(process.env.SPOTIFY_STATUS_CACHE_MS || 30000);
 const spotifyBrowseDeadlineMs = Number(process.env.SPOTIFY_BROWSE_DEADLINE_MS || 1800);
 const spotifyColdBrowseDeadlineMs = Number(process.env.SPOTIFY_COLD_BROWSE_DEADLINE_MS || 6500);
 const spotifyChildrenColdBrowseDeadlineMs = Number(process.env.SPOTIFY_CHILDREN_COLD_BROWSE_DEADLINE_MS || 2200);
@@ -389,6 +390,17 @@ export class LmsClient {
   }
 
   async spotifyStatus() {
+    const cacheKey = "spotifyStatus";
+    const cached = this.getCached(cacheKey);
+    if (cached) return cached;
+    return this.once(cacheKey, async () => {
+      const status = await this.readSpotifyStatus();
+      this.setCached(cacheKey, status, spotifyStatusCacheMs);
+      return status;
+    });
+  }
+
+  async readSpotifyStatus() {
     try {
       const spotty = await this.detectSpottyFromConfig();
       if (spotty.configured) {
