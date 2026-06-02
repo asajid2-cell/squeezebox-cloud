@@ -914,14 +914,8 @@ function prewarmSpotifyLibrary(lms, playerId) {
   (async () => {
     await Promise.all([
       lms.spotifyLibrary(playerId, "playlists", 80, 0).catch(() => []),
-      lms.spotifyLibrary(playerId, "albums", 80, 0).catch(() => []),
       lms.spotifyLibrary(playerId, "home", 80, 0).catch(() => [])
     ]);
-    await delay(250);
-    for (const type of ["artists", "tracks"]) {
-      await lms.spotifyLibrary(playerId, type, 80, 0).catch(() => []);
-      await delay(250);
-    }
   })();
 }
 

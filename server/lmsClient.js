@@ -323,7 +323,8 @@ export class LmsClient {
     if (!playerId) return [];
     const count = Math.max(1, Math.min(100, Number(limit) || 50));
     const start = Math.max(0, Number(offset) || 0);
-    const requestCount = start === 0 && count < 80 ? 80 : count;
+    const shouldWiden = start === 0 && count < 80 && ["playlists", "home"].includes(type);
+    const requestCount = shouldWiden ? 80 : count;
     const cacheKey = `spotifyLibrary:${playerId}:${type}:${count}:${start}`;
     const cached = this.getCached(cacheKey);
     if (cached) return cached;

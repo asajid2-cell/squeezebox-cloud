@@ -528,6 +528,24 @@ describe("LMS client parsing", () => {
     expect(requests).toBe(1);
   });
 
+  it("keeps Spotify album library requests narrow to avoid heavy Spotty imports", async () => {
+    const requests: unknown[] = [];
+    const client = new LmsClient();
+    client.jsonRequest = async (params: unknown) => {
+      requests.push(params);
+      return {
+        result: {
+          item_loop: [{ text: "Album One\nby Spotify", presetParams: { favorites_url: "spotify:album:one", favorites_title: "Album One" } }]
+        }
+      };
+    };
+
+    const results = await client.spotifyLibrary("player-1", "albums", 5, 0);
+
+    expect(results).toHaveLength(1);
+    expect(requests).toEqual([["player-1", ["spotty", "items", 0, 5, "menu:spotty", "item_id:6"]]]);
+  });
+
   it("deduplicates concurrent Spotify library browse requests", async () => {
     let requests = 0;
     let release: (value: unknown) => void = () => {};
@@ -555,7 +573,7 @@ describe("LMS client parsing", () => {
     expect(requests).toBe(1);
   });
 
-  it("serves narrow Spotify library requests from an in-flight wider browse", async () => {
+  it("serves narrow Spotify playlist requests from an in-flight wider browse", async () => {
     let requests = 0;
     let release: (value: unknown) => void = () => {};
     const gate = new Promise((resolve) => {
@@ -568,15 +586,15 @@ describe("LMS client parsing", () => {
       return {
         result: {
           item_loop: Array.from({ length: 80 }, (_, index) => ({
-            text: `Album ${index + 1}\nby Spotify`,
-            presetParams: { favorites_url: `spotify:album:${index + 1}`, favorites_title: `Album ${index + 1}` }
+            text: `Playlist ${index + 1}\nby Spotify`,
+            presetParams: { favorites_url: `spotify:playlist:${index + 1}`, favorites_title: `Playlist ${index + 1}` }
           }))
         }
       };
     };
 
-    const wide = client.spotifyLibrary("player-1", "albums", 80, 0);
-    const narrow = client.spotifyLibrary("player-1", "albums", 5, 0);
+    const wide = client.spotifyLibrary("player-1", "playlists", 80, 0);
+    const narrow = client.spotifyLibrary("player-1", "playlists", 5, 0);
     release(null);
     const [wideResult, narrowResult] = await Promise.all([wide, narrow]);
 
