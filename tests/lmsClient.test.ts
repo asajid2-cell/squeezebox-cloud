@@ -528,7 +528,7 @@ describe("LMS client parsing", () => {
     expect(requests).toBe(1);
   });
 
-  it("keeps Spotify album library requests narrow to avoid heavy Spotty imports", async () => {
+  it("does not live-probe Spotify saved albums because Spotty imports can be heavy", async () => {
     const requests: unknown[] = [];
     const client = new LmsClient();
     client.jsonRequest = async (params: unknown) => {
@@ -542,8 +542,8 @@ describe("LMS client parsing", () => {
 
     const results = await client.spotifyLibrary("player-1", "albums", 5, 0);
 
-    expect(results).toHaveLength(1);
-    expect(requests).toEqual([["player-1", ["spotty", "items", 0, 5, "menu:spotty", "item_id:6"]]]);
+    expect(results).toEqual([]);
+    expect(requests).toEqual([]);
   });
 
   it("deduplicates concurrent Spotify library browse requests", async () => {
@@ -603,7 +603,7 @@ describe("LMS client parsing", () => {
     expect(requests).toBe(1);
   });
 
-  it("does not cache empty Spotify library pages", async () => {
+  it("returns empty uncached Spotify saved albums without retrying Spotty", async () => {
     let requests = 0;
     const client = new LmsClient();
     client.jsonRequest = async () => {
@@ -617,8 +617,8 @@ describe("LMS client parsing", () => {
     const filled = await client.spotifyLibrary("player-1", "albums", 5, 0);
 
     expect(empty).toEqual([]);
-    expect(filled).toEqual([expect.objectContaining({ title: "Album One", kind: "album" })]);
-    expect(requests).toBe(2);
+    expect(filled).toEqual([]);
+    expect(requests).toBe(0);
   });
 
   it("serves stale Spotify library cache when a browse refresh is slow", async () => {

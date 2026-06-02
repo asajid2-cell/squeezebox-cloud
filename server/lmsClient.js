@@ -333,6 +333,7 @@ export class LmsClient {
     const widerCached = this.getCached(widerKeys[0]) || this.getCached(widerKeys[1]);
     if (widerCached && widerCached.length >= count) return widerCached.slice(0, count);
     const stale = this.getCached(cacheKey, { allowExpired: true }) || this.getCached(widerKeys[0], { allowExpired: true })?.slice(0, count) || [];
+    if (type === "albums") return stale.slice(0, count);
     const widerInflight = widerKeys.map((key) => this.inflight.get(key)).find(Boolean);
     if (widerInflight) {
       const deadline = stale.length > 0 ? spotifyBrowseDeadlineMs : spotifyColdBrowseDeadlineMs;
