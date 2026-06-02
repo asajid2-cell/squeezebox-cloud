@@ -91,7 +91,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
   });
 
   app.get("/api/speaker/status", async (_req, res) => {
-    const status = await refreshLms(lms);
+    const status = await refreshLms(lms, {
+      minAgeMs: 1600,
+      waitForFresh: !refreshState.updatedAt || !appState.player.connected
+    });
     res.json(status);
   });
 
