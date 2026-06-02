@@ -731,9 +731,8 @@ function prewarmSpotifyLibrary(lms, playerId) {
   spotifyLibraryPrewarmState.playerId = playerId;
   spotifyLibraryPrewarmState.at = Date.now();
   (async () => {
-    await lms.spotifyLibrary(playerId, "playlists", 80, 0).catch(() => []);
-    await delay(250);
     await Promise.all([
+      lms.spotifyLibrary(playerId, "playlists", 80, 0).catch(() => []),
       lms.spotifyLibrary(playerId, "albums", 80, 0).catch(() => []),
       lms.spotifyLibrary(playerId, "home", 80, 0).catch(() => [])
     ]);

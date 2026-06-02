@@ -7,7 +7,7 @@ import { fileToTrack } from "./library.js";
 const spotifySearchCacheMs = 2 * 60 * 1000;
 const spotifyBrowseCacheMs = 5 * 60 * 1000;
 const spotifyBrowseDeadlineMs = Number(process.env.SPOTIFY_BROWSE_DEADLINE_MS || 1800);
-const spotifyColdBrowseDeadlineMs = Number(process.env.SPOTIFY_COLD_BROWSE_DEADLINE_MS || 3200);
+const spotifyColdBrowseDeadlineMs = Number(process.env.SPOTIFY_COLD_BROWSE_DEADLINE_MS || 4200);
 
 export class LmsClient {
   constructor(options = {}) {
@@ -319,10 +319,12 @@ export class LmsClient {
     if (!playerId) return [];
     const count = Math.max(1, Math.min(100, Number(limit) || 50));
     const start = Math.max(0, Number(offset) || 0);
+    const requestCount = start === 0 && count < 80 ? 80 : count;
     const cacheKey = `spotifyLibrary:${playerId}:${type}:${count}:${start}`;
     const cached = this.getCached(cacheKey);
     if (cached) return cached;
-    const widerKeys = [`spotifyLibrary:${playerId}:${type}:80:${start}`, `spotifyLibrary:${playerId}:${type}:100:${start}`];
+    const requestKey = `spotifyLibrary:${playerId}:${type}:${requestCount}:${start}`;
+    const widerKeys = [...new Set([requestKey, `spotifyLibrary:${playerId}:${type}:80:${start}`, `spotifyLibrary:${playerId}:${type}:100:${start}`])];
     const widerCached = this.getCached(widerKeys[0]) || this.getCached(widerKeys[1]);
     if (widerCached && widerCached.length >= count) return widerCached.slice(0, count);
     const stale = this.getCached(cacheKey, { allowExpired: true }) || this.getCached(widerKeys[0], { allowExpired: true })?.slice(0, count) || [];
@@ -339,15 +341,16 @@ export class LmsClient {
       home: { id: "0", kind: "playlist" }
     };
     const selection = itemMap[type] || itemMap.playlists;
-    const request = this.once(cacheKey, async () => {
-      const response = await this.jsonRequest([playerId, ["spotty", "items", start, count, "menu:spotty", `item_id:${selection.id}`]]);
+    const request = this.once(requestKey, async () => {
+      const response = await this.jsonRequest([playerId, ["spotty", "items", start, requestCount, "menu:spotty", `item_id:${selection.id}`]]);
       const items = response?.result?.item_loop || response?.result?.loop_loop || [];
       const results = spotifyPlayableItems(items, selection.kind).map((item) => spotifyItemToTrack(item));
-      this.setCached(cacheKey, results, spotifyBrowseCacheMs);
+      this.setCached(requestKey, results, spotifyBrowseCacheMs);
       return results;
     });
     const deadline = stale.length > 0 ? spotifyBrowseDeadlineMs : spotifyColdBrowseDeadlineMs;
-    return (await withDeadline(request, deadline, stale)) || [];
+    const results = await withDeadline(request, deadline, stale);
+    return (results || []).slice(0, count);
   }
 
   async spotifyChildren(playerId, { browseId = "", uri = "", kind = "playlist" } = {}, limit = 100, offset = 0) {

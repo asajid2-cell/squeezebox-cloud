@@ -377,7 +377,7 @@ describe("LMS client parsing", () => {
     expect(results.find((result) => result.kind === "album")).toMatchObject({ title: "Take Care", artist: "Drake" });
   });
 
-  it("serves smaller Spotify library requests from a wider cached page", async () => {
+  it("serves smaller Spotify library requests through a wider cached page", async () => {
     let requests = 0;
     const client = new LmsClient();
     client.jsonRequest = async () => {
@@ -392,11 +392,13 @@ describe("LMS client parsing", () => {
       };
     };
 
+    const firstNarrow = await client.spotifyLibrary("player-1", "playlists", 8, 0);
     const wide = await client.spotifyLibrary("player-1", "playlists", 80, 0);
-    const narrow = await client.spotifyLibrary("player-1", "playlists", 8, 0);
+    const secondNarrow = await client.spotifyLibrary("player-1", "playlists", 8, 0);
 
+    expect(firstNarrow).toHaveLength(8);
     expect(wide).toHaveLength(80);
-    expect(narrow).toHaveLength(8);
+    expect(secondNarrow).toHaveLength(8);
     expect(requests).toBe(1);
   });
 
