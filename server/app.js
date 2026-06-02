@@ -103,6 +103,12 @@ export function createApp({ lms = new LmsClient() } = {}) {
     refreshLms(lms, { force: true, skipTrackInfo: true }).catch(() => null);
   }, 250);
   startupRefresh.unref?.();
+  if (process.env.NODE_ENV !== "test") {
+    const startupLibraryScan = setTimeout(() => {
+      scanLibrary(undefined, 5000, "all").catch(() => null);
+    }, 500);
+    startupLibraryScan.unref?.();
+  }
 
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, service: "cloud-squeeze" });
