@@ -586,6 +586,30 @@ describe("Cloud Squeeze API", () => {
     }
   });
 
+  it("allows regular visible-queue shuffle when Spotify browsing is unreachable", async () => {
+    const previousSpotify = { ...appState.services.spotify };
+    const previousPlayback = { ...appState.playback };
+    appState.queue.splice(0, appState.queue.length);
+    appState.services.spotify = { configured: true, reachable: false, detail: "Reauthorize Spotty in LMS" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "spotify" };
+    addQueueItem({ title: "Visible Shuffle One", artist: "Tester", uri: "spotify:track:visible-one", source: "Spotify", requestedBy: "guest" });
+    addQueueItem({ title: "Visible Shuffle Two", artist: "Tester", uri: "spotify:track:visible-two", source: "Spotify", requestedBy: "guest" });
+    try {
+      const response = await request(createApp({ lms: mockLms }))
+        .post("/api/player/playback")
+        .send({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" })
+        .expect(200);
+
+      expect(response.body.playback).toMatchObject({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" });
+      expect(response.body.queued).toEqual([]);
+      expect(response.body.queue).toHaveLength(2);
+      expect(response.body.queue.every((item: { requestedBy: string }) => item.requestedBy === "guest")).toBe(true);
+    } finally {
+      appState.services.spotify = previousSpotify;
+      appState.playback = previousPlayback;
+    }
+  });
+
   it("accepts only validated audio uploads", async () => {
     const previousUploadDir = config.uploadDir;
     const previousMusicDir = config.musicSourceDir;

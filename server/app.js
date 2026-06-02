@@ -590,7 +590,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       const requestedSource = next.smartShuffleSource || appState.playback.smartShuffleSource;
       const spotifyGeneratedRequested =
         requestedSource === "spotify" &&
-        (next.smartQueue === true || next.shuffle === true || (sourceChanged && (appState.playback.smartQueue || appState.playback.shuffle)));
+        (next.smartQueue === true || (sourceChanged && appState.playback.smartQueue && next.smartQueue !== false));
       if (spotifyGeneratedRequested && !spotifyBrowsingAvailable()) {
         res.status(503).json({ error: spotifyUnavailableMessage(), playback: appState.playback, queue: appState.queue });
         return;

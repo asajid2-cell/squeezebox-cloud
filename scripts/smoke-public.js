@@ -99,7 +99,7 @@ async function assertBatchQueueAndShuffle() {
 
   const playback = await requestJson("/player/playback", {
     method: "POST",
-    body: { shuffle: true, smartQueue: false }
+    body: { shuffle: true, smartQueue: false, smartShuffleSource: "spotify" }
   });
   const generatedRows = (playback.queue || []).filter((item) => item.requestedBy === "shuffle" || item.requestedBy === "smart shuffle");
   assert(playback.playback?.shuffle === true, "regular shuffle did not turn on");
