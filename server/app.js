@@ -83,7 +83,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
   });
 
   app.get("/api/state", async (_req, res) => {
-    await refreshLms(lms, { minAgeMs: appState.player.mode === "play" ? 650 : 1600 });
+    await refreshLms(lms, {
+      minAgeMs: appState.player.mode === "play" ? 650 : 1600,
+      waitForFresh: !refreshState.updatedAt || !appState.player.connected
+    });
     res.json(getPublicState());
   });
 
@@ -642,9 +645,9 @@ function withTimeout(promise, timeoutMs, fallback) {
   ]).finally(() => clearTimeout(timer));
 }
 
-async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force = false, skipTrackInfo = false } = {}) {
+async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force = false, skipTrackInfo = false, waitForFresh = true } = {}) {
   const now = Date.now();
-  if (!force && refreshState.promise) return refreshState.promise;
+  if (!force && refreshState.promise) return waitForFresh ? refreshState.promise : appState.player;
   if (!force && minAgeMs > 0 && now - refreshState.updatedAt < minAgeMs) return appState.player;
   refreshState.promise = (async () => {
     try {
@@ -684,7 +687,7 @@ async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force =
       refreshState.promise = null;
     }
   })();
-  return refreshState.promise;
+  return waitForFresh ? refreshState.promise : appState.player;
 }
 
 function refreshTrackInfoInBackground(track, key) {
