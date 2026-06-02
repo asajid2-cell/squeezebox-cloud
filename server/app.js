@@ -707,12 +707,18 @@ function prewarmSpotifyLibrary(lms, playerId) {
   if (spotifyLibraryPrewarmState.playerId === playerId && Date.now() - spotifyLibraryPrewarmState.at < 90000) return;
   spotifyLibraryPrewarmState.playerId = playerId;
   spotifyLibraryPrewarmState.at = Date.now();
-  Promise.all([
-    lms.spotifyLibrary(playerId, "playlists", 24, 0),
-    lms.spotifyLibrary(playerId, "albums", 24, 0),
-    lms.spotifyLibrary(playerId, "artists", 24, 0),
-    lms.spotifyLibrary(playerId, "tracks", 24, 0)
-  ]).catch(() => null);
+  (async () => {
+    await lms.spotifyLibrary(playerId, "playlists", 80, 0).catch(() => []);
+    await delay(250);
+    for (const type of ["albums", "artists", "tracks"]) {
+      await lms.spotifyLibrary(playerId, type, 80, 0).catch(() => []);
+      await delay(250);
+    }
+  })();
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function updateStablePlayerStatus(status) {

@@ -376,4 +376,27 @@ describe("LMS client parsing", () => {
     expect(results.map((result) => result.kind)).toEqual(expect.arrayContaining(["track", "artist", "album", "playlist"]));
     expect(results.find((result) => result.kind === "album")).toMatchObject({ title: "Take Care", artist: "Drake" });
   });
+
+  it("serves smaller Spotify library requests from a wider cached page", async () => {
+    let requests = 0;
+    const client = new LmsClient();
+    client.jsonRequest = async () => {
+      requests += 1;
+      return {
+        result: {
+          item_loop: Array.from({ length: 80 }, (_, index) => ({
+            text: `Playlist ${index + 1}\nby Spotify`,
+            presetParams: { favorites_url: `spotify:playlist:${index + 1}`, favorites_title: `Playlist ${index + 1}` }
+          }))
+        }
+      };
+    };
+
+    const wide = await client.spotifyLibrary("player-1", "playlists", 80, 0);
+    const narrow = await client.spotifyLibrary("player-1", "playlists", 8, 0);
+
+    expect(wide).toHaveLength(80);
+    expect(narrow).toHaveLength(8);
+    expect(requests).toBe(1);
+  });
 });

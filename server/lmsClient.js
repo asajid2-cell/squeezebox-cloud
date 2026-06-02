@@ -311,9 +311,13 @@ export class LmsClient {
 
   async spotifyLibrary(playerId, type = "playlists", limit = 50, offset = 0) {
     if (!playerId) return [];
-    const cacheKey = `spotifyLibrary:${playerId}:${type}:${limit}:${offset}`;
+    const count = Math.max(1, Math.min(100, Number(limit) || 50));
+    const start = Math.max(0, Number(offset) || 0);
+    const cacheKey = `spotifyLibrary:${playerId}:${type}:${count}:${start}`;
     const cached = this.getCached(cacheKey);
     if (cached) return cached;
+    const widerCached = this.getCached(`spotifyLibrary:${playerId}:${type}:80:${start}`) || this.getCached(`spotifyLibrary:${playerId}:${type}:100:${start}`);
+    if (widerCached && widerCached.length >= count) return widerCached.slice(0, count);
     const itemMap = {
       playlists: { id: "8", kind: "playlist" },
       albums: { id: "6", kind: "album" },
@@ -322,8 +326,6 @@ export class LmsClient {
       home: { id: "0", kind: "playlist" }
     };
     const selection = itemMap[type] || itemMap.playlists;
-    const count = Math.max(1, Math.min(100, Number(limit) || 50));
-    const start = Math.max(0, Number(offset) || 0);
     const response = await this.jsonRequest([playerId, ["spotty", "items", start, count, "menu:spotty", `item_id:${selection.id}`]]);
     const items = response?.result?.item_loop || response?.result?.loop_loop || [];
     const results = spotifyPlayableItems(items, selection.kind).map((item) => spotifyItemToTrack(item));
