@@ -215,6 +215,33 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.error).toBe("Playable local path, LMS track id, or Spotify URI is required");
   });
 
+  it("rejects unknown single-track playback actions", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const beforeMode = appState.player.mode;
+    const beforeTitle = appState.nowPlaying.title;
+    const played: Array<{ action: string; track: { title?: string } }> = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async playTrack(_playerId: string, track: { title?: string }, action: string) {
+          played.push({ action, track });
+          return "ok";
+        }
+      }
+    });
+
+    const response = await request(app)
+      .post("/api/player/track")
+      .send({ action: "bad-action", track: { title: "Should Not Play", artist: "Tester", uri: "spotify:track:bad-action", source: "Spotify", kind: "track" } })
+      .expect(400);
+
+    expect(response.body.error).toBe("Track playback supports add-queue, play-next, or play-now");
+    expect(played).toHaveLength(0);
+    expect(appState.queue).toHaveLength(0);
+    expect(appState.player.mode).toBe(beforeMode);
+    expect(appState.nowPlaying.title).toBe(beforeTitle);
+  });
+
   it("filters Spotify containers out of batch playback", async () => {
     appState.queue.splice(0, appState.queue.length);
     const response = await request(createApp({ lms: mockLms }))

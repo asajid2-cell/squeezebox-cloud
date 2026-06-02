@@ -190,6 +190,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
   app.post("/api/player/track", async (req, res) => {
     const action = String(req.body?.action || "add-queue");
     const track = req.body?.track || {};
+    if (!["add-queue", "play-next", "play-now"].includes(action)) {
+      res.status(400).json({ error: "Track playback supports add-queue, play-next, or play-now" });
+      return;
+    }
     if (!isPlayableTrackInput(track)) {
       res.status(400).json({ error: "Playable local path, LMS track id, or Spotify URI is required" });
       return;
