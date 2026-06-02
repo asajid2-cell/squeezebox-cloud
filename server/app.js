@@ -78,6 +78,12 @@ const libraryRescanState = { promise: null };
 const debugLog = [];
 const debugLogLimit = 500;
 const debugLogPath = process.env.CLOUD_SQUEEZE_LOG_PATH || "/tmp/cloud-squeeze-events.jsonl";
+const idleTrackInfo = {
+  artistBio: "Connect a Squeezebox player, start a track, then enable the LMS Music and Artist Information plugin for live biographies, album reviews, and lyrics.",
+  albumReview: "No album review is available until a real track is playing.",
+  lyrics: "Lyrics will appear here when the LMS plugin exposes them.",
+  art: null
+};
 
 export function createApp({ lms = new LmsClient() } = {}) {
   const app = express();
@@ -845,9 +851,10 @@ async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force =
         const key = trackKey(track);
         const shouldRefreshTrackInfo =
           !skipTrackInfo &&
-          track &&
+          isTrackInfoCandidate(track) &&
           (key !== refreshState.trackKey || Date.now() - refreshState.trackInfoAt > trackInfoRefreshMs);
         updateNowPlaying(track);
+        if (!isTrackInfoCandidate(track)) updateTrackInfo(idleTrackInfo);
         if (shouldRefreshTrackInfo) {
           refreshTrackInfoInBackground(track, key);
         }
@@ -1089,6 +1096,10 @@ async function playNextVisibleQueueItem(lms, playerId, { generatedOnly = false }
     return playQueuedItem(lms, playerId, refilled);
   }
   return playQueuedItem(lms, playerId, next);
+}
+
+function isTrackInfoCandidate(track) {
+  return Boolean(track?.title && track.id !== "idle" && track.title !== "No track playing");
 }
 
 export function nextQueueItemForPlayback(queue = appState.queue, { generatedOnly = false } = {}) {

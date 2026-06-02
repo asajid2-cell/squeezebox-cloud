@@ -119,12 +119,15 @@ async function assertBatchQueueAndShuffle() {
 }
 
 async function assertSmartShuffleSources({ spotifyReachable } = {}) {
+  const localSearch = await requestJson("/library/search?source=local&limit=1");
+  const manualTrack = (localSearch.results || []).find((item) => item.path);
+  assert(manualTrack, "local library did not expose a playable track for smart shuffle keeper");
   const manual = await requestJson("/player/tracks", {
     method: "POST",
     body: {
       action: "add-queue",
       tracks: [
-        { title: "Smoke Verify Manual Keeper", artist: "CloudSqueeze", uri: "spotify:track:smokekeeper", source: "Spotify", kind: "track" }
+        { ...manualTrack, title: "Smoke Verify Manual Keeper", artist: "CloudSqueeze", source: "Local library" }
       ]
     }
   });
