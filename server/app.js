@@ -174,7 +174,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
   app.post("/api/player/track", async (req, res) => {
     const action = String(req.body?.action || "add-queue");
     const track = req.body?.track || {};
-    if (!track.path && !track.uri && !track.lmsTrackId) {
+    if (!isPlayableTrackInput(track)) {
       res.status(400).json({ error: "Playable local path, LMS track id, or Spotify URI is required" });
       return;
     }
@@ -216,7 +216,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       return;
     }
 
-    const playable = tracks.filter((track) => track.path || track.uri || track.lmsTrackId);
+    const playable = tracks.filter(isPlayableTrackInput);
     if (playable.length === 0) {
       res.status(400).json({ error: "No playable tracks were provided" });
       return;
@@ -627,6 +627,15 @@ function optimisticTrack(track) {
     uri: track.uri,
     path: track.path
   };
+}
+
+function isPlayableTrackInput(track) {
+  if (!track || typeof track !== "object") return false;
+  if (track.path || track.lmsTrackId) return true;
+  if (!track.uri) return false;
+  const kind = String(track.kind || "").toLowerCase();
+  if (kind && kind !== "track") return false;
+  return String(track.uri).includes(":track:");
 }
 
 async function checkUrl(url) {

@@ -193,6 +193,33 @@ describe("Cloud Squeeze API", () => {
     expect(played).toContainEqual({ action: "play-next", track: expect.objectContaining({ title: "Manual Next" }) });
   });
 
+  it("rejects Spotify containers as direct playback targets", async () => {
+    const app = createApp({ lms: mockLms });
+    const response = await request(app)
+      .post("/api/player/track")
+      .send({ action: "play-now", track: { title: "Drake", uri: "spotify:artist:3TVXtAsR1Inumwj472S9r4", kind: "artist", source: "Spotify artist" } })
+      .expect(400);
+
+    expect(response.body.error).toBe("Playable local path, LMS track id, or Spotify URI is required");
+  });
+
+  it("filters Spotify containers out of batch playback", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const response = await request(createApp({ lms: mockLms }))
+      .post("/api/player/tracks")
+      .send({
+        action: "add-queue",
+        tracks: [
+          { title: "Artist Container", uri: "spotify:artist:container", kind: "artist", source: "Spotify artist" },
+          { title: "Playable Track", uri: "spotify:track:playable", kind: "track", source: "Spotify" }
+        ]
+      })
+      .expect(200);
+
+    expect(response.body.queued).toHaveLength(1);
+    expect(response.body.queued[0].title).toBe("Playable Track");
+  });
+
   it("keeps queued tracks visible until next consumes them", async () => {
     appState.queue.splice(0, appState.queue.length);
     const played: Array<{ action: string; track: { title?: string } }> = [];

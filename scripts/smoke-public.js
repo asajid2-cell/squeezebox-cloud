@@ -29,6 +29,7 @@ try {
   await assertQueueCrud();
   await assertSpotifyContainersOpenToTracks();
   await assertSpotifyLibrarySections();
+  await assertSpotifyContainersCannotPlayDirectly();
   await assertLocalStream(search.results);
   await assertBatchQueueAndShuffle();
   await assertSmartShuffleSources();
@@ -200,6 +201,17 @@ async function assertSpotifyLibrarySections() {
   const home = await requestJson("/spotify/library?type=home&limit=5");
   assert(Array.isArray(home.results), "Spotify home library did not return a results array");
   assert((home.results || []).every((item) => item.kind !== "track" || String(item.uri || "").includes(":track:")), "Spotify home library returned malformed track items");
+}
+
+async function assertSpotifyContainersCannotPlayDirectly() {
+  const search = await requestJson("/spotify/search?q=drake&limit=12");
+  const container = (search.results || []).find((item) => item.kind && item.kind !== "track" && item.uri);
+  assert(container, "Spotify search did not expose a container result to verify direct-play rejection");
+  const rejected = await requestJson("/player/track", {
+    method: "POST",
+    body: { action: "play-now", track: container }
+  }, { expectedStatus: 400 });
+  assert(rejected.error === "Playable local path, LMS track id, or Spotify URI is required", "Spotify container direct-play rejection returned an unexpected error");
 }
 
 async function assertLocalStream(searchResults) {

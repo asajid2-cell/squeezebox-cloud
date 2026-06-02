@@ -688,22 +688,7 @@ function SearchPanel({
           />
         )}
         {visibleResults.map((track) => (
-          <div className="result-row" key={track.id}>
-            <div className="cover-thumb">{track.art && <img src={track.art} alt="" />}</div>
-            <div>
-              <strong>{track.title}</strong>
-              <small>
-                {track.artist} - {track.album || track.source}
-                {track.folder ? ` / ${track.folder}` : ""}
-              </small>
-            </div>
-            <span>{track.kind && track.kind !== "track" ? track.kind : track.duration ? formatTime(track.duration) : "--:--"}</span>
-            <div className="track-actions">
-              <button className="ghost-add" onClick={() => playTrack("play-now", track).then(onRefresh)}>Play now</button>
-              {(!track.kind || track.kind === "track") && <button className="ghost-add" onClick={() => playTrack("play-next", track).then(onRefresh)}>Play next</button>}
-              <button className="ghost-add" onClick={() => playTrack("add-queue", track).then(onRefresh)}>Queue</button>
-            </div>
-          </div>
+          <SearchResultRow key={track.id} track={track} onRefresh={onRefresh} />
         ))}
       </div>
       {(sourceFilter === "local" || sourceFilter === "uploaded" || sourceFilter === "spotify") && results.length > 3 && (
@@ -712,6 +697,28 @@ function SearchPanel({
         </button>
       )}
     </section>
+  );
+}
+
+function SearchResultRow({ track, onRefresh }: { track: Track; onRefresh: () => void }) {
+  const playable = !track.kind || track.kind === "track" || Boolean(track.path || track.lmsTrackId);
+  return (
+    <div className="result-row">
+      <div className="cover-thumb">{track.art && <img src={track.art} alt="" />}</div>
+      <div>
+        <strong>{track.title}</strong>
+        <small>
+          {track.artist} - {track.album || track.source}
+          {track.folder ? ` / ${track.folder}` : ""}
+        </small>
+      </div>
+      <span>{track.kind && track.kind !== "track" ? track.kind : track.duration ? formatTime(track.duration) : "--:--"}</span>
+      <div className="track-actions">
+        {playable && <button className="ghost-add" onClick={() => playTrack("play-now", track).then(onRefresh)}>Play now</button>}
+        {playable && <button className="ghost-add" onClick={() => playTrack("play-next", track).then(onRefresh)}>Play next</button>}
+        {playable && <button className="ghost-add" onClick={() => playTrack("add-queue", track).then(onRefresh)}>Queue</button>}
+      </div>
+    </div>
   );
 }
 
