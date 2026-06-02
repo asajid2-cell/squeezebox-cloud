@@ -144,6 +144,7 @@ export function removeQueueItem(id) {
   const index = appState.queue.findIndex((item) => item.id === id);
   if (index < 0) return null;
   const [removed] = appState.queue.splice(index, 1);
+  removeRecentPick(removed);
   recalculateQueueEtas();
   return removed;
 }
@@ -228,6 +229,13 @@ function recordRecentPick(item, status) {
   if (item.requestedBy === "smart shuffle" || item.requestedBy === "shuffle") return;
   appState.recentPicks.unshift({ title: item.title, artist: item.artist, status });
   appState.recentPicks = appState.recentPicks.slice(0, 8);
+}
+
+function removeRecentPick(item) {
+  const index = appState.recentPicks.findIndex(
+    (pick) => pick.title === item.title && pick.artist === item.artist
+  );
+  if (index >= 0) appState.recentPicks.splice(index, 1);
 }
 
 function expandPath(value) {

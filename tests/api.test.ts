@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createApp } from "../server/app.js";
-import { addQueueItem, appState, config } from "../server/state.js";
+import { addQueueItem, appState, config, removeQueueItem } from "../server/state.js";
 
 const mockLms = {
   async status() {
@@ -129,6 +129,18 @@ describe("Cloud Squeeze API", () => {
     addQueueItem({ title: "Manual Pick", artist: "Tester", requestedBy: "guest", path: "/music/manual.mp3" });
 
     expect(appState.recentPicks).toEqual([{ title: "Manual Pick", artist: "Tester", status: "Queued" }]);
+  });
+
+  it("removes recent pick entries when queued rows are removed", () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.recentPicks.splice(0, appState.recentPicks.length);
+
+    const item = addQueueItem({ title: "Remove Recent", artist: "Tester", requestedBy: "guest", path: "/music/remove.mp3" });
+    expect(appState.recentPicks).toEqual([{ title: "Remove Recent", artist: "Tester", status: "Queued" }]);
+
+    removeQueueItem(item.id);
+
+    expect(appState.recentPicks).toEqual([]);
   });
 
   it("returns a compact error for malformed JSON bodies", async () => {
