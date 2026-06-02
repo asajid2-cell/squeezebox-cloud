@@ -110,30 +110,10 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.nowPlaying.canSeek).toBe(true);
   });
 
-  it("restarts the current song when previous is pressed after the beginning", async () => {
+  it("uses the LMS previous command when previous is pressed", async () => {
     const controls: Array<{ action: string; value?: number }> = [];
     const lms = {
       ...mockLms,
-      async control(_playerId: string, action: string, value?: number) {
-        controls.push({ action, value });
-        return "ok";
-      }
-    };
-
-    const response = await request(createApp({ lms })).post("/api/player/previous").expect(200);
-
-    expect(response.body.action).toBe("restart");
-    expect(controls).toContainEqual({ action: "seek", value: 0 });
-    expect(controls.some((item) => item.action === "previous")).toBe(false);
-  });
-
-  it("goes to the previous item when already near the beginning", async () => {
-    const controls: Array<{ action: string; value?: number }> = [];
-    const lms = {
-      ...mockLms,
-      async nowPlaying() {
-        return { ...(await mockLms.nowPlaying()), elapsed: 6 };
-      },
       async control(_playerId: string, action: string, value?: number) {
         controls.push({ action, value });
         return "ok";
@@ -144,6 +124,7 @@ describe("Cloud Squeeze API", () => {
 
     expect(response.body.action).toBe("previous");
     expect(controls).toContainEqual({ action: "previous", value: undefined });
+    expect(controls.some((item) => item.action === "seek")).toBe(false);
   });
 
   it("proxies LMS artwork", async () => {
@@ -206,6 +187,35 @@ describe("Cloud Squeeze API", () => {
     expect(played).toContainEqual({ action: "add-queue", track: expect.objectContaining({ title: "Visible Queue Song" }) });
     expect(played).toContainEqual({ action: "play-now", track: expect.objectContaining({ title: "Visible Queue Song" }) });
     expect(appState.queue.some((item) => item.title === "Visible Queue Song")).toBe(false);
+  });
+
+  it("queues playlist batches in order without issuing one LMS command per track", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const played: Array<{ action: string; track: { title?: string } }> = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async playTrack(_playerId: string, track: { title?: string }, action: string) {
+          played.push({ action, track });
+          return "ok";
+        }
+      }
+    });
+
+    const response = await request(app)
+      .post("/api/player/tracks")
+      .send({
+        action: "play-next",
+        tracks: [
+          { title: "Playlist One", artist: "Tester", uri: "spotify:track:one", source: "Spotify", kind: "track" },
+          { title: "Playlist Two", artist: "Tester", uri: "spotify:track:two", source: "Spotify", kind: "track" },
+          { title: "Playlist Three", artist: "Tester", uri: "spotify:track:three", source: "Spotify", kind: "track" }
+        ]
+      })
+      .expect(200);
+
+    expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Playlist One", "Playlist Two", "Playlist Three"]);
+    expect(played).toHaveLength(0);
   });
 
   it("does not advance playback while refreshing public state", async () => {
@@ -307,16 +317,17 @@ describe("Cloud Squeeze API", () => {
         .post("/api/player/playback")
         .send({ shuffle: true, repeat: "all", smartShuffleSource: "mixed" })
         .expect(200);
-      expect(response.body.playback).toMatchObject({ shuffle: true, repeat: "off", smartShuffleSource: "mixed" });
+      expect(response.body.playback).toMatchObject({ shuffle: true, repeat: "all", smartShuffleSource: "mixed" });
     } finally {
       config.musicSourceDir = previousMusicDir;
     }
   });
 
-  it("regular shuffle populates a visible generated queue", async () => {
+  it("regular shuffle randomizes only the visible queue", async () => {
     appState.queue.splice(0, appState.queue.length);
-    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "spotify", history: [] };
-    appState.nowPlaying = { ...appState.nowPlaying, id: "spotify://track:abc123", title: "Headlines", artist: "Drake", uri: "spotify://track:abc123" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "spotify", history: [] };
+    addQueueItem({ title: "Queued A", artist: "Tester", uri: "spotify:track:a", source: "Spotify", requestedBy: "guest" });
+    addQueueItem({ title: "Queued B", artist: "Tester", uri: "spotify:track:b", source: "Spotify", requestedBy: "guest" });
     const response = await request(createApp({
       lms: {
         ...mockLms,
@@ -333,10 +344,8 @@ describe("Cloud Squeeze API", () => {
       .expect(200);
 
     expect(response.body.playback).toMatchObject({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" });
-    expect(response.body.queue).toEqual(
-      expect.arrayContaining([expect.objectContaining({ requestedBy: "shuffle", uri: expect.stringMatching(/^spotify:track:/) })])
-    );
-    expect(response.body.queue).not.toEqual(expect.arrayContaining([expect.objectContaining({ uri: "spotify:track:abc123" })]));
+    expect(response.body.queue.map((item: { requestedBy: string }) => item.requestedBy)).toEqual(["guest", "guest"]);
+    expect(response.body.queued).toHaveLength(0);
     expect(response.body.playback.repeat).toBe("off");
   });
 
@@ -354,7 +363,6 @@ describe("Cloud Squeeze API", () => {
     expect(logs.body.events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ type: "playback.request" }),
-        expect.objectContaining({ type: "queue.activate-generated" }),
         expect.objectContaining({ type: "playback.result" })
       ])
     );
@@ -432,7 +440,7 @@ describe("Cloud Squeeze API", () => {
     expect(controls).not.toContainEqual({ action: "repeat", value: "off" });
   });
 
-  it("manual play now regenerates generated shuffle around the new seed", async () => {
+  it("manual play now stops generated shuffle instead of queueing unrelated tracks", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = { ...appState.playback, shuffle: true, smartQueue: false, smartShuffleSource: "spotify", repeat: "off", history: [] };
     addQueueItem({ title: "Generated A", artist: "Tester", requestedBy: "shuffle", uri: "spotify:track:generated-a" });
@@ -450,7 +458,8 @@ describe("Cloud Squeeze API", () => {
       .send({ action: "play-now", track: { title: "Manual Play", artist: "New Artist", uri: "spotify:track:manual-play", source: "Spotify" } })
       .expect(200);
 
-    expect(response.body.queue).toEqual(expect.arrayContaining([expect.objectContaining({ title: "New Seed Pick", requestedBy: "shuffle" })]));
+    expect(response.body.playback).toMatchObject({ shuffle: false, smartQueue: false });
+    expect(response.body.queue).not.toEqual(expect.arrayContaining([expect.objectContaining({ title: "New Seed Pick", requestedBy: "shuffle" })]));
     expect(response.body.queue).not.toEqual(expect.arrayContaining([expect.objectContaining({ title: "Generated A" })]));
   });
 

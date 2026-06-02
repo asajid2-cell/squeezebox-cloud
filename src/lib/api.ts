@@ -151,6 +151,15 @@ export async function playTrack(action: "play-now" | "play-next" | "add-queue", 
   return response.json();
 }
 
+export async function playTracks(action: "play-next" | "add-queue", tracks: Partial<Track>[]) {
+  const response = await fetch(`${apiBase}/player/tracks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, tracks })
+  });
+  return response.json();
+}
+
 export async function playerAction(action: "play" | "pause" | "next" | "previous") {
   await fetch(`${apiBase}/player/${action}`, { method: "POST" });
 }

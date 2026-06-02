@@ -16,7 +16,22 @@ export class LmsClient {
     return new Promise((resolve, reject) => {
       const socket = net.createConnection({ host: this.host, port: this.port });
       let data = "";
+      let settled = false;
+      let idleTimer = null;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        clearTimeout(idleTimer);
+        socket.end();
+        resolve(String(value || "").trim());
+      };
       const timer = setTimeout(() => {
+        if (data) {
+          finish(data);
+          return;
+        }
+        settled = true;
         socket.destroy();
         reject(new Error(`LMS CLI timeout for command: ${command}`));
       }, this.timeoutMs);
@@ -26,16 +41,24 @@ export class LmsClient {
       socket.on("data", (chunk) => {
         data += chunk;
         if (data.includes("\n")) {
-          clearTimeout(timer);
-          socket.end();
-          resolve(data.trim());
+          finish(data);
+          return;
         }
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => finish(data), 80);
       });
       socket.on("error", (error) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
+        clearTimeout(idleTimer);
         reject(error);
       });
-      socket.on("close", () => clearTimeout(timer));
+      socket.on("close", () => {
+        if (data) finish(data);
+        clearTimeout(timer);
+        clearTimeout(idleTimer);
+      });
     });
   }
 
@@ -175,8 +198,8 @@ export class LmsClient {
   }
 
   async resolvePlayableTarget(track) {
-    if (track.uri) return { type: "uri", value: track.uri };
     if (track.lmsTrackId) return { type: "track_id", value: track.lmsTrackId };
+    if (track.uri && (!track.path || isSpotifySource(track))) return { type: "uri", value: track.uri };
     if (!track.path) return null;
 
     const indexed = await this.resolveIndexedTrack(track);
@@ -496,6 +519,10 @@ function spotifyKind(uri, type, fallback = "track") {
   if (value.includes(":playlist:")) return "playlist";
   if (String(type || "").toLowerCase() === "playlist") return fallback === "track" ? "playlist" : fallback;
   return fallback;
+}
+
+function isSpotifySource(track) {
+  return String(track?.source || "").toLowerCase().includes("spotify");
 }
 
 function uniqueByUri(items) {

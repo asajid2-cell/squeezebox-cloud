@@ -41,6 +41,7 @@ import {
   moveQueueItem,
   playerAction,
   playTrack,
+  playTracks,
   removeQueueItem,
   rescanLibrary,
   saveAdminSettings,
@@ -855,9 +856,7 @@ function PlaylistTracks({
   onRefresh: () => void;
 }) {
   async function queueAll(action: "add-queue" | "play-next") {
-    for (const track of tracks.filter((item) => !item.kind || item.kind === "track").slice(0, 200)) {
-      await playTrack(action, track);
-    }
+    await playTracks(action, tracks.filter((item) => !item.kind || item.kind === "track").slice(0, 200));
     await onRefresh();
   }
 

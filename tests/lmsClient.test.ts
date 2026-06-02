@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import net from "node:net";
 import path from "node:path";
 import { LmsClient, isCommandPayload, lastToken } from "../server/lmsClient.js";
 import { config } from "../server/state.js";
@@ -7,6 +8,23 @@ describe("LMS client parsing", () => {
   it("extracts the final CLI token", () => {
     expect(lastToken("player count 1")).toBe("1");
     expect(lastToken("00%3A04 name Living%20Room")).toBe("Living%20Room");
+  });
+
+  it("resolves LMS CLI responses that do not end with a newline", async () => {
+    const server = net.createServer((socket) => {
+      socket.on("data", () => {
+        socket.write("player count 1");
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("No test server address");
+    try {
+      const client = new LmsClient({ host: "127.0.0.1", port: address.port, timeoutMs: 1000 });
+      await expect(client.command("player count ?")).resolves.toBe("player count 1");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it("detects command payloads that should never be shown as speaker metadata", () => {
@@ -233,6 +251,35 @@ describe("LMS client parsing", () => {
 
     expect(commands).toContain("player-1 playlist play spotify://track:abc123");
     expect(commands).toContain("player-1 play");
+  });
+
+  it("prefers a local file path over enrichment Spotify metadata for local tracks", async () => {
+    const commands: string[] = [];
+    const requests: unknown[] = [];
+    const client = new LmsClient();
+    client.command = async (command: string) => {
+      commands.push(command);
+      return "ok";
+    };
+    client.jsonRequest = async (params: unknown) => {
+      requests.push(params);
+      return { result: {} };
+    };
+
+    await client.playTrack(
+      "player-1",
+      {
+        title: "Bullet For My Valentine",
+        artist: "Juice WRLD",
+        source: "Local library",
+        path: "/music/collections/Bullet For My Valentine.mp3",
+        uri: "spotify:track:wrong"
+      },
+      "play-now"
+    );
+
+    expect(commands.some((command) => command.includes("spotify://track:wrong"))).toBe(false);
+    expect(commands.some((command) => command.includes("/api/stream/"))).toBe(true);
   });
 
   it("maps Spotty search results to playable Spotify tracks", async () => {
