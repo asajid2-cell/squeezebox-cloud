@@ -50,7 +50,7 @@ const adminToken = process.env.CLOUD_SQUEEZE_ADMIN_TOKEN || "cloud-squeeze-admin
 const serviceRefreshMs = 60000;
 const trackInfoRefreshMs = 30000;
 const trackInfoBudgetMs = Number(process.env.TRACK_INFO_BUDGET_MS || 1800);
-const refreshState = { promise: null, updatedAt: 0, servicesAt: 0, trackInfoAt: 0, trackKey: "" };
+const refreshState = { promise: null, updatedAt: 0, servicesAt: 0, trackInfoAt: 0, trackKey: "", trackInfoPromise: null, trackInfoPendingKey: "" };
 const prewarmState = { key: "", at: 0 };
 const spotifyLibraryPrewarmState = { playerId: "", at: 0 };
 const debugLog = [];
@@ -667,14 +667,9 @@ async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force =
           !skipTrackInfo &&
           track &&
           (key !== refreshState.trackKey || Date.now() - refreshState.trackInfoAt > trackInfoRefreshMs);
+        updateNowPlaying(track);
         if (shouldRefreshTrackInfo) {
-          const info = await withTimeout(enrichTrackInfo(track), trackInfoBudgetMs, null);
-          updateNowPlaying(track?.art || !info?.art ? track : { ...track, art: info.art });
-          if (info) updateTrackInfo(info);
-          refreshState.trackInfoAt = Date.now();
-          refreshState.trackKey = key;
-        } else {
-          updateNowPlaying(track);
+          refreshTrackInfoInBackground(track, key);
         }
         prewarmShuffleCandidates(lms, status.id, track);
         prewarmSpotifyLibrary(lms, status.id);
@@ -690,6 +685,25 @@ async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force =
     }
   })();
   return refreshState.promise;
+}
+
+function refreshTrackInfoInBackground(track, key) {
+  if (!key || refreshState.trackInfoPendingKey === key) return;
+  refreshState.trackInfoAt = Date.now();
+  refreshState.trackKey = key;
+  refreshState.trackInfoPendingKey = key;
+  refreshState.trackInfoPromise = withTimeout(enrichTrackInfo(track), trackInfoBudgetMs, null)
+    .then((info) => {
+      if (!info) return;
+      if (info.art && trackKey(appState.nowPlaying) === key && !appState.nowPlaying.art) {
+        updateNowPlaying({ art: info.art });
+      }
+      updateTrackInfo(info);
+    })
+    .finally(() => {
+      if (refreshState.trackInfoPendingKey === key) refreshState.trackInfoPendingKey = "";
+      refreshState.trackInfoPromise = null;
+    });
 }
 
 function prewarmShuffleCandidates(lms, playerId, track) {
