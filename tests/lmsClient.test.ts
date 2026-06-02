@@ -399,4 +399,47 @@ describe("LMS client parsing", () => {
     expect(narrow).toHaveLength(8);
     expect(requests).toBe(1);
   });
+
+  it("deduplicates concurrent Spotify library browse requests", async () => {
+    let requests = 0;
+    let release: (value: unknown) => void = () => {};
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const client = new LmsClient();
+    client.jsonRequest = async () => {
+      requests += 1;
+      await gate;
+      return {
+        result: {
+          item_loop: [{ text: "Playlist One\nby Spotify", presetParams: { favorites_url: "spotify:playlist:one", favorites_title: "Playlist One" } }]
+        }
+      };
+    };
+
+    const first = client.spotifyLibrary("player-1", "playlists", 8, 0);
+    const second = client.spotifyLibrary("player-1", "playlists", 8, 0);
+    release(null);
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(firstResult).toHaveLength(1);
+    expect(secondResult).toHaveLength(1);
+    expect(requests).toBe(1);
+  });
+
+  it("serves stale Spotify library cache when a browse refresh is slow", async () => {
+    const client = new LmsClient();
+    const cacheKey = "spotifyLibrary:player-1:albums:8:0";
+    client.cache.set(cacheKey, {
+      value: [{ id: "spotify:album:stale", title: "Stale Album", artist: "Spotify", uri: "spotify:album:stale", kind: "album" }],
+      expiresAt: Date.now() - 1000
+    });
+    client.jsonRequest = async () => new Promise(() => {});
+
+    const started = Date.now();
+    const results = await client.spotifyLibrary("player-1", "albums", 8, 0);
+
+    expect(Date.now() - started).toBeLessThan(2500);
+    expect(results).toEqual([expect.objectContaining({ title: "Stale Album" })]);
+  });
 });

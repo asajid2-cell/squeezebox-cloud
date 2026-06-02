@@ -9,7 +9,9 @@ try {
     "/speaker/status",
     "/spotify/status",
     "/library/search?limit=20",
-    "/spotify/library?type=playlists&limit=8"
+    "/spotify/library?type=playlists&limit=8",
+    "/spotify/library?type=albums&limit=5",
+    "/spotify/library?type=home&limit=5"
   ]);
 
   const health = await requestJson("/health");
@@ -26,6 +28,7 @@ try {
   await assertMalformedJson();
   await assertQueueCrud();
   await assertSpotifyContainersOpenToTracks();
+  await assertSpotifyLibrarySections();
   await assertLocalStream(search.results);
   await assertBatchQueueAndShuffle();
   await assertSmartShuffleSources();
@@ -187,6 +190,16 @@ async function assertSpotifyContainersOpenToTracks() {
   const tracks = (children.results || []).filter((item) => !item.kind || item.kind === "track");
   assert(tracks.length > 0, "Spotify playlist children did not expose playable tracks");
   assert(tracks.every((item) => String(item.uri || "").includes(":track:")), "Spotify playlist children included non-track items");
+}
+
+async function assertSpotifyLibrarySections() {
+  const albums = await requestJson("/spotify/library?type=albums&limit=5");
+  assert(Array.isArray(albums.results), "Spotify albums library did not return a results array");
+  assert((albums.results || []).every((item) => item.kind === "album" && String(item.uri || "").includes(":album:")), "Spotify albums library returned non-album items");
+
+  const home = await requestJson("/spotify/library?type=home&limit=5");
+  assert(Array.isArray(home.results), "Spotify home library did not return a results array");
+  assert((home.results || []).every((item) => item.kind !== "track" || String(item.uri || "").includes(":track:")), "Spotify home library returned malformed track items");
 }
 
 async function assertLocalStream(searchResults) {

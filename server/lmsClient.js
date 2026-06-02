@@ -6,6 +6,7 @@ import { fileToTrack } from "./library.js";
 
 const spotifySearchCacheMs = 2 * 60 * 1000;
 const spotifyBrowseCacheMs = 5 * 60 * 1000;
+const spotifyBrowseDeadlineMs = Number(process.env.SPOTIFY_BROWSE_DEADLINE_MS || 1800);
 
 export class LmsClient {
   constructor(options = {}) {
@@ -13,6 +14,7 @@ export class LmsClient {
     this.port = options.port || config.lmsCliPort;
     this.timeoutMs = options.timeoutMs || 3500;
     this.cache = new Map();
+    this.inflight = new Map();
   }
 
   command(command) {
@@ -321,6 +323,7 @@ export class LmsClient {
     if (cached) return cached;
     const widerCached = this.getCached(`spotifyLibrary:${playerId}:${type}:80:${start}`) || this.getCached(`spotifyLibrary:${playerId}:${type}:100:${start}`);
     if (widerCached && widerCached.length >= count) return widerCached.slice(0, count);
+    const stale = this.getCached(cacheKey, { allowExpired: true }) || this.getCached(`spotifyLibrary:${playerId}:${type}:80:${start}`, { allowExpired: true })?.slice(0, count) || [];
     const itemMap = {
       playlists: { id: "8", kind: "playlist" },
       albums: { id: "6", kind: "album" },
@@ -329,33 +332,43 @@ export class LmsClient {
       home: { id: "0", kind: "playlist" }
     };
     const selection = itemMap[type] || itemMap.playlists;
-    const response = await this.jsonRequest([playerId, ["spotty", "items", start, count, "menu:spotty", `item_id:${selection.id}`]]);
-    const items = response?.result?.item_loop || response?.result?.loop_loop || [];
-    const results = spotifyPlayableItems(items, selection.kind).map((item) => spotifyItemToTrack(item));
-    this.setCached(cacheKey, results, spotifyBrowseCacheMs);
-    return results;
+    const request = this.once(cacheKey, async () => {
+      const response = await this.jsonRequest([playerId, ["spotty", "items", start, count, "menu:spotty", `item_id:${selection.id}`]]);
+      const items = response?.result?.item_loop || response?.result?.loop_loop || [];
+      const results = spotifyPlayableItems(items, selection.kind).map((item) => spotifyItemToTrack(item));
+      this.setCached(cacheKey, results, spotifyBrowseCacheMs);
+      return results;
+    });
+    return (await withDeadline(request, spotifyBrowseDeadlineMs, stale)) || [];
   }
 
   async spotifyChildren(playerId, { browseId = "", uri = "", kind = "playlist" } = {}, limit = 100, offset = 0) {
     if (!playerId) return [];
-    const cacheKey = `spotifyChildren:${playerId}:${browseId}:${uri}:${kind}:${limit}:${offset}`;
-    const cached = this.getCached(cacheKey);
-    if (cached) return cached;
     const count = Math.max(1, Math.min(300, Number(limit) || 100));
     const start = Math.max(0, Number(offset) || 0);
+    const cacheKey = `spotifyChildren:${playerId}:${browseId}:${uri}:${kind}:${count}:${start}`;
+    const cached = this.getCached(cacheKey);
+    if (cached) return cached;
+    const stale = this.getCached(cacheKey, { allowExpired: true }) || [];
     const candidates = [browseId, uri].filter(Boolean);
     if (uri && !candidates.includes(uri.replace(/^spotify:/, "spotify://"))) candidates.push(uri.replace(/^spotify:/, "spotify://"));
-    for (const id of candidates) {
-      const response = await this.jsonRequest([playerId, ["spotty", "items", start, count, "menu:spotty", `item_id:${id}`]]).catch(() => null);
-      const items = response?.result?.item_loop || response?.result?.loop_loop || [];
-      const tracks = spotifyPlayableItems(items, "track").map((item) => spotifyItemToTrack(item));
-      if (tracks.length > 0) {
-        this.setCached(cacheKey, tracks, spotifyBrowseCacheMs);
-        return tracks;
+    const request = this.once(cacheKey, async () => {
+      for (const id of candidates) {
+        const response = await this.jsonRequest([playerId, ["spotty", "items", start, count, "menu:spotty", `item_id:${id}`]]).catch(() => null);
+        const items = response?.result?.item_loop || response?.result?.loop_loop || [];
+        const tracks = spotifyPlayableItems(items, "track").map((item) => spotifyItemToTrack(item));
+        if (tracks.length > 0) {
+          this.setCached(cacheKey, tracks, spotifyBrowseCacheMs);
+          return tracks;
+        }
       }
-    }
+      this.setCached(cacheKey, [], 30000);
+      return [];
+    });
+    const results = await withDeadline(request, spotifyBrowseDeadlineMs, stale);
+    if (results?.length) return results;
     if (uri && kind === "track") return [{ id: uri, uri, title: "Spotify track", artist: "Spotify", source: "Spotify", kind: "track" }];
-    return [];
+    return results || [];
   }
 
   async spotifyStatus() {
@@ -429,10 +442,10 @@ export class LmsClient {
     return response.json();
   }
 
-  getCached(key) {
+  getCached(key, { allowExpired = false } = {}) {
     const item = this.cache.get(key);
-    if (!item || item.expiresAt < Date.now()) {
-      this.cache.delete(key);
+    if (!item) return null;
+    if (!allowExpired && item.expiresAt < Date.now()) {
       return null;
     }
     return structuredClone(item.value);
@@ -442,6 +455,23 @@ export class LmsClient {
     if (this.cache.size > 200) this.cache.clear();
     this.cache.set(key, { value: structuredClone(value), expiresAt: Date.now() + ttlMs });
   }
+
+  once(key, work) {
+    if (this.inflight.has(key)) return this.inflight.get(key);
+    const promise = work().finally(() => this.inflight.delete(key));
+    this.inflight.set(key, promise);
+    return promise;
+  }
+}
+
+function withDeadline(promise, ms, fallback) {
+  let timer;
+  return Promise.race([
+    promise.catch(() => fallback),
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(fallback), ms);
+    })
+  ]).finally(() => clearTimeout(timer));
 }
 
 function fileUrl(trackPath) {
