@@ -430,6 +430,22 @@ describe("Cloud Squeeze API", () => {
     expect(appState.queue.filter((item) => item.requestedBy === "guest")).toHaveLength(3);
   });
 
+  it("does not allow public queue edits to change request ownership", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const app = createApp({ lms: mockLms });
+    const created = await request(app)
+      .post("/api/queue")
+      .send({ title: "Ownership Lock", artist: "Tester", requestedBy: "admin" })
+      .expect(201);
+
+    expect(created.body.requestedBy).toBe("guest");
+    await request(app)
+      .patch(`/api/queue/${created.body.id}`)
+      .send({ requestedBy: "admin" })
+      .expect(400);
+    expect(appState.queue.find((item) => item.id === created.body.id)?.requestedBy).toBe("guest");
+  });
+
   it("keeps queued tracks visible until next consumes them", async () => {
     appState.queue.splice(0, appState.queue.length);
     const played: Array<{ action: string; track: { title?: string } }> = [];

@@ -133,7 +133,7 @@ export function updateQueueItem(id, input) {
   const previous = appState.queue[index];
   appState.queue[index] = {
     ...previous,
-    ...["title", "artist", "album", "requestedBy"].reduce((updates, key) => {
+    ...["title", "artist", "album"].reduce((updates, key) => {
       if (typeof input[key] === "string" && input[key].trim()) updates[key] = input[key].trim();
       return updates;
     }, {})

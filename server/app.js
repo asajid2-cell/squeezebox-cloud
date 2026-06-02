@@ -43,9 +43,8 @@ const queueSchema = z.object({
 const queueUpdateSchema = z.object({
   title: requiredText.optional(),
   artist: requiredText.optional(),
-  album: optionalText,
-  requestedBy: requiredText.optional()
-});
+  album: optionalText
+}).strict();
 
 const volumeSchema = z.object({
   volume: z.coerce.number().finite()
