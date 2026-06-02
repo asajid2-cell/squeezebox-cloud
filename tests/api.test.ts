@@ -577,6 +577,9 @@ describe("Cloud Squeeze API", () => {
       const stateAfterUploadedSearch = await request(app).get("/api/state").expect(200);
       expect(stateAfterUploadedSearch.body.services.localLibrary.root).toBe(root);
       expect(stateAfterUploadedSearch.body.services.localLibrary.trackCount).toBe(1);
+      await request(app).get("/api/library/search?source=bad").expect(400);
+      await request(app).get("/api/library/collections?source=bad").expect(400);
+      await request(app).get("/api/library/collection?source=bad").expect(400);
 
       const encodedPath = Buffer.from(uploaded.body.track.path).toString("base64url");
       const stream = await request(app).get(`/api/stream/${encodedPath}`).expect(200);
@@ -585,6 +588,9 @@ describe("Cloud Squeeze API", () => {
 
       const malformedRange = await request(app).get(`/api/stream/${encodedPath}`).set("range", "bad-range").expect(416);
       expect(malformedRange.headers["content-range"]).toContain("bytes */");
+      const suffixRange = await request(app).get(`/api/stream/${encodedPath}`).set("range", "bytes=-4").expect(206);
+      expect(suffixRange.headers["content-range"]).toMatch(/bytes \d+-\d+\/\d+/);
+      expect(suffixRange.body.length).toBe(4);
     } finally {
       config.uploadDir = previousUploadDir;
       config.musicSourceDir = previousMusicDir;

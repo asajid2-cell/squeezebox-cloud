@@ -279,7 +279,12 @@ export function createApp({ lms = new LmsClient() } = {}) {
   });
 
   app.get("/api/library/search", async (req, res) => {
-    res.json({ results: await searchLibrary(String(req.query.q || ""), undefined, req.query.limit || 100, String(req.query.source || "all")) });
+    const source = parseLibrarySource(req.query.source);
+    if (!source) {
+      res.status(400).json({ error: "Library source must be all, local, or uploaded" });
+      return;
+    }
+    res.json({ results: await searchLibrary(String(req.query.q || ""), undefined, req.query.limit || 100, source) });
   });
 
   app.get("/api/spotify/search", async (req, res) => {
@@ -335,15 +340,25 @@ export function createApp({ lms = new LmsClient() } = {}) {
   });
 
   app.get("/api/library/collections", async (_req, res) => {
-    res.json({ collections: await getCollections(undefined, String(_req.query.source || "all")) });
+    const source = parseLibrarySource(_req.query.source);
+    if (!source) {
+      res.status(400).json({ error: "Library source must be all, local, or uploaded" });
+      return;
+    }
+    res.json({ collections: await getCollections(undefined, source) });
   });
 
   app.get("/api/library/collection", async (req, res) => {
+    const source = parseLibrarySource(req.query.source);
+    if (!source) {
+      res.status(400).json({ error: "Library source must be all, local, or uploaded" });
+      return;
+    }
     res.json({
       results: await getCollectionTracks({
         collection: String(req.query.collection || ""),
         folder: String(req.query.folder || ""),
-        source: String(req.query.source || "all"),
+        source,
         limit: req.query.limit || 1000
       })
     });
@@ -381,17 +396,12 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.setHeader("Content-Type", contentType);
       res.setHeader("Cache-Control", "private, max-age=0, no-store");
       if (range) {
-        const match = String(range).match(/^bytes=(\d*)-(\d*)$/);
-        if (!match) {
+        const parsedRange = parseByteRange(range, stat.size);
+        if (!parsedRange) {
           res.status(416).setHeader("Content-Range", `bytes */${stat.size}`).end();
           return;
         }
-        const start = match?.[1] ? Number(match[1]) : 0;
-        const end = match?.[2] ? Math.min(Number(match[2]), stat.size - 1) : stat.size - 1;
-        if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= stat.size) {
-          res.status(416).setHeader("Content-Range", `bytes */${stat.size}`).end();
-          return;
-        }
+        const { start, end } = parsedRange;
         res.status(206);
         res.setHeader("Content-Range", `bytes ${start}-${end}/${stat.size}`);
         res.setHeader("Content-Length", end - start + 1);
@@ -766,6 +776,30 @@ async function checkUrl(url) {
   } catch (error) {
     return { reachable: false, status: 0, url, detail: error.message };
   }
+}
+
+function parseLibrarySource(value) {
+  const source = String(value || "all").toLowerCase();
+  return ["all", "local", "uploaded"].includes(source) ? source : null;
+}
+
+function parseByteRange(value, size) {
+  const match = String(value || "").match(/^bytes=(\d*)-(\d*)$/);
+  if (!match || !Number.isFinite(size) || size <= 0) return null;
+  const [, rawStart, rawEnd] = match;
+  if (!rawStart && !rawEnd) return null;
+
+  if (!rawStart) {
+    const suffixLength = Number(rawEnd);
+    if (!Number.isFinite(suffixLength) || suffixLength <= 0) return null;
+    const length = Math.min(suffixLength, size);
+    return { start: size - length, end: size - 1 };
+  }
+
+  const start = Number(rawStart);
+  const end = rawEnd ? Math.min(Number(rawEnd), size - 1) : size - 1;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= size) return null;
+  return { start, end };
 }
 
 function requireAdmin(req, res, next) {
