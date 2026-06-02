@@ -561,6 +561,9 @@ describe("Cloud Squeeze API", () => {
       async spotifyChildren() {
         calls.push("children");
         return [];
+      },
+      async spotifyStatus() {
+        return { configured: true, reachable: false, detail: "Reauthorize Spotty in LMS" };
       }
     };
     appState.services.spotify = { configured: true, reachable: false, detail: "Reauthorize Spotty in LMS" };

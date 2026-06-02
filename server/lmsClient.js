@@ -458,6 +458,17 @@ export class LmsClient {
 
     const playerIdResponse = await this.command("player id 0 ?");
     const playerId = decodeURIComponent(lastToken(playerIdResponse));
+    const browseRoots = ["playlists", "home"];
+    for (const type of browseRoots) {
+      const results = await this.spotifyLibrary(playerId, type, 1, 0).catch(() => []);
+      if (results.length > 0) {
+        return {
+          reachable: true,
+          detail: "Spotty is installed and Spotify browsing is responding"
+        };
+      }
+    }
+
     const responses = await withDeadline(
       Promise.all([
         this.jsonRequest([playerId, ["spotty", "items", 0, 6, "menu:spotty", "item_id:0"]]).catch(() => null),

@@ -273,7 +273,7 @@ describe("LMS client parsing", () => {
     expect(first).toEqual(second);
     expect(first.reachable).toBe(false);
     expect(commands).toBe(2);
-    expect(jsonRequests).toBe(2);
+    expect(jsonRequests).toBe(4);
     config.lmsConfigDir = previousConfigDir;
   });
 
