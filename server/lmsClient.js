@@ -457,12 +457,15 @@ export class LmsClient {
 
     const playerIdResponse = await this.command("player id 0 ?");
     const playerId = decodeURIComponent(lastToken(playerIdResponse));
-    const response = await withDeadline(
-      this.jsonRequest([playerId, ["spotty", "items", 0, 6, "menu:spotty", "item_id:1.0", "search:drake", "cachesearch:1"]]),
-      Math.min(this.timeoutMs + 300, 1800),
-      null
+    const responses = await withDeadline(
+      Promise.all([
+        this.jsonRequest([playerId, ["spotty", "items", 0, 6, "menu:spotty", "item_id:0"]]).catch(() => null),
+        this.jsonRequest([playerId, ["spotty", "items", 0, 6, "menu:spotty", "item_id:8"]]).catch(() => null)
+      ]),
+      Math.min(this.timeoutMs + 700, 2200),
+      []
     );
-    const items = response?.result?.item_loop || response?.result?.loop_loop || [];
+    const items = (responses || []).flatMap((response) => response?.result?.item_loop || response?.result?.loop_loop || []);
     if (spotifyPlayableItems(items, "track").length > 0 || items.some(hasSpottyNavigationAction)) {
       return {
         reachable: true,

@@ -216,6 +216,36 @@ describe("LMS client parsing", () => {
     config.lmsConfigDir = previousConfigDir;
   });
 
+  it("reports configured Spotty as reachable when browse roots return playable containers", async () => {
+    const previousConfigDir = config.lmsConfigDir;
+    config.lmsConfigDir = path.resolve("tests", "fixtures", "lms-config");
+    const client = new LmsClient();
+    client.command = async (command: string) => {
+      if (command === "player count ?") return "player count 1";
+      if (command === "player id 0 ?") return "player id 0 player-1";
+      return "ok";
+    };
+    client.jsonRequest = async () => ({
+      result: {
+        item_loop: [
+          {
+            text: "Starfire",
+            type: "playlist",
+            params: { item_id: "8.1" },
+            presetParams: { favorites_url: "spotify:playlist:starfire", favorites_type: "playlist", favorites_title: "Starfire" }
+          }
+        ]
+      }
+    });
+
+    const status = await client.spotifyStatus();
+
+    expect(status.configured).toBe(true);
+    expect(status.reachable).toBe(true);
+    expect(status.detail).toContain("Spotify browsing is responding");
+    config.lmsConfigDir = previousConfigDir;
+  });
+
   it("caches Spotify status probes briefly", async () => {
     const previousConfigDir = config.lmsConfigDir;
     config.lmsConfigDir = path.resolve("tests", "fixtures", "lms-config");
@@ -243,7 +273,7 @@ describe("LMS client parsing", () => {
     expect(first).toEqual(second);
     expect(first.reachable).toBe(false);
     expect(commands).toBe(2);
-    expect(jsonRequests).toBe(1);
+    expect(jsonRequests).toBe(2);
     config.lmsConfigDir = previousConfigDir;
   });
 
