@@ -373,6 +373,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.setHeader("Cache-Control", "private, max-age=0, no-store");
       if (range) {
         const match = String(range).match(/^bytes=(\d*)-(\d*)$/);
+        if (!match) {
+          res.status(416).setHeader("Content-Range", `bytes */${stat.size}`).end();
+          return;
+        }
         const start = match?.[1] ? Number(match[1]) : 0;
         const end = match?.[2] ? Math.min(Number(match[2]), stat.size - 1) : stat.size - 1;
         if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= stat.size) {

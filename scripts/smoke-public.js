@@ -35,6 +35,7 @@ try {
   await assertSpotifyLibrarySections();
   await assertSpotifyContainersCannotPlayDirectly();
   await assertLocalStream(search.results);
+  await assertMalformedStreamRange(search.results);
   await assertBatchQueueAndShuffle();
   await assertSmartShuffleSources();
 
@@ -251,6 +252,21 @@ async function assertLocalStream(searchResults) {
   await response.arrayBuffer();
   assert(response.status === 206, `local stream range returned HTTP ${response.status}, expected 206`);
   assert(response.headers.get("content-range")?.startsWith("bytes 0-"), "local stream range missing content-range header");
+}
+
+async function assertMalformedStreamRange(searchResults) {
+  const local = (searchResults || []).find((item) => item.path);
+  assert(local, "public library search did not return a local playable path for malformed range test");
+  const encoded = Buffer.from(local.path, "utf8").toString("base64url");
+  const started = performance.now();
+  const response = await fetch(`${baseUrl}/stream/${encoded}/${encodeURIComponent(local.title || "track")}`, {
+    headers: { range: "bad-range" },
+    signal: AbortSignal.timeout(15000)
+  });
+  await response.arrayBuffer();
+  const elapsed = Math.round(performance.now() - started);
+  assert(response.status === 416, `malformed stream range returned HTTP ${response.status}, expected 416`);
+  assert(elapsed < 1000, `malformed stream range was too slow: ${elapsed}ms`);
 }
 
 async function assertMalformedJson() {

@@ -400,32 +400,38 @@ describe("Cloud Squeeze API", () => {
     config.musicSourceDir = root;
     config.uploadDir = path.join(root, "uploads");
     const app = createApp({ lms: mockLms });
+    try {
+      await request(app)
+        .post("/api/library/upload?filename=bad.exe")
+        .set("content-type", "application/octet-stream")
+        .send(Buffer.from("MZ fake executable"))
+        .expect(400);
 
-    await request(app)
-      .post("/api/library/upload?filename=bad.exe")
-      .set("content-type", "application/octet-stream")
-      .send(Buffer.from("MZ fake executable"))
-      .expect(400);
+      const uploaded = await request(app)
+        .post("/api/library/upload?filename=test.mp3")
+        .set("content-type", "application/octet-stream")
+        .send(Buffer.concat([Buffer.from("ID3"), Buffer.alloc(32)]))
+        .expect(201);
 
-    const uploaded = await request(app)
-      .post("/api/library/upload?filename=test.mp3")
-      .set("content-type", "application/octet-stream")
-      .send(Buffer.concat([Buffer.from("ID3"), Buffer.alloc(32)]))
-      .expect(201);
+      expect(uploaded.body.track.source).toBe("Uploaded");
+      expect(uploaded.body.track.uploaded).toBe(true);
+      expect(uploaded.body.lmsRescan).toBe(true);
+      const uploadedSearch = await request(app).get("/api/library/search?source=uploaded").expect(200);
+      expect(uploadedSearch.body.results).toHaveLength(1);
+      expect(uploadedSearch.body.results[0].source).toBe("Uploaded");
 
-    expect(uploaded.body.track.source).toBe("Uploaded");
-    expect(uploaded.body.track.uploaded).toBe(true);
-    expect(uploaded.body.lmsRescan).toBe(true);
-    const uploadedSearch = await request(app).get("/api/library/search?source=uploaded").expect(200);
-    expect(uploadedSearch.body.results).toHaveLength(1);
-    expect(uploadedSearch.body.results[0].source).toBe("Uploaded");
+      const encodedPath = Buffer.from(uploaded.body.track.path).toString("base64url");
+      const stream = await request(app).get(`/api/stream/${encodedPath}`).expect(200);
+      expect(stream.headers["content-type"]).toContain("audio/mpeg");
+      expect(stream.body.length).toBeGreaterThan(0);
 
-    const encodedPath = Buffer.from(uploaded.body.track.path).toString("base64url");
-    const stream = await request(app).get(`/api/stream/${encodedPath}`).expect(200);
-    expect(stream.headers["content-type"]).toContain("audio/mpeg");
-    expect(stream.body.length).toBeGreaterThan(0);
-    config.uploadDir = previousUploadDir;
-    config.musicSourceDir = previousMusicDir;
+      const malformedRange = await request(app).get(`/api/stream/${encodedPath}`).set("range", "bad-range").expect(416);
+      expect(malformedRange.headers["content-range"]).toContain("bytes */");
+    } finally {
+      config.uploadDir = previousUploadDir;
+      config.musicSourceDir = previousMusicDir;
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("updates shuffle and repeat playback settings", async () => {
