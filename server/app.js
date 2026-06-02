@@ -593,6 +593,13 @@ export function createApp({ lms = new LmsClient() } = {}) {
       if (body.smartShuffleSource) {
         next.smartShuffleSource = body.smartShuffleSource;
       }
+      const finalShuffle = typeof next.shuffle === "boolean" ? next.shuffle : appState.playback.shuffle;
+      const finalSmartQueue = typeof next.smartQueue === "boolean" ? next.smartQueue : appState.playback.smartQueue;
+      if ((shuffleChanged || smartQueueChanged) && !finalShuffle && !finalSmartQueue) {
+        next.lastShuffleRefillAt = 0;
+        next.lastShuffleSeed = "";
+        next.lastSmartQueueBase = "";
+      }
       const requestedSource = next.smartShuffleSource || appState.playback.smartShuffleSource;
       const spotifyGeneratedRequested =
         requestedSource === "spotify" &&

@@ -922,7 +922,16 @@ describe("Cloud Squeeze API", () => {
 
   it("turns off smart queue without removing user requested songs", async () => {
     appState.queue.splice(0, appState.queue.length);
-    appState.playback = { ...appState.playback, shuffle: false, smartQueue: true, smartShuffleSource: "mixed", history: [] };
+    appState.playback = {
+      ...appState.playback,
+      shuffle: false,
+      smartQueue: true,
+      smartShuffleSource: "mixed",
+      lastShuffleRefillAt: 12345,
+      lastShuffleSeed: "stale seed",
+      lastSmartQueueBase: "stale base",
+      history: []
+    };
     addQueueItem({ title: "Manual Next", artist: "Tester", requestedBy: "guest", path: "/music/manual.mp3" });
     addQueueItem({ title: "Generated Next", artist: "Tester", requestedBy: "smart shuffle", uri: "spotify:track:generated" });
 
@@ -932,6 +941,9 @@ describe("Cloud Squeeze API", () => {
       .expect(200);
 
     expect(response.body.playback.smartQueue).toBe(false);
+    expect(response.body.playback.lastShuffleRefillAt).toBe(0);
+    expect(response.body.playback.lastShuffleSeed).toBe("");
+    expect(response.body.playback.lastSmartQueueBase).toBe("");
     expect(response.body.queue).toEqual([expect.objectContaining({ title: "Manual Next", requestedBy: "guest" })]);
   });
 
