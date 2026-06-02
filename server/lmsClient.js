@@ -7,6 +7,7 @@ import { fileToTrack } from "./library.js";
 const spotifySearchCacheMs = 2 * 60 * 1000;
 const spotifyBrowseCacheMs = 5 * 60 * 1000;
 const spotifyBrowseDeadlineMs = Number(process.env.SPOTIFY_BROWSE_DEADLINE_MS || 1800);
+const spotifyColdBrowseDeadlineMs = Number(process.env.SPOTIFY_COLD_BROWSE_DEADLINE_MS || 3200);
 
 export class LmsClient {
   constructor(options = {}) {
@@ -339,7 +340,8 @@ export class LmsClient {
       this.setCached(cacheKey, results, spotifyBrowseCacheMs);
       return results;
     });
-    return (await withDeadline(request, spotifyBrowseDeadlineMs, stale)) || [];
+    const deadline = stale.length > 0 ? spotifyBrowseDeadlineMs : spotifyColdBrowseDeadlineMs;
+    return (await withDeadline(request, deadline, stale)) || [];
   }
 
   async spotifyChildren(playerId, { browseId = "", uri = "", kind = "playlist" } = {}, limit = 100, offset = 0) {
@@ -365,7 +367,8 @@ export class LmsClient {
       this.setCached(cacheKey, [], 30000);
       return [];
     });
-    const results = await withDeadline(request, spotifyBrowseDeadlineMs, stale);
+    const deadline = stale.length > 0 ? spotifyBrowseDeadlineMs : spotifyColdBrowseDeadlineMs;
+    const results = await withDeadline(request, deadline, stale);
     if (results?.length) return results;
     if (uri && kind === "track") return [{ id: uri, uri, title: "Spotify track", artist: "Spotify", source: "Spotify", kind: "track" }];
     return results || [];
