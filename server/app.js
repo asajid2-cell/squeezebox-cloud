@@ -180,8 +180,12 @@ export function createApp({ lms = new LmsClient() } = {}) {
   app.post("/api/queue/:id/move", (req, res) => {
     const direction = req.body?.direction ?? req.body?.index;
     const item = moveQueueItem(req.params.id, direction);
-    if (!item) {
+    if (item === null) {
       res.status(404).json({ error: "Queue item not found" });
+      return;
+    }
+    if (item === undefined) {
+      res.status(400).json({ error: "Invalid queue move" });
       return;
     }
     res.json({ ok: true, item, queue: appState.queue });

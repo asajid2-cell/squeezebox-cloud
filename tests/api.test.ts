@@ -91,6 +91,15 @@ describe("Cloud Squeeze API", () => {
     expect(removed.body.queue.some((item: { id: string }) => item.id === second.body.id)).toBe(false);
   });
 
+  it("rejects invalid queue move requests", async () => {
+    const app = createApp({ lms: mockLms });
+    const item = await request(app).post("/api/queue").send({ title: "Move Me", artist: "Tester" }).expect(201);
+
+    await request(app).post(`/api/queue/${item.body.id}/move`).send({ direction: "sideways" }).expect(400);
+    await request(app).post(`/api/queue/${item.body.id}/move`).send({ index: 99 }).expect(400);
+    await request(app).post("/api/queue/not-real/move").send({ direction: "up" }).expect(404);
+  });
+
   it("generates unique queue ids for rapid inserts", () => {
     appState.queue.splice(0, appState.queue.length);
     const first = addQueueItem({ title: "Rapid One", artist: "Tester" });
