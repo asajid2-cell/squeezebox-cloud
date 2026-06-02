@@ -130,13 +130,15 @@ export function addQueueItemNext(input) {
 export function updateQueueItem(id, input) {
   const index = appState.queue.findIndex((item) => item.id === id);
   if (index < 0) return null;
+  const previous = appState.queue[index];
   appState.queue[index] = {
-    ...appState.queue[index],
+    ...previous,
     ...["title", "artist", "album", "requestedBy"].reduce((updates, key) => {
       if (typeof input[key] === "string" && input[key].trim()) updates[key] = input[key].trim();
       return updates;
     }, {})
   };
+  updateRecentPick(previous, appState.queue[index]);
   return appState.queue[index];
 }
 
@@ -236,6 +238,19 @@ function removeRecentPick(item) {
     (pick) => pick.title === item.title && pick.artist === item.artist
   );
   if (index >= 0) appState.recentPicks.splice(index, 1);
+}
+
+function updateRecentPick(previous, next) {
+  const index = appState.recentPicks.findIndex(
+    (pick) => pick.title === previous.title && pick.artist === previous.artist
+  );
+  if (index >= 0) {
+    appState.recentPicks[index] = {
+      ...appState.recentPicks[index],
+      title: next.title,
+      artist: next.artist
+    };
+  }
 }
 
 function expandPath(value) {

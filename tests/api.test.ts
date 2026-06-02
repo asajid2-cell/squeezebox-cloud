@@ -131,12 +131,18 @@ describe("Cloud Squeeze API", () => {
     expect(appState.recentPicks).toEqual([{ title: "Manual Pick", artist: "Tester", status: "Queued" }]);
   });
 
-  it("removes recent pick entries when queued rows are removed", () => {
+  it("removes recent pick entries when queued rows are removed", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.recentPicks.splice(0, appState.recentPicks.length);
 
     const item = addQueueItem({ title: "Remove Recent", artist: "Tester", requestedBy: "guest", path: "/music/remove.mp3" });
     expect(appState.recentPicks).toEqual([{ title: "Remove Recent", artist: "Tester", status: "Queued" }]);
+
+    await request(createApp({ lms: mockLms }))
+      .patch(`/api/queue/${item.id}`)
+      .send({ title: "Remove Recent Edited", artist: "Edited Tester" })
+      .expect(200);
+    expect(appState.recentPicks).toEqual([{ title: "Remove Recent Edited", artist: "Edited Tester", status: "Queued" }]);
 
     removeQueueItem(item.id);
 
