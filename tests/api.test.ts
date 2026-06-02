@@ -921,6 +921,41 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.playback.repeat).toBe("off");
   });
 
+  it("does not cycle a manual playlist queue into generated smart-shuffle rows", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      smartQueue: false,
+      repeat: "off",
+      smartShuffleSource: "spotify",
+      lastShuffleRefillAt: 12345,
+      lastShuffleSeed: "playlist",
+      lastSmartQueueBase: "playlist-base",
+      history: []
+    };
+    addQueueItem({ title: "Playlist A", artist: "Tester", uri: "spotify:track:playlist-a", source: "Spotify", requestedBy: "guest" });
+    addQueueItem({ title: "Playlist B", artist: "Tester", uri: "spotify:track:playlist-b", source: "Spotify", requestedBy: "guest" });
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async spotifySearch() {
+          return [{ id: "spotify:random", title: "Unrelated Random", artist: "Tester", source: "Spotify", uri: "spotify:track:random", kind: "track" }];
+        }
+      }
+    }))
+      .post("/api/player/playback")
+      .send({ smartQueue: true, smartShuffleSource: "spotify" })
+      .expect(200);
+
+    expect(response.body.playback).toMatchObject({ shuffle: false, smartQueue: false, smartShuffleSource: "spotify" });
+    expect(response.body.playback.lastShuffleRefillAt).toBe(0);
+    expect(response.body.playback.lastShuffleSeed).toBe("");
+    expect(response.body.playback.lastSmartQueueBase).toBe("");
+    expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Playlist A", "Playlist B"]);
+    expect(response.body.queue).not.toEqual(expect.arrayContaining([expect.objectContaining({ requestedBy: "smart shuffle" })]));
+  });
+
   it("exposes recent queue and playback debug events", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "spotify", history: [] };

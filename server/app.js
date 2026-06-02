@@ -640,6 +640,13 @@ export function createApp({ lms = new LmsClient() } = {}) {
       if (body.smartShuffleSource) {
         next.smartShuffleSource = body.smartShuffleSource;
       }
+      if (smartQueueChanged && body.smartQueue === true && manualQueueCount() > 0) {
+        next.smartQueue = false;
+        next.shuffle = false;
+        next.lastShuffleRefillAt = 0;
+        next.lastShuffleSeed = "";
+        next.lastSmartQueueBase = "";
+      }
       const finalShuffle = typeof next.shuffle === "boolean" ? next.shuffle : appState.playback.shuffle;
       const finalSmartQueue = typeof next.smartQueue === "boolean" ? next.smartQueue : appState.playback.smartQueue;
       if ((shuffleChanged || smartQueueChanged) && !finalShuffle && !finalSmartQueue) {
@@ -845,6 +852,10 @@ function guestQueueLimit() {
 
 function guestQueueCount() {
   return appState.queue.filter((item) => item.requestedBy === "guest").length;
+}
+
+function manualQueueCount() {
+  return appState.queue.filter((item) => !isGeneratedQueueItem(item)).length;
 }
 
 function canQueueMoreGuestTracks(count = 1) {
