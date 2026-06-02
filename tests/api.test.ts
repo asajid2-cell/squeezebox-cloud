@@ -446,6 +446,54 @@ describe("Cloud Squeeze API", () => {
     expect(appState.queue.find((item) => item.id === created.body.id)?.requestedBy).toBe("guest");
   });
 
+  it("rejects new public song requests when public requests are paused", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const previousAdmin = { ...appState.admin };
+    const previousSchedule = structuredClone(appState.schedule);
+    appState.admin = { ...appState.admin, publicRequests: false, scheduleEnabled: true };
+    appState.schedule = { ...appState.schedule, current: { ...appState.schedule.current, requestsPaused: false } };
+    try {
+      const app = createApp({ lms: mockLms });
+      await request(app).post("/api/queue").send({ title: "Paused Queue", artist: "Tester" }).expect(403);
+      await request(app)
+        .post("/api/player/track")
+        .send({ action: "play-now", track: { title: "Paused Play", uri: "spotify:track:paused-play", kind: "track", source: "Spotify" } })
+        .expect(403);
+      await request(app)
+        .post("/api/player/tracks")
+        .send({ action: "add-queue", tracks: [{ title: "Paused Batch", uri: "spotify:track:paused-batch", kind: "track", source: "Spotify" }] })
+        .expect(403);
+      await request(app).post("/api/player/smart-shuffle").send({ source: "local", count: 1 }).expect(403);
+      await request(app).post("/api/player/playback").send({ repeat: "off" }).expect(200);
+
+      expect(appState.queue).toHaveLength(0);
+    } finally {
+      appState.admin = previousAdmin;
+      appState.schedule = previousSchedule;
+    }
+  });
+
+  it("rejects new public song requests during scheduled pause windows", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const previousAdmin = { ...appState.admin };
+    const previousSchedule = structuredClone(appState.schedule);
+    appState.admin = { ...appState.admin, publicRequests: true, scheduleEnabled: true };
+    appState.schedule = { ...appState.schedule, current: { ...appState.schedule.current, requestsPaused: true } };
+    try {
+      const app = createApp({ lms: mockLms });
+      const response = await request(app)
+        .post("/api/player/track")
+        .send({ action: "add-queue", track: { title: "Scheduled Pause", uri: "spotify:track:scheduled-pause", kind: "track", source: "Spotify" } })
+        .expect(403);
+
+      expect(response.body.error).toContain("schedule");
+      expect(appState.queue).toHaveLength(0);
+    } finally {
+      appState.admin = previousAdmin;
+      appState.schedule = previousSchedule;
+    }
+  });
+
   it("keeps queued tracks visible until next consumes them", async () => {
     appState.queue.splice(0, appState.queue.length);
     const played: Array<{ action: string; track: { title?: string } }> = [];

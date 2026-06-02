@@ -157,6 +157,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(400).json({ error: "Invalid queue item", issues: parsed.error.issues });
       return;
     }
+    if (!publicRequestsOpen()) {
+      res.status(403).json({ error: publicRequestsClosedMessage(), queue: appState.queue });
+      return;
+    }
     if (!canQueueMoreGuestTracks(1)) {
       res.status(429).json({ error: queueLimitMessage(), queue: appState.queue });
       return;
@@ -217,6 +221,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(400).json({ error: "Playable local path, LMS track id, or Spotify URI is required" });
       return;
     }
+    if (!publicRequestsOpen()) {
+      res.status(403).json({ error: publicRequestsClosedMessage(), queue: appState.queue, playback: appState.playback });
+      return;
+    }
     try {
       logEvent("track.request", { action, track: trackSummary(track), playerId: appState.player.id });
       let queued = null;
@@ -267,6 +275,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
     }
     if (tracks.length === 0) {
       res.status(400).json({ error: "At least one track is required" });
+      return;
+    }
+    if (!publicRequestsOpen()) {
+      res.status(403).json({ error: publicRequestsClosedMessage(), queue: appState.queue });
       return;
     }
 
@@ -644,6 +656,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
 
   app.post("/api/player/smart-shuffle", async (req, res) => {
     try {
+      if (!publicRequestsOpen()) {
+        res.status(403).json({ error: publicRequestsClosedMessage(), queued: [], playback: appState.playback });
+        return;
+      }
       const status = await refreshLms(lms);
       const mode = ["mixed", "spotify", "local"].includes(req.body?.source) ? req.body.source : appState.playback.smartShuffleSource;
       if (mode === "spotify" && !spotifyBrowsingAvailable()) {
@@ -787,6 +803,18 @@ function uniquePlayableInputs(tracks) {
 function playableTrackInputKey(track) {
   if (!track || typeof track !== "object") return "";
   return String(track.uri || track.path || track.lmsTrackId || "").trim().toLowerCase();
+}
+
+function publicRequestsOpen() {
+  if (appState.admin.publicRequests === false) return false;
+  if (appState.admin.scheduleEnabled && appState.schedule.current?.requestsPaused) return false;
+  return true;
+}
+
+function publicRequestsClosedMessage() {
+  return appState.admin.publicRequests === false
+    ? "Public requests are paused"
+    : "Public requests are paused for the current schedule";
 }
 
 function guestQueueLimit() {
