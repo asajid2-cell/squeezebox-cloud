@@ -410,6 +410,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
 
   app.post("/api/library/upload", express.raw({ type: "application/octet-stream", limit: "80mb" }), async (req, res) => {
     try {
+      if (!publicRequestsOpen()) {
+        res.status(403).json({ error: publicRequestsClosedMessage() });
+        return;
+      }
       const originalName = String(req.query.filename || req.get("x-upload-filename") || "");
       const track = await saveUploadedTrack({ originalName, bytes: req.body });
       const tracks = await scanLibrary(undefined, 5000, "all");

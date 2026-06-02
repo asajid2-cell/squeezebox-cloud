@@ -464,6 +464,11 @@ describe("Cloud Squeeze API", () => {
         .send({ action: "add-queue", tracks: [{ title: "Paused Batch", uri: "spotify:track:paused-batch", kind: "track", source: "Spotify" }] })
         .expect(403);
       await request(app).post("/api/player/smart-shuffle").send({ source: "local", count: 1 }).expect(403);
+      await request(app)
+        .post("/api/library/upload?filename=paused.mp3")
+        .set("content-type", "application/octet-stream")
+        .send(Buffer.concat([Buffer.from("ID3"), Buffer.alloc(32)]))
+        .expect(403);
       await request(app).post("/api/player/playback").send({ repeat: "off" }).expect(200);
 
       expect(appState.queue).toHaveLength(0);
