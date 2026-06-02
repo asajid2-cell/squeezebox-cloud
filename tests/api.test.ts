@@ -121,6 +121,16 @@ describe("Cloud Squeeze API", () => {
     expect(first.id).not.toBe(second.id);
   });
 
+  it("does not record generated shuffle rows as recent user picks", () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.recentPicks.splice(0, appState.recentPicks.length);
+
+    addQueueItem({ title: "Generated Pick", artist: "Tester", requestedBy: "smart shuffle", path: "/music/generated.mp3" });
+    addQueueItem({ title: "Manual Pick", artist: "Tester", requestedBy: "guest", path: "/music/manual.mp3" });
+
+    expect(appState.recentPicks).toEqual([{ title: "Manual Pick", artist: "Tester", status: "Queued" }]);
+  });
+
   it("returns a compact error for malformed JSON bodies", async () => {
     const response = await request(createApp({ lms: mockLms }))
       .post("/api/player/playback")

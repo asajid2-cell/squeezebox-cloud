@@ -101,8 +101,7 @@ export function addQueueItem(input) {
     etaMinutes: nextEta()
   };
   appState.queue.push(item);
-  appState.recentPicks.unshift({ title: item.title, artist: item.artist, status: "Queued" });
-  appState.recentPicks = appState.recentPicks.slice(0, 8);
+  recordRecentPick(item, "Queued");
   return item;
 }
 
@@ -123,8 +122,7 @@ export function addQueueItemNext(input) {
     etaMinutes: 7
   };
   appState.queue.unshift(item);
-  appState.recentPicks.unshift({ title: item.title, artist: item.artist, status: "Play next" });
-  appState.recentPicks = appState.recentPicks.slice(0, 8);
+  recordRecentPick(item, "Play next");
   recalculateQueueEtas();
   return item;
 }
@@ -224,6 +222,12 @@ function nextQueueId() {
 function cleanText(value) {
   if (typeof value !== "string") return value;
   return value.trim() || undefined;
+}
+
+function recordRecentPick(item, status) {
+  if (item.requestedBy === "smart shuffle" || item.requestedBy === "shuffle") return;
+  appState.recentPicks.unshift({ title: item.title, artist: item.artist, status });
+  appState.recentPicks = appState.recentPicks.slice(0, 8);
 }
 
 function expandPath(value) {
