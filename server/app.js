@@ -22,7 +22,7 @@ import {
   updateMusicInfoStatus,
   updatePlayback
 } from "./state.js";
-import { getCollections, getCollectionTracks, saveUploadedTrack, scanLibrary, searchLibrary } from "./library.js";
+import { clearLibraryCaches, getCollections, getCollectionTracks, saveUploadedTrack, scanLibrary, searchLibrary } from "./library.js";
 import { enrichTrackInfo } from "./trackInfo.js";
 
 const queueSchema = z.object({
@@ -304,6 +304,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
   });
 
   app.post("/api/library/rescan", async (_req, res) => {
+    clearLibraryCaches();
     const tracks = await scanLibrary(undefined, 5000, "all");
     res.json({ trackCount: tracks.length, sample: tracks.slice(0, 5), status: appState.services.localLibrary });
   });

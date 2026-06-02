@@ -9,7 +9,9 @@ const extensions = ["mp3", "flac", "m4a", "wav", "ogg", "aac"];
 const maxUploadBytes = Number(process.env.MAX_UPLOAD_BYTES || 80 * 1024 * 1024);
 const execFileAsync = promisify(execFile);
 const scanCache = new Map();
-const scanCacheMs = Number(process.env.LIBRARY_SCAN_CACHE_MS || 30000);
+const resultCache = new Map();
+const scanCacheMs = Number(process.env.LIBRARY_SCAN_CACHE_MS || 5 * 60 * 1000);
+const resultCacheMs = Number(process.env.LIBRARY_RESULT_CACHE_MS || 2 * 60 * 1000);
 
 export async function scanLibrary(root = null, limit = 5000, source = "all") {
   if (!root) return scanAllLibraries(limit, source);
@@ -44,19 +46,31 @@ export async function scanLibrary(root = null, limit = 5000, source = "all") {
 }
 
 export async function searchLibrary(query, root = undefined, limit = 100, source = "all") {
-  const tracks = await scanLibrary(root, 5000, source);
   const normalized = normalize(query);
   const max = Math.max(1, Math.min(500, Number(limit) || 100));
-  if (!normalized) return tracks.slice(0, max);
-  return tracks
-    .map((track) => ({ track, score: matchScore(track, normalized) }))
-    .filter((item) => item.score > 0)
-    .sort((a, b) => b.score - a.score || a.track.title.localeCompare(b.track.title, undefined, { numeric: true }))
-    .map((item) => item.track)
-    .slice(0, max);
+  const cacheKey = `search:${normalizeFsPath(root || "all")}:${source}:${normalized}:${max}`;
+  const cached = getCachedResult(cacheKey);
+  if (cached) return cached;
+  const tracks = await scanLibrary(root, 5000, source);
+  let results;
+  if (!normalized) {
+    results = tracks.slice(0, max);
+  } else {
+    results = tracks
+      .map((track) => ({ track, score: matchScore(track, normalized) }))
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score || a.track.title.localeCompare(b.track.title, undefined, { numeric: true }))
+      .map((item) => item.track)
+      .slice(0, max);
+  }
+  setCachedResult(cacheKey, results);
+  return results;
 }
 
 export async function getCollections(root = undefined, source = "all") {
+  const cacheKey = `collections:${normalizeFsPath(root || "all")}:${source}`;
+  const cached = getCachedResult(cacheKey);
+  if (cached) return cached;
   const tracks = await scanLibrary(root, 5000, source);
   const groups = new Map();
   for (const track of tracks) {
@@ -71,15 +85,20 @@ export async function getCollections(root = undefined, source = "all") {
     if (group.sample.length < 3) group.sample.push(track.title);
     groups.set(key, group);
   }
-  return [...groups.values()].sort((a, b) => `${a.collection} ${a.folder}`.localeCompare(`${b.collection} ${b.folder}`, undefined, { numeric: true }));
+  const results = [...groups.values()].sort((a, b) => `${a.collection} ${a.folder}`.localeCompare(`${b.collection} ${b.folder}`, undefined, { numeric: true }));
+  setCachedResult(cacheKey, results);
+  return results;
 }
 
 export async function getCollectionTracks({ collection = "", folder = "", source = "all", limit = 1000 } = {}) {
-  const tracks = await scanLibrary(undefined, 5000, source);
   const normalizedCollection = normalize(collection);
   const normalizedFolder = normalize(folder);
   const max = Math.max(1, Math.min(2000, Number(limit) || 1000));
-  return tracks
+  const cacheKey = `collectionTracks:${source}:${normalizedCollection}:${normalizedFolder}:${max}`;
+  const cached = getCachedResult(cacheKey);
+  if (cached) return cached;
+  const tracks = await scanLibrary(undefined, 5000, source);
+  const results = tracks
     .filter((track) => {
       const trackCollection = normalize(track.collection || "Local library");
       const trackFolder = normalize(track.folder || track.album || "Ungrouped");
@@ -87,6 +106,8 @@ export async function getCollectionTracks({ collection = "", folder = "", source
     })
     .sort((a, b) => String(a.path || a.title).localeCompare(String(b.path || b.title), undefined, { numeric: true }))
     .slice(0, max);
+  setCachedResult(cacheKey, results);
+  return results;
 }
 
 export function fileToTrack(filePath) {
@@ -171,8 +192,28 @@ export async function saveUploadedTrack({ originalName, bytes }) {
   } else {
     await transcodeUploadToMp3(safe, bytes, target);
   }
-  scanCache.clear();
+  clearLibraryCaches();
   return fileToTrack(target);
+}
+
+function getCachedResult(key) {
+  const cached = resultCache.get(key);
+  if (!cached) return null;
+  if (Date.now() > cached.expiresAt) {
+    resultCache.delete(key);
+    return null;
+  }
+  return structuredClone(cached.value);
+}
+
+function setCachedResult(key, value) {
+  if (resultCache.size > 300) resultCache.clear();
+  resultCache.set(key, { value: structuredClone(value), expiresAt: Date.now() + resultCacheMs });
+}
+
+export function clearLibraryCaches() {
+  scanCache.clear();
+  resultCache.clear();
 }
 
 async function transcodeUploadToMp3(safeName, bytes, target) {
