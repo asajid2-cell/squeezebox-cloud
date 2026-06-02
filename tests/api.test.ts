@@ -137,6 +137,26 @@ describe("Cloud Squeeze API", () => {
     expect(controls.some((item) => item.action === "seek")).toBe(false);
   });
 
+  it("uses the hot player id for previous without waiting on a fresh status call", async () => {
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true };
+    const controls: Array<{ playerId: string; action: string }> = [];
+    const lms = {
+      ...mockLms,
+      async status() {
+        throw new Error("status should not block previous");
+      },
+      async control(playerId: string, action: string) {
+        controls.push({ playerId, action });
+        return "ok";
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/previous").expect(200);
+
+    expect(response.body.action).toBe("previous");
+    expect(controls).toContainEqual({ playerId: "hot-player", action: "previous" });
+  });
+
   it("proxies LMS artwork", async () => {
     const response = await request(createApp({ lms: mockLms })).get("/api/artwork/test-cover").expect(200);
     expect(response.headers["content-type"]).toContain("image/jpeg");
@@ -197,6 +217,28 @@ describe("Cloud Squeeze API", () => {
     expect(played).toContainEqual({ action: "add-queue", track: expect.objectContaining({ title: "Visible Queue Song" }) });
     expect(played).toContainEqual({ action: "play-now", track: expect.objectContaining({ title: "Visible Queue Song" }) });
     expect(appState.queue.some((item) => item.title === "Visible Queue Song")).toBe(false);
+  });
+
+  it("uses the hot player id for visible queue next without waiting on a fresh status call", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true };
+    addQueueItem({ title: "Hot Queue Song", artist: "Tester", path: "/music/test/hot-next.mp3" });
+    const played: Array<{ playerId: string; action: string; title?: string }> = [];
+    const lms = {
+      ...mockLms,
+      async status() {
+        throw new Error("status should not block next");
+      },
+      async playTrack(playerId: string, track: { title?: string }, action: string) {
+        played.push({ playerId, action, title: track.title });
+        return "ok";
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/next").expect(200);
+
+    expect(response.body.action).toBe("visible-queue-next");
+    expect(played).toEqual([{ playerId: "hot-player", action: "play-now", title: "Hot Queue Song" }]);
   });
 
   it("queues playlist batches in order without issuing one LMS command per track", async () => {

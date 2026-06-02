@@ -434,9 +434,9 @@ export function createApp({ lms = new LmsClient() } = {}) {
 
   app.post("/api/player/next", async (_req, res) => {
     try {
-      const status = await refreshLms(lms);
+      const playerId = await hotPlayerId(lms);
       logEvent("transport.next.request", { queue: queueSummary(), playback: appState.playback, nowPlaying: trackSummary(appState.nowPlaying) });
-      const played = await playNextVisibleQueueItem(lms, status.id);
+      const played = await playNextVisibleQueueItem(lms, playerId);
       if (!played) await control(lms, "next");
       refreshLms(lms, { force: true }).catch(() => null);
       logEvent("transport.next.result", { action: played ? "visible-queue-next" : "lms-next", played: trackSummary(played), queue: queueSummary(), playback: appState.playback });
@@ -448,9 +448,11 @@ export function createApp({ lms = new LmsClient() } = {}) {
 
   app.post("/api/player/previous", async (_req, res) => {
     try {
-      const status = await refreshLms(lms);
+      await hotPlayerId(lms);
+      logEvent("transport.previous.request", { queue: queueSummary(), playback: appState.playback, nowPlaying: trackSummary(appState.nowPlaying) });
       await control(lms, "previous");
       refreshLms(lms, { force: true }).catch(() => null);
+      logEvent("transport.previous.result", { action: "previous", queue: queueSummary(), playback: appState.playback, nowPlaying: trackSummary(appState.nowPlaying) });
       res.json({ ok: true, action: "previous", mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying });
     } catch (error) {
       res.status(502).json({ error: error.message, player: appState.player, nowPlaying: appState.nowPlaying });
