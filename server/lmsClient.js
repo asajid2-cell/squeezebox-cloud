@@ -7,7 +7,7 @@ import { fileToTrack } from "./library.js";
 const spotifySearchCacheMs = 2 * 60 * 1000;
 const spotifyBrowseCacheMs = 5 * 60 * 1000;
 const spotifyBrowseDeadlineMs = Number(process.env.SPOTIFY_BROWSE_DEADLINE_MS || 1800);
-const spotifyColdBrowseDeadlineMs = Number(process.env.SPOTIFY_COLD_BROWSE_DEADLINE_MS || 4200);
+const spotifyColdBrowseDeadlineMs = Number(process.env.SPOTIFY_COLD_BROWSE_DEADLINE_MS || 6500);
 
 export class LmsClient {
   constructor(options = {}) {
