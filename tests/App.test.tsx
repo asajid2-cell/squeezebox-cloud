@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App";
@@ -47,7 +47,12 @@ beforeEach(() => {
         return jsonResponse({ results: [{ id: "s1", title: "Local Test", artist: "Downloads", source: "Local library", path: "/music/local.mp3" }] });
       }
       if (url.includes("/api/spotify/search")) {
-        return jsonResponse({ results: [{ id: "sp1", title: "Headlines", artist: "Drake", album: "Take Care", source: "Spotify", uri: "spotify:track:abc123" }] });
+        return jsonResponse({
+          results: [
+            { id: "sp1", title: "Headlines", artist: "Drake", album: "Take Care", source: "Spotify", uri: "spotify:track:abc123", kind: "track" },
+            { id: "spotify:artist:drake", title: "Drake Artist", artist: "Spotify", source: "Spotify artist", uri: "spotify:artist:drake", kind: "artist" }
+          ]
+        });
       }
       if (url.includes("/api/library/collections")) {
         return jsonResponse({
@@ -162,6 +167,19 @@ describe("Cloud Squeeze UI", () => {
     await userEvent.type(screen.getByLabelText("Search music"), "drake");
     await waitFor(() => expect(screen.getByText("Headlines")).toBeInTheDocument());
     expect(screen.getByText(/Drake - Take Care/)).toBeInTheDocument();
+  });
+
+  it("does not show playback actions for Spotify search containers", async () => {
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Library" }));
+    await userEvent.click(screen.getByRole("button", { name: "Spotify" }));
+    await userEvent.type(screen.getByLabelText("Search music"), "drake");
+    await waitFor(() => expect(screen.getByText("Drake Artist")).toBeInTheDocument());
+
+    const artistRow = screen.getByText("Drake Artist").closest(".result-row");
+    expect(artistRow).toBeTruthy();
+    expect(within(artistRow as HTMLElement).queryByRole("button", { name: "Play now" })).not.toBeInTheDocument();
+    expect(within(artistRow as HTMLElement).queryByRole("button", { name: "Queue" })).not.toBeInTheDocument();
   });
 
   it("opens local and Spotify playlists before queueing individual tracks", async () => {
