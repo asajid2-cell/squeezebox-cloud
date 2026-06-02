@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createApp } from "../server/app.js";
+import { createApp, shouldNudgePlayback } from "../server/app.js";
 import { addQueueItem, appState, config, removeQueueItem } from "../server/state.js";
 
 const mockLms = {
@@ -481,6 +481,16 @@ describe("Cloud Squeeze API", () => {
 
     expect(played).toHaveLength(0);
     expect(appState.queue.some((item) => item.title === "Should Stay Queued")).toBe(true);
+  });
+
+  it("does not treat stopped manual queues as auto-advance-ready", () => {
+    const idleTrack = { id: "idle", title: "No track playing", artist: "Connect a player or request a song", source: "LMS", duration: 0, elapsed: 0 };
+
+    expect(shouldNudgePlayback({ mode: "stop" }, idleTrack, { repeat: "off", smartQueue: false, shuffle: false })).toBe(false);
+    expect(shouldNudgePlayback({ mode: "stopped" }, idleTrack, { repeat: "off", smartQueue: true, shuffle: false })).toBe(true);
+    expect(shouldNudgePlayback({ mode: "pause" }, { duration: 100, elapsed: 99 }, { repeat: "off", smartQueue: false, shuffle: false })).toBe(false);
+    expect(shouldNudgePlayback({ mode: "play" }, { duration: 100, elapsed: 99 }, { repeat: "off", smartQueue: false, shuffle: false })).toBe(true);
+    expect(shouldNudgePlayback({ mode: "play" }, { duration: 100, elapsed: 99 }, { repeat: "one", smartQueue: true, shuffle: false })).toBe(false);
   });
 
   it("resumes playback immediately after seeking when already playing", async () => {

@@ -1144,9 +1144,9 @@ function syncVisibleQueueWithCurrentTrack(track) {
   }
 }
 
-function shouldNudgePlayback(status, track) {
-  if (appState.playback.repeat === "one") return false;
-  if (status.mode === "stop" || status.mode === "stopped") return true;
+export function shouldNudgePlayback(status, track, playback = appState.playback) {
+  if (playback.repeat === "one") return false;
+  if (status.mode === "stop" || status.mode === "stopped") return playback.smartQueue || playback.shuffle;
   if (status.mode === "pause") return false;
   const duration = Number(track?.duration || 0);
   const elapsed = Number(track?.elapsed || 0);
