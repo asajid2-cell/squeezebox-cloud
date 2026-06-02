@@ -139,6 +139,7 @@ describe("Cloud Squeeze API", () => {
   });
 
   it("uses the LMS previous command when previous is pressed", async () => {
+    appState.playback = { ...appState.playback, previousTracks: [] };
     const controls: Array<{ action: string; value?: number }> = [];
     const lms = {
       ...mockLms,
@@ -155,7 +156,48 @@ describe("Cloud Squeeze API", () => {
     expect(controls.some((item) => item.action === "seek")).toBe(false);
   });
 
+  it("plays the previous app track before falling back to LMS previous", async () => {
+    const played: Array<{ action: string; track: { title?: string; path?: string } }> = [];
+    const controls: Array<{ action: string }> = [];
+    appState.nowPlaying = {
+      id: "current",
+      title: "Current Track",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 10,
+      canSeek: true,
+      art: null,
+      path: "/music/current.mp3"
+    };
+    appState.playback = {
+      ...appState.playback,
+      previousTracks: [{ title: "Previous Track", artist: "Tester", path: "/music/previous.mp3", source: "Local library" }]
+    };
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string; path?: string }, action: string) {
+        played.push({ action, track });
+        return "ok";
+      },
+      async control(_playerId: string, action: string) {
+        controls.push({ action });
+        return "ok";
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/previous").expect(200);
+
+    expect(response.body.action).toBe("app-previous");
+    expect(response.body.nowPlaying.title).toBe("Previous Track");
+    expect(played).toEqual([{ action: "play-now", track: expect.objectContaining({ title: "Previous Track", path: "/music/previous.mp3" }) }]);
+    expect(controls).not.toContainEqual({ action: "previous" });
+    expect(appState.playback.previousTracks).toEqual([]);
+  });
+
   it("uses the hot player id for previous without waiting on a fresh status call", async () => {
+    appState.playback = { ...appState.playback, previousTracks: [] };
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true };
     const controls: Array<{ playerId: string; action: string }> = [];
     const lms = {

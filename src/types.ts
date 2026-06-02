@@ -61,6 +61,7 @@ export type AppState = {
     lastShuffleSeed?: string;
     lastSmartQueueBase?: string;
     history?: string[];
+    previousTracks?: Partial<Track>[];
   };
   admin: {
     publicRequests: boolean;

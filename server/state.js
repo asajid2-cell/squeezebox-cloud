@@ -67,7 +67,8 @@ export const appState = {
     lastShuffleRefillAt: 0,
     lastShuffleSeed: "",
     lastSmartQueueBase: "",
-    history: []
+    history: [],
+    previousTracks: []
   },
   admin: {
     publicRequests: true,

@@ -223,6 +223,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
         const playerId = await hotPlayerId(lms);
         stopGeneratedPlayback();
         setMode("play");
+        rememberPreviousTrack(appState.nowPlaying);
         const optimistic = optimisticTrack(track);
         updateNowPlaying(optimistic);
         logEvent("track.play-now.optimistic", { track: trackSummary(track), queue: queueSummary() });
@@ -494,12 +495,19 @@ export function createApp({ lms = new LmsClient() } = {}) {
 
   app.post("/api/player/previous", async (_req, res) => {
     try {
-      await hotPlayerId(lms);
+      const playerId = await hotPlayerId(lms);
       logEvent("transport.previous.request", { queue: queueSummary(), playback: appState.playback, nowPlaying: trackSummary(appState.nowPlaying) });
-      await control(lms, "previous");
+      const previous = popPreviousTrack();
+      if (previous) {
+        setMode("play");
+        updateNowPlaying(optimisticTrack(previous));
+        runPlaybackCommand(lms, playerId, previous, "play-now");
+      } else {
+        await control(lms, "previous");
+      }
       refreshLms(lms, { force: true }).catch(() => null);
-      logEvent("transport.previous.result", { action: "previous", queue: queueSummary(), playback: appState.playback, nowPlaying: trackSummary(appState.nowPlaying) });
-      res.json({ ok: true, action: "previous", mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying });
+      logEvent("transport.previous.result", { action: previous ? "app-previous" : "previous", previous: trackSummary(previous), queue: queueSummary(), playback: appState.playback, nowPlaying: trackSummary(appState.nowPlaying) });
+      res.json({ ok: true, action: previous ? "app-previous" : "previous", mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying });
     } catch (error) {
       res.status(502).json({ error: error.message, player: appState.player, nowPlaying: appState.nowPlaying });
     }
@@ -1044,6 +1052,7 @@ async function playNextVisibleQueueItem(lms, playerId) {
 }
 
 async function playQueuedItem(lms, playerId, item) {
+  rememberPreviousTrack(appState.nowPlaying);
   removeQueueItem(item.id);
   rememberShuffleTrack(item);
   logEvent("queue.play-item", { item: trackSummary(item), queueAfterRemove: queueSummary(), playback: appState.playback });
@@ -1151,6 +1160,44 @@ function rememberShuffleTrack(track) {
   if (!key) return;
   const history = [key, ...(appState.playback.history || []).filter((item) => item !== key)].slice(0, 80);
   updatePlayback({ history });
+}
+
+function rememberPreviousTrack(track) {
+  if (!isRestorablePreviousTrack(track)) return;
+  const key = trackKey(track);
+  const previousTracks = [
+    restorableTrack(track),
+    ...(appState.playback.previousTracks || []).filter((item) => trackKey(item) !== key)
+  ].slice(0, 20);
+  updatePlayback({ previousTracks });
+}
+
+function popPreviousTrack() {
+  const previousTracks = appState.playback.previousTracks || [];
+  const [track, ...rest] = previousTracks;
+  updatePlayback({ previousTracks: rest });
+  return track || null;
+}
+
+function isRestorablePreviousTrack(track) {
+  return Boolean(track?.title && track.id !== "idle" && (track.path || track.uri || track.lmsTrackId));
+}
+
+function restorableTrack(track) {
+  return {
+    id: track.id,
+    title: track.title,
+    artist: track.artist,
+    album: track.album,
+    source: track.source,
+    duration: track.duration,
+    art: track.art,
+    uri: track.uri,
+    path: track.path,
+    lmsTrackId: track.lmsTrackId,
+    kind: track.kind,
+    uploaded: track.uploaded
+  };
 }
 
 function sameTitleArtist(left, right) {
