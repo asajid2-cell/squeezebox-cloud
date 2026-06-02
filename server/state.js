@@ -186,7 +186,7 @@ export function updatePlayerStatus(status) {
 
 export function updateNowPlaying(track) {
   if (track) {
-    appState.nowPlaying = { ...appState.nowPlaying, ...track };
+    appState.nowPlaying = track.id === "idle" ? { ...track } : { ...appState.nowPlaying, ...track };
   }
 }
 

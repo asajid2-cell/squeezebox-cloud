@@ -854,7 +854,10 @@ async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force =
           isTrackInfoCandidate(track) &&
           (key !== refreshState.trackKey || Date.now() - refreshState.trackInfoAt > trackInfoRefreshMs);
         updateNowPlaying(track);
-        if (!isTrackInfoCandidate(track)) updateTrackInfo(idleTrackInfo);
+        if (!isTrackInfoCandidate(track)) {
+          updatePlayback({ previousTracks: [] });
+          updateTrackInfo(idleTrackInfo);
+        }
         if (shouldRefreshTrackInfo) {
           refreshTrackInfoInBackground(track, key);
         }

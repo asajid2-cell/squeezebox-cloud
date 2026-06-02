@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createApp, nextQueueItemForPlayback, shouldNudgePlayback } from "../server/app.js";
-import { addQueueItem, appState, config, removeQueueItem } from "../server/state.js";
+import { addQueueItem, appState, config, removeQueueItem, updateNowPlaying } from "../server/state.js";
 
 const mockLms = {
   async status() {
@@ -491,6 +491,25 @@ describe("Cloud Squeeze API", () => {
     expect(shouldNudgePlayback({ mode: "pause" }, { duration: 100, elapsed: 99 }, { repeat: "off", smartQueue: false, shuffle: false })).toBe(false);
     expect(shouldNudgePlayback({ mode: "play" }, { duration: 100, elapsed: 99 }, { repeat: "off", smartQueue: false, shuffle: false })).toBe(true);
     expect(shouldNudgePlayback({ mode: "play" }, { duration: 100, elapsed: 99 }, { repeat: "one", smartQueue: true, shuffle: false })).toBe(false);
+  });
+
+  it("replaces stale now playing fields when LMS is idle", () => {
+    appState.nowPlaying = {
+      id: "previous",
+      title: "Previous Track",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 12,
+      canSeek: true,
+      art: null,
+      path: "/music/previous.mp3"
+    };
+
+    updateNowPlaying({ id: "idle", title: "No track playing", artist: "Connect a player or request a song", album: "", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null });
+
+    expect(appState.nowPlaying).toEqual({ id: "idle", title: "No track playing", artist: "Connect a player or request a song", album: "", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null });
   });
 
   it("resumes playback immediately after seeking when already playing", async () => {
