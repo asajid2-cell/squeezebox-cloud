@@ -52,6 +52,7 @@ const trackInfoRefreshMs = 30000;
 const trackInfoBudgetMs = Number(process.env.TRACK_INFO_BUDGET_MS || 1800);
 const refreshState = { promise: null, updatedAt: 0, servicesAt: 0, trackInfoAt: 0, trackKey: "" };
 const prewarmState = { key: "", at: 0 };
+const spotifyLibraryPrewarmState = { playerId: "", at: 0 };
 const debugLog = [];
 const debugLogLimit = 500;
 const debugLogPath = process.env.CLOUD_SQUEEZE_LOG_PATH || "/tmp/cloud-squeeze-events.jsonl";
@@ -676,6 +677,7 @@ async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force =
           updateNowPlaying(track);
         }
         prewarmShuffleCandidates(lms, status.id, track);
+        prewarmSpotifyLibrary(lms, status.id);
         if (maintainPlayback) await maintainVisiblePlaybackQueue(lms, status, track);
       }
       refreshState.updatedAt = Date.now();
@@ -698,6 +700,19 @@ function prewarmShuffleCandidates(lms, playerId, track) {
   prewarmState.key = key;
   prewarmState.at = Date.now();
   spotifyShuffleCandidates(lms, playerId, seed, 5).catch(() => null);
+}
+
+function prewarmSpotifyLibrary(lms, playerId) {
+  if (!playerId || !appState.services.spotify.configured) return;
+  if (spotifyLibraryPrewarmState.playerId === playerId && Date.now() - spotifyLibraryPrewarmState.at < 90000) return;
+  spotifyLibraryPrewarmState.playerId = playerId;
+  spotifyLibraryPrewarmState.at = Date.now();
+  Promise.all([
+    lms.spotifyLibrary(playerId, "playlists", 24, 0),
+    lms.spotifyLibrary(playerId, "albums", 24, 0),
+    lms.spotifyLibrary(playerId, "artists", 24, 0),
+    lms.spotifyLibrary(playerId, "tracks", 24, 0)
+  ]).catch(() => null);
 }
 
 function updateStablePlayerStatus(status) {

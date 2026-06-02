@@ -13,6 +13,7 @@
     "test:ui": "playwright test",
     "smoke:library": "node scripts/smoke-library.js",
     "smoke:lms": "node scripts/smoke-lms.js",
+    "smoke:public": "node scripts/smoke-public.js",
     "test:all": "npm test && npm run build && npm run smoke:library && npm run smoke:lms && npm run test:ui"
   },
   "dependencies": {
@@ -43,4 +44,3 @@
     "vitest": "^4.0.14"
   }
 }
-
