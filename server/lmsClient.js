@@ -322,9 +322,15 @@ export class LmsClient {
     const cacheKey = `spotifyLibrary:${playerId}:${type}:${count}:${start}`;
     const cached = this.getCached(cacheKey);
     if (cached) return cached;
-    const widerCached = this.getCached(`spotifyLibrary:${playerId}:${type}:80:${start}`) || this.getCached(`spotifyLibrary:${playerId}:${type}:100:${start}`);
+    const widerKeys = [`spotifyLibrary:${playerId}:${type}:80:${start}`, `spotifyLibrary:${playerId}:${type}:100:${start}`];
+    const widerCached = this.getCached(widerKeys[0]) || this.getCached(widerKeys[1]);
     if (widerCached && widerCached.length >= count) return widerCached.slice(0, count);
-    const stale = this.getCached(cacheKey, { allowExpired: true }) || this.getCached(`spotifyLibrary:${playerId}:${type}:80:${start}`, { allowExpired: true })?.slice(0, count) || [];
+    const stale = this.getCached(cacheKey, { allowExpired: true }) || this.getCached(widerKeys[0], { allowExpired: true })?.slice(0, count) || [];
+    const widerInflight = widerKeys.map((key) => this.inflight.get(key)).find(Boolean);
+    if (widerInflight) {
+      const deadline = stale.length > 0 ? spotifyBrowseDeadlineMs : spotifyColdBrowseDeadlineMs;
+      return (await withDeadline(widerInflight.then((results) => results.slice(0, count)), deadline, stale)) || [];
+    }
     const itemMap = {
       playlists: { id: "8", kind: "playlist" },
       albums: { id: "6", kind: "album" },

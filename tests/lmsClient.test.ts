@@ -427,6 +427,36 @@ describe("LMS client parsing", () => {
     expect(requests).toBe(1);
   });
 
+  it("serves narrow Spotify library requests from an in-flight wider browse", async () => {
+    let requests = 0;
+    let release: (value: unknown) => void = () => {};
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const client = new LmsClient();
+    client.jsonRequest = async () => {
+      requests += 1;
+      await gate;
+      return {
+        result: {
+          item_loop: Array.from({ length: 80 }, (_, index) => ({
+            text: `Album ${index + 1}\nby Spotify`,
+            presetParams: { favorites_url: `spotify:album:${index + 1}`, favorites_title: `Album ${index + 1}` }
+          }))
+        }
+      };
+    };
+
+    const wide = client.spotifyLibrary("player-1", "albums", 80, 0);
+    const narrow = client.spotifyLibrary("player-1", "albums", 5, 0);
+    release(null);
+    const [wideResult, narrowResult] = await Promise.all([wide, narrow]);
+
+    expect(wideResult).toHaveLength(80);
+    expect(narrowResult).toHaveLength(5);
+    expect(requests).toBe(1);
+  });
+
   it("serves stale Spotify library cache when a browse refresh is slow", async () => {
     const client = new LmsClient();
     const cacheKey = "spotifyLibrary:player-1:albums:8:0";
