@@ -277,11 +277,11 @@ export function createApp({ lms = new LmsClient() } = {}) {
 
   app.get("/api/spotify/search", async (req, res) => {
     try {
-      const playerId = await hotPlayerId(lms);
-      if (!appState.services.spotify.configured) {
-        res.json({ results: [] });
+      if (!spotifyBrowsingAvailable()) {
+        res.json({ results: [], spotify: appState.services.spotify });
         return;
       }
+      const playerId = await hotPlayerId(lms);
       res.json({ results: await lms.spotifySearch(playerId, String(req.query.q || ""), req.query.limit || 20) });
     } catch (error) {
       res.status(502).json({ error: error.message, results: [] });
@@ -290,19 +290,15 @@ export function createApp({ lms = new LmsClient() } = {}) {
 
   app.get("/api/spotify/library", async (req, res) => {
     try {
-      const playerId = await hotPlayerId(lms);
-      if (!appState.services.spotify.configured) {
-        res.json({ results: [] });
+      if (!spotifyBrowsingAvailable()) {
+        res.json({ results: [], spotify: appState.services.spotify });
         return;
       }
+      const playerId = await hotPlayerId(lms);
       const type = String(req.query.type || "playlists");
       const limit = req.query.limit || 50;
       const offset = req.query.offset || 0;
-      let results = await lms.spotifyLibrary(playerId, type, limit, offset);
-      if (results.length === 0) {
-        await delay(650);
-        results = await lms.spotifyLibrary(playerId, type, limit, offset);
-      }
+      const results = await lms.spotifyLibrary(playerId, type, limit, offset);
       res.json({
         results
       });
@@ -313,11 +309,11 @@ export function createApp({ lms = new LmsClient() } = {}) {
 
   app.get("/api/spotify/children", async (req, res) => {
     try {
-      const playerId = await hotPlayerId(lms);
-      if (!appState.services.spotify.configured) {
-        res.json({ results: [] });
+      if (!spotifyBrowsingAvailable()) {
+        res.json({ results: [], spotify: appState.services.spotify });
         return;
       }
+      const playerId = await hotPlayerId(lms);
       res.json({
         results: await lms.spotifyChildren(
           playerId,
@@ -727,6 +723,10 @@ function uniquePlayableInputs(tracks) {
 function playableTrackInputKey(track) {
   if (!track || typeof track !== "object") return "";
   return String(track.uri || track.path || track.lmsTrackId || "").trim().toLowerCase();
+}
+
+function spotifyBrowsingAvailable() {
+  return Boolean(appState.services.spotify.configured) && appState.services.spotify.reachable !== false;
 }
 
 async function checkUrl(url) {

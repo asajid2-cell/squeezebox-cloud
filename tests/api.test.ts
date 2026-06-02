@@ -433,6 +433,40 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.results[0]).toMatchObject({ title: "Playlist Track", kind: "track" });
   });
 
+  it("returns fast empty Spotify results when Spotty is configured but unreachable", async () => {
+    const previousSpotify = { ...appState.services.spotify };
+    const calls: string[] = [];
+    const lms = {
+      ...mockLms,
+      async spotifySearch() {
+        calls.push("search");
+        return [];
+      },
+      async spotifyLibrary() {
+        calls.push("library");
+        return [];
+      },
+      async spotifyChildren() {
+        calls.push("children");
+        return [];
+      }
+    };
+    appState.services.spotify = { configured: true, reachable: false, detail: "Reauthorize Spotty in LMS" };
+    try {
+      const app = createApp({ lms });
+      const search = await request(app).get("/api/spotify/search?q=drake").expect(200);
+      const library = await request(app).get("/api/spotify/library?type=playlists").expect(200);
+      const children = await request(app).get("/api/spotify/children?uri=spotify%3Aplaylist%3A1&kind=playlist").expect(200);
+
+      expect(search.body.results).toEqual([]);
+      expect(library.body.results).toEqual([]);
+      expect(children.body.results).toEqual([]);
+      expect(calls).toEqual([]);
+    } finally {
+      appState.services.spotify = previousSpotify;
+    }
+  });
+
   it("accepts only validated audio uploads", async () => {
     const previousUploadDir = config.uploadDir;
     const previousMusicDir = config.musicSourceDir;

@@ -391,7 +391,9 @@ export class LmsClient {
   async spotifyStatus() {
     try {
       const spotty = await this.detectSpottyFromConfig();
-      if (spotty.configured) return spotty;
+      if (spotty.configured) {
+        return { ...spotty, ...(await this.verifySpottyAvailability()) };
+      }
 
       const [favorites, serverStatus] = await Promise.all([
         this.command("favorites items 0 50 tags:py").catch(() => ""),
@@ -429,6 +431,40 @@ export class LmsClient {
     } catch {
       return { configured: false, reachable: true, detail: "Spotty config file was not found in LMS config" };
     }
+  }
+
+  async verifySpottyAvailability() {
+    const playerCountResponse = await this.command("player count ?").catch(() => "");
+    const playerCount = Number(lastToken(playerCountResponse));
+    if (!Number.isFinite(playerCount) || playerCount < 1) {
+      return {
+        reachable: false,
+        detail: "Spotty is configured, but no LMS player is connected for Spotify browsing"
+      };
+    }
+
+    const playerIdResponse = await this.command("player id 0 ?");
+    const playerId = decodeURIComponent(lastToken(playerIdResponse));
+    const response = await withDeadline(
+      this.jsonRequest([playerId, ["spotty", "items", 0, 6, "menu:spotty", "item_id:1.0", "search:drake", "cachesearch:1"]]),
+      Math.min(this.timeoutMs + 300, 1800),
+      null
+    );
+    const items = response?.result?.item_loop || response?.result?.loop_loop || [];
+    if (spotifyPlayableItems(items, "track").length > 0 || items.some(hasSpottyNavigationAction)) {
+      return {
+        reachable: true,
+        detail: "Spotty is installed and Spotify browsing is responding"
+      };
+    }
+
+    const text = items.map((item) => String(item.text || item.name || "")).join(" ").toLowerCase();
+    return {
+      reachable: false,
+      detail: text.includes("empty")
+        ? "Spotty is configured, but Spotify returned an empty browsing response. Reauthorize Spotty in LMS."
+        : "Spotty is configured, but Spotify browsing is not responding. Reauthorize Spotty in LMS."
+    };
   }
 
   async musicInfoStatus() {
@@ -572,6 +608,13 @@ function spotifyPlayableItems(items, kind = "track") {
   return items
     .filter((item) => item.presetParams?.favorites_url)
     .map((item) => ({ ...item, resultKind: spotifyKind(item.presetParams.favorites_url, item.presetParams.favorites_type, kind) }));
+}
+
+function hasSpottyNavigationAction(item) {
+  const action = String(item?.action || "").toLowerCase();
+  const style = String(item?.style || "").toLowerCase();
+  const itemId = item?.actions?.go?.params?.item_id || item?.params?.item_id;
+  return Boolean(itemId) && action !== "none" && !style.includes("itemnoaction");
 }
 
 function parseSpotifyText(value) {

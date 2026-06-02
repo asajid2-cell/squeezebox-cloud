@@ -19,6 +19,9 @@ try {
   const health = await requestJson("/health");
   assert(health.ok === true, "health endpoint did not return ok=true");
 
+  const spotifyStatus = await requestJson("/spotify/status");
+  assert(spotifyStatus.configured === true, "Spotify/Spotty is not configured on public status");
+
   const state = await requestJson("/state");
   assert(state.player?.connected === true, "LMS player is not connected on public state");
   assert(state.services?.spotify?.configured === true, "Spotify/Spotty is not configured on public state");
@@ -31,9 +34,14 @@ try {
   await assertInvalidPlaybackSettings();
   await assertQueueCrud();
   await assertPlayableDuplicateRejection();
-  await assertSpotifyContainersOpenToTracks();
-  await assertSpotifyLibrarySections();
   await assertSpotifyContainersCannotPlayDirectly();
+  if (spotifyStatus.reachable === false || state.services?.spotify?.reachable === false) {
+    await assertSpotifyUnavailableResponses();
+    console.log(`Spotify content checks skipped: ${spotifyStatus.detail || state.services?.spotify?.detail || "Spotify browsing unavailable"}`);
+  } else {
+    await assertSpotifyContainersOpenToTracks();
+    await assertSpotifyLibrarySections();
+  }
   await assertLocalStream(search.results);
   await assertMalformedStreamRange(search.results);
   await assertBatchQueueAndShuffle();
@@ -231,14 +239,37 @@ async function assertSpotifyLibrarySections() {
 }
 
 async function assertSpotifyContainersCannotPlayDirectly() {
-  const search = await requestJson("/spotify/search?q=drake&limit=12");
-  const container = (search.results || []).find((item) => item.kind && item.kind !== "track" && item.uri);
-  assert(container, "Spotify search did not expose a container result to verify direct-play rejection");
   const rejected = await requestJson("/player/track", {
     method: "POST",
-    body: { action: "play-now", track: container }
+    body: {
+      action: "play-now",
+      track: {
+        id: "spotify:playlist:smoke-container",
+        title: "Smoke Container",
+        artist: "Spotify",
+        source: "Spotify playlist",
+        uri: "spotify:playlist:smoke-container",
+        kind: "playlist"
+      }
+    }
   }, { expectedStatus: 400 });
   assert(rejected.error === "Playable local path, LMS track id, or Spotify URI is required", "Spotify container direct-play rejection returned an unexpected error");
+}
+
+async function assertSpotifyUnavailableResponses() {
+  const endpoints = [
+    "/spotify/search?q=drake&limit=8",
+    "/spotify/library?type=playlists&limit=8",
+    "/spotify/children?uri=spotify%3Aplaylist%3Asmoke&kind=playlist&limit=8"
+  ];
+  for (const endpoint of endpoints) {
+    const started = performance.now();
+    const body = await requestJson(endpoint);
+    const elapsed = Math.round(performance.now() - started);
+    assert(Array.isArray(body.results), `${endpoint} did not return a results array while Spotify is unavailable`);
+    assert(body.results.length === 0, `${endpoint} returned results while Spotify is unavailable`);
+    assert(elapsed < 500, `${endpoint} was too slow while Spotify is unavailable: ${elapsed}ms`);
+  }
 }
 
 async function assertLocalStream(searchResults) {

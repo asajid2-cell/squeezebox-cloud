@@ -193,6 +193,29 @@ describe("LMS client parsing", () => {
     config.lmsConfigDir = previousConfigDir;
   });
 
+  it("reports configured Spotty as unreachable when browsing returns only an empty no-action row", async () => {
+    const previousConfigDir = config.lmsConfigDir;
+    config.lmsConfigDir = path.resolve("tests", "fixtures", "lms-config");
+    const client = new LmsClient();
+    client.command = async (command: string) => {
+      if (command === "player count ?") return "player count 1";
+      if (command === "player id 0 ?") return "player id 0 player-1";
+      return "ok";
+    };
+    client.jsonRequest = async () => ({
+      result: {
+        item_loop: [{ action: "none", type: "text", style: "itemNoAction", text: "Empty" }]
+      }
+    });
+
+    const status = await client.spotifyStatus();
+
+    expect(status.configured).toBe(true);
+    expect(status.reachable).toBe(false);
+    expect(status.detail).toContain("Reauthorize Spotty");
+    config.lmsConfigDir = previousConfigDir;
+  });
+
   it("plays local tracks by resolved LMS track id", async () => {
     const requests: unknown[] = [];
     const client = new LmsClient();
