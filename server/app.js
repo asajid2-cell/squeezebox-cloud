@@ -60,6 +60,13 @@ export function createApp({ lms = new LmsClient() } = {}) {
   const app = express();
   app.use(cors());
   app.use(express.json());
+  app.use((error, _req, res, next) => {
+    if (error?.type === "entity.parse.failed") {
+      res.status(400).json({ error: "Invalid JSON request body" });
+      return;
+    }
+    next(error);
+  });
   const shuffleMonitor = setInterval(() => {
     if (appState.playback.smartQueue || appState.queue.length > 0) refreshLms(lms, { maintainPlayback: true }).catch(() => null);
   }, 8000);

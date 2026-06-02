@@ -98,6 +98,16 @@ describe("Cloud Squeeze API", () => {
     expect(first.id).not.toBe(second.id);
   });
 
+  it("returns a compact error for malformed JSON bodies", async () => {
+    const response = await request(createApp({ lms: mockLms }))
+      .post("/api/player/playback")
+      .set("content-type", "application/json")
+      .send("{bad-json")
+      .expect(400);
+
+    expect(response.body).toEqual({ error: "Invalid JSON request body" });
+  });
+
   it("updates player volume", async () => {
     const response = await request(createApp({ lms: mockLms })).post("/api/player/volume").send({ volume: 33 }).expect(200);
     expect(response.body.volume).toBe(33);
