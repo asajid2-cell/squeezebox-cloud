@@ -24,6 +24,9 @@ try {
   assert(Array.isArray(search.results) && search.results.length > 0, "public library search returned no results");
 
   await assertMalformedJson();
+  await assertQueueCrud();
+  await assertSpotifyContainersOpenToTracks();
+  await assertLocalStream(search.results);
   await assertBatchQueueAndShuffle();
 
   const slow = latency.filter((row) => row.avgMs > latencyBudgetMs);
@@ -54,6 +57,27 @@ async function assertBatchQueueAndShuffle() {
     "batch queue did not preserve order"
   );
 
+  const playNext = await requestJson("/player/tracks", {
+    method: "POST",
+    body: {
+      action: "play-next",
+      tracks: [
+        { title: "Smoke Verify Three", artist: "CloudSqueeze", uri: "spotify:track:smokethree", source: "Spotify", kind: "track" },
+        { title: "Smoke Verify Four", artist: "CloudSqueeze", uri: "spotify:track:smokefour", source: "Spotify", kind: "track" },
+        { title: "Smoke Verify Five", artist: "CloudSqueeze", uri: "spotify:track:smokefive", source: "Spotify", kind: "track" }
+      ]
+    }
+  });
+  for (const item of playNext.queued || []) createdQueueIds.push(item.id);
+  assert(
+    (playNext.queued || []).map((item) => item.title).join("|") === "Smoke Verify Three|Smoke Verify Four|Smoke Verify Five",
+    "play-next batch response did not preserve playlist order"
+  );
+  assert(
+    (playNext.queue || []).slice(0, 3).map((item) => item.title).join("|") === "Smoke Verify Three|Smoke Verify Four|Smoke Verify Five",
+    "play-next batch did not place playlist songs at the front in order"
+  );
+
   const playback = await requestJson("/player/playback", {
     method: "POST",
     body: { shuffle: true, smartQueue: false }
@@ -73,6 +97,62 @@ async function assertBatchQueueAndShuffle() {
   const after = await requestJson("/state");
   const leftovers = (after.queue || []).filter((item) => item.title?.startsWith("Smoke Verify "));
   assert(leftovers.length === 0, "smoke queue rows were not cleaned up");
+}
+
+async function assertQueueCrud() {
+  const title = `Smoke Verify Crud ${Date.now()}`;
+  const created = await requestJson("/queue", {
+    method: "POST",
+    body: { title, artist: "CloudSqueeze", source: "Smoke" }
+  }, { expectedStatus: 201 });
+  createdQueueIds.push(created.id);
+
+  const duplicate = await requestJson("/queue", {
+    method: "POST",
+    body: { title, artist: "CloudSqueeze", source: "Smoke" }
+  }, { expectedStatus: 409 });
+  assert(duplicate.error === "That song is already in the queue", "duplicate queue item did not return the expected error");
+
+  const edited = await requestJson(`/queue/${encodeURIComponent(created.id)}`, {
+    method: "PATCH",
+    body: { title: `${title} Edited`, artist: "Verifier" }
+  });
+  assert(edited.item?.title === `${title} Edited` && edited.item?.artist === "Verifier", "queue edit did not persist");
+
+  const moved = await requestJson(`/queue/${encodeURIComponent(created.id)}/move`, {
+    method: "POST",
+    body: { direction: "up" }
+  });
+  assert(moved.item?.id === created.id, "queue move did not return the target item");
+}
+
+async function assertSpotifyContainersOpenToTracks() {
+  const library = await requestJson("/spotify/library?type=playlists&limit=8");
+  const playlist = (library.results || []).find((item) => item.kind === "playlist" && (item.uri || item.browseId));
+  assert(playlist, "Spotify playlist library did not expose a playlist container");
+
+  const params = new URLSearchParams();
+  if (playlist.browseId) params.set("browseId", String(playlist.browseId));
+  if (playlist.uri) params.set("uri", String(playlist.uri));
+  params.set("kind", "playlist");
+  params.set("limit", "25");
+  const children = await requestJson(`/spotify/children?${params.toString()}`);
+  const tracks = (children.results || []).filter((item) => !item.kind || item.kind === "track");
+  assert(tracks.length > 0, "Spotify playlist children did not expose playable tracks");
+  assert(tracks.every((item) => String(item.uri || "").includes(":track:")), "Spotify playlist children included non-track items");
+}
+
+async function assertLocalStream(searchResults) {
+  const local = (searchResults || []).find((item) => item.path);
+  assert(local, "public library search did not return a local playable path");
+  const encoded = Buffer.from(local.path, "utf8").toString("base64url");
+  const response = await fetch(`${baseUrl}/stream/${encoded}/${encodeURIComponent(local.title || "track")}`, {
+    headers: { range: "bytes=0-31" },
+    signal: AbortSignal.timeout(15000)
+  });
+  await response.arrayBuffer();
+  assert(response.status === 206, `local stream range returned HTTP ${response.status}, expected 206`);
+  assert(response.headers.get("content-range")?.startsWith("bytes 0-"), "local stream range missing content-range header");
 }
 
 async function assertMalformedJson() {
@@ -118,7 +198,7 @@ async function measureLatency(paths) {
   return rows;
 }
 
-async function requestJson(path, { method = "GET", body } = {}) {
+async function requestJson(path, { method = "GET", body } = {}, { expectedStatus = 200 } = {}) {
   const response = await fetch(`${baseUrl}${path}`, {
     method,
     headers: body ? { "content-type": "application/json" } : undefined,
@@ -127,7 +207,11 @@ async function requestJson(path, { method = "GET", body } = {}) {
   });
   const text = await response.text();
   const data = text ? JSON.parse(text) : {};
-  assert(response.ok, `${path} returned HTTP ${response.status}: ${text.slice(0, 160)}`);
+  if (expectedStatus) {
+    assert(response.status === expectedStatus, `${path} returned HTTP ${response.status}, expected ${expectedStatus}: ${text.slice(0, 160)}`);
+  } else {
+    assert(response.ok, `${path} returned HTTP ${response.status}: ${text.slice(0, 160)}`);
+  }
   return data;
 }
 

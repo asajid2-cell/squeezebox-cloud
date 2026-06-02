@@ -4,6 +4,9 @@ import path from "node:path";
 import { config } from "./state.js";
 import { fileToTrack } from "./library.js";
 
+const spotifySearchCacheMs = 2 * 60 * 1000;
+const spotifyBrowseCacheMs = 5 * 60 * 1000;
+
 export class LmsClient {
   constructor(options = {}) {
     this.host = options.host || config.lmsHost;
@@ -305,7 +308,7 @@ export class LmsClient {
     const results = uniqueByUri([...directPlayable.slice(0, firstPageTrackCount), ...categoryPlayable, ...directPlayable.slice(firstPageTrackCount)])
       .map((item) => spotifyItemToTrack(item))
       .slice(0, count);
-    this.setCached(cacheKey, results, 45000);
+    this.setCached(cacheKey, results, spotifySearchCacheMs);
     return results;
   }
 
@@ -329,7 +332,7 @@ export class LmsClient {
     const response = await this.jsonRequest([playerId, ["spotty", "items", start, count, "menu:spotty", `item_id:${selection.id}`]]);
     const items = response?.result?.item_loop || response?.result?.loop_loop || [];
     const results = spotifyPlayableItems(items, selection.kind).map((item) => spotifyItemToTrack(item));
-    this.setCached(cacheKey, results, 60000);
+    this.setCached(cacheKey, results, spotifyBrowseCacheMs);
     return results;
   }
 
@@ -347,7 +350,7 @@ export class LmsClient {
       const items = response?.result?.item_loop || response?.result?.loop_loop || [];
       const tracks = spotifyPlayableItems(items, "track").map((item) => spotifyItemToTrack(item));
       if (tracks.length > 0) {
-        this.setCached(cacheKey, tracks, 60000);
+        this.setCached(cacheKey, tracks, spotifyBrowseCacheMs);
         return tracks;
       }
     }
