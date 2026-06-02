@@ -25,20 +25,26 @@ import {
 import { clearLibraryCaches, getCollections, getCollectionTracks, saveUploadedTrack, scanLibrary, searchLibrary } from "./library.js";
 import { enrichTrackInfo } from "./trackInfo.js";
 
+const requiredText = z.string().trim().min(1);
+const optionalText = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+  z.string().trim().optional()
+);
+
 const queueSchema = z.object({
-  title: z.string().min(1),
-  artist: z.string().optional(),
-  album: z.string().optional(),
-  source: z.string().optional(),
-  path: z.string().optional(),
-  requestedBy: z.string().optional()
+  title: requiredText,
+  artist: optionalText,
+  album: optionalText,
+  source: optionalText,
+  path: optionalText,
+  requestedBy: optionalText
 });
 
 const queueUpdateSchema = z.object({
-  title: z.string().min(1).optional(),
-  artist: z.string().min(1).optional(),
-  album: z.string().optional(),
-  requestedBy: z.string().min(1).optional()
+  title: requiredText.optional(),
+  artist: requiredText.optional(),
+  album: optionalText,
+  requestedBy: requiredText.optional()
 });
 
 const volumeSchema = z.object({

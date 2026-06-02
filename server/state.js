@@ -87,17 +87,17 @@ export function getPublicState() {
 export function addQueueItem(input) {
   const item = {
     id: nextQueueId(),
-    title: input.title,
-    artist: input.artist || "Unknown artist",
-    album: input.album,
-    source: input.source || "Local library",
-    path: input.path,
+    title: cleanText(input.title) || "Untitled track",
+    artist: cleanText(input.artist) || "Unknown artist",
+    album: cleanText(input.album),
+    source: cleanText(input.source) || "Local library",
+    path: cleanText(input.path),
     uri: input.uri,
     art: input.art,
     kind: input.kind,
     uploaded: input.uploaded,
     lmsTrackId: input.lmsTrackId,
-    requestedBy: input.requestedBy || "guest",
+    requestedBy: cleanText(input.requestedBy) || "guest",
     etaMinutes: nextEta()
   };
   appState.queue.push(item);
@@ -109,17 +109,17 @@ export function addQueueItem(input) {
 export function addQueueItemNext(input) {
   const item = {
     id: nextQueueId(),
-    title: input.title,
-    artist: input.artist || "Unknown artist",
-    album: input.album,
-    source: input.source || "Local library",
-    path: input.path,
+    title: cleanText(input.title) || "Untitled track",
+    artist: cleanText(input.artist) || "Unknown artist",
+    album: cleanText(input.album),
+    source: cleanText(input.source) || "Local library",
+    path: cleanText(input.path),
     uri: input.uri,
     art: input.art,
     kind: input.kind,
     uploaded: input.uploaded,
     lmsTrackId: input.lmsTrackId,
-    requestedBy: input.requestedBy || "guest",
+    requestedBy: cleanText(input.requestedBy) || "guest",
     etaMinutes: 7
   };
   appState.queue.unshift(item);
@@ -219,6 +219,11 @@ function recalculateQueueEtas() {
 function nextQueueId() {
   queueIdCounter += 1;
   return `q-${Date.now()}-${queueIdCounter}`;
+}
+
+function cleanText(value) {
+  if (typeof value !== "string") return value;
+  return value.trim() || undefined;
 }
 
 function expandPath(value) {

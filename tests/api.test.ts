@@ -75,6 +75,18 @@ describe("Cloud Squeeze API", () => {
     await request(app).post("/api/queue").send(payload).expect(409);
   });
 
+  it("trims queue text fields and rejects whitespace-only titles", async () => {
+    const app = createApp({ lms: mockLms });
+    await request(app).post("/api/queue").send({ title: "   ", artist: "Tester" }).expect(400);
+
+    const created = await request(app)
+      .post("/api/queue")
+      .send({ title: "  Trimmed Track  ", artist: "  Trimmed Artist  ", requestedBy: "  guest  " })
+      .expect(201);
+
+    expect(created.body).toMatchObject({ title: "Trimmed Track", artist: "Trimmed Artist", requestedBy: "guest" });
+  });
+
   it("edits reorders and removes queue items", async () => {
     const app = createApp({ lms: mockLms });
     const first = await request(app).post("/api/queue").send({ title: "First", artist: "Tester" }).expect(201);
@@ -82,6 +94,7 @@ describe("Cloud Squeeze API", () => {
 
     const edited = await request(app).patch(`/api/queue/${first.body.id}`).send({ title: "Edited First" }).expect(200);
     expect(edited.body.item.title).toBe("Edited First");
+    await request(app).patch(`/api/queue/${first.body.id}`).send({ title: "   " }).expect(400);
 
     const moved = await request(app).post(`/api/queue/${second.body.id}/move`).send({ direction: "up" }).expect(200);
     const movedIds = moved.body.queue.map((item: { id: string }) => item.id);
