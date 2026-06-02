@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createApp, shouldNudgePlayback } from "../server/app.js";
+import { createApp, nextQueueItemForPlayback, shouldNudgePlayback } from "../server/app.js";
 import { addQueueItem, appState, config, removeQueueItem } from "../server/state.js";
 
 const mockLms = {
@@ -911,6 +911,15 @@ describe("Cloud Squeeze API", () => {
 
     expect(response.body.playback.smartQueue).toBe(false);
     expect(response.body.queue).toEqual([expect.objectContaining({ title: "Manual Next", requestedBy: "guest" })]);
+  });
+
+  it("keeps background smart-queue auto-advance off manual rows", () => {
+    const manual = { title: "Manual Keeper", requestedBy: "guest", uri: "spotify:track:manual" };
+    const generated = { title: "Generated Pick", requestedBy: "smart shuffle", uri: "spotify:track:generated" };
+
+    expect(nextQueueItemForPlayback([manual, generated])).toBe(manual);
+    expect(nextQueueItemForPlayback([manual, generated], { generatedOnly: true })).toBe(generated);
+    expect(nextQueueItemForPlayback([manual], { generatedOnly: true })).toBeNull();
   });
 
   it("plays the next smart shuffle item from the visible queue", async () => {

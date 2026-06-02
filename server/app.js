@@ -1024,7 +1024,7 @@ async function maintainSmartShuffle(lms, status, track) {
   const needsPlaybackNudge = shouldNudgePlayback(status, track);
   const queued = await ensureSmartShuffleQueue(lms, status.id, { force: needsPlaybackNudge });
   if (needsPlaybackNudge && queued.length > 0) {
-    await playNextVisibleQueueItem(lms, status.id);
+    await playNextVisibleQueueItem(lms, status.id, { generatedOnly: true });
   }
 }
 
@@ -1038,7 +1038,7 @@ async function maintainVisiblePlaybackQueue(lms, status, track) {
   const needsPlaybackNudge = shouldNudgePlayback(status, track);
   if (needsPlaybackNudge && appState.queue.length > 0) {
     logEvent("queue.auto-advance", { reason: "near-track-end", queue: queueSummary(), nowPlaying: trackSummary(track) });
-    await playNextVisibleQueueItem(lms, status.id);
+    await playNextVisibleQueueItem(lms, status.id, { generatedOnly: true });
   }
 }
 
@@ -1073,15 +1073,15 @@ function addGeneratedQueueItem(track, mode = appState.playback.smartShuffleSourc
   return addQueueItem({ ...track, requestedBy });
 }
 
-async function playNextVisibleQueueItem(lms, playerId) {
+async function playNextVisibleQueueItem(lms, playerId, { generatedOnly = false } = {}) {
   if (appState.playback.smartQueue || appState.playback.shuffle) {
     lms.control(playerId, "shuffle", false).catch(() => null);
   }
   await topOffGeneratedQueue(lms, playerId);
-  const next = appState.queue[0];
+  const next = nextQueueItemForPlayback(appState.queue, { generatedOnly });
   if (!next) {
     await ensureSmartShuffleQueue(lms, playerId, { force: true });
-    const refilled = appState.queue[0];
+    const refilled = nextQueueItemForPlayback(appState.queue, { generatedOnly });
     if (!refilled) {
       logEvent("queue.next-empty", { playback: appState.playback, queue: queueSummary() });
       return null;
@@ -1089,6 +1089,11 @@ async function playNextVisibleQueueItem(lms, playerId) {
     return playQueuedItem(lms, playerId, refilled);
   }
   return playQueuedItem(lms, playerId, next);
+}
+
+export function nextQueueItemForPlayback(queue = appState.queue, { generatedOnly = false } = {}) {
+  if (!generatedOnly) return queue[0] || null;
+  return queue.find(isGeneratedQueueItem) || null;
 }
 
 async function playQueuedItem(lms, playerId, item) {
@@ -1102,8 +1107,12 @@ async function playQueuedItem(lms, playerId, item) {
 
 function removeGeneratedQueueItems() {
   for (const item of [...appState.queue]) {
-    if (item.requestedBy === "smart shuffle" || item.requestedBy === "shuffle") removeQueueItem(item.id);
+    if (isGeneratedQueueItem(item)) removeQueueItem(item.id);
   }
+}
+
+function isGeneratedQueueItem(item) {
+  return item?.requestedBy === "smart shuffle" || item?.requestedBy === "shuffle";
 }
 
 function stopGeneratedPlayback() {
