@@ -72,6 +72,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
     if (appState.playback.smartQueue || appState.queue.length > 0) refreshLms(lms, { maintainPlayback: true }).catch(() => null);
   }, 8000);
   shuffleMonitor.unref?.();
+  const startupRefresh = setTimeout(() => {
+    refreshLms(lms, { force: true, skipTrackInfo: true }).catch(() => null);
+  }, 250);
+  startupRefresh.unref?.();
 
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, service: "cloud-squeeze" });
