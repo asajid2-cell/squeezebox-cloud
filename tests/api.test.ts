@@ -434,6 +434,29 @@ describe("Cloud Squeeze API", () => {
     }
   });
 
+  it("deduplicates concurrent library rescans", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const previousUploadDir = config.uploadDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-rescan-"));
+    config.musicSourceDir = root;
+    config.uploadDir = path.join(root, "uploads");
+    const app = createApp({ lms: mockLms });
+    try {
+      await fs.writeFile(path.join(root, "Artist - One.mp3"), "ID3");
+      const [first, second] = await Promise.all([
+        request(app).post("/api/library/rescan").expect(200),
+        request(app).post("/api/library/rescan").expect(200)
+      ]);
+
+      expect(first.body.trackCount).toBe(second.body.trackCount);
+      expect(first.body.sample.map((track: { title: string }) => track.title)).toEqual(second.body.sample.map((track: { title: string }) => track.title));
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      config.uploadDir = previousUploadDir;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("updates shuffle and repeat playback settings", async () => {
     const previousMusicDir = config.musicSourceDir;
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-empty-library-"));

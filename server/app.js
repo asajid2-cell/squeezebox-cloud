@@ -68,6 +68,7 @@ const trackInfoBudgetMs = Number(process.env.TRACK_INFO_BUDGET_MS || 1800);
 const refreshState = { promise: null, updatedAt: 0, servicesAt: 0, trackInfoAt: 0, trackKey: "", trackInfoPromise: null, trackInfoPendingKey: "" };
 const prewarmState = { key: "", at: 0 };
 const spotifyLibraryPrewarmState = { playerId: "", at: 0 };
+const libraryRescanState = { promise: null };
 const debugLog = [];
 const debugLogLimit = 500;
 const debugLogPath = process.env.CLOUD_SQUEEZE_LOG_PATH || "/tmp/cloud-squeeze-events.jsonl";
@@ -340,9 +341,8 @@ export function createApp({ lms = new LmsClient() } = {}) {
   });
 
   app.post("/api/library/rescan", async (_req, res) => {
-    clearLibraryCaches();
-    const tracks = await scanLibrary(undefined, 5000, "all");
-    res.json({ trackCount: tracks.length, sample: tracks.slice(0, 5), status: appState.services.localLibrary });
+    const result = await rescanLibraryOnce();
+    res.json(result);
   });
 
   app.post("/api/library/upload", express.raw({ type: "application/octet-stream", limit: "80mb" }), async (req, res) => {
@@ -660,6 +660,19 @@ function trackSummary(track) {
     path: track.path,
     lmsTrackId: track.lmsTrackId
   };
+}
+
+async function rescanLibraryOnce() {
+  if (!libraryRescanState.promise) {
+    libraryRescanState.promise = (async () => {
+      clearLibraryCaches();
+      const tracks = await scanLibrary(undefined, 5000, "all");
+      return { trackCount: tracks.length, sample: tracks.slice(0, 5), status: appState.services.localLibrary };
+    })().finally(() => {
+      libraryRescanState.promise = null;
+    });
+  }
+  return libraryRescanState.promise;
 }
 
 function optimisticTrack(track) {
