@@ -220,6 +220,39 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.queued[0].title).toBe("Playable Track");
   });
 
+  it("rejects duplicate direct playback queue requests by playable key", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const app = createApp({ lms: mockLms });
+    const track = { title: "Duplicate Spotify Track", uri: "spotify:track:duplicate", kind: "track", source: "Spotify" };
+
+    await request(app).post("/api/player/track").send({ action: "add-queue", track }).expect(200);
+    const duplicate = await request(app).post("/api/player/track").send({ action: "add-queue", track }).expect(409);
+
+    expect(duplicate.body.error).toBe("That song is already in the queue");
+    expect(appState.queue.filter((item) => item.uri === track.uri)).toHaveLength(1);
+  });
+
+  it("deduplicates batch playback by playable key", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    addQueueItem({ title: "Existing", artist: "Tester", uri: "spotify:track:existing", kind: "track" });
+
+    const response = await request(createApp({ lms: mockLms }))
+      .post("/api/player/tracks")
+      .send({
+        action: "add-queue",
+        tracks: [
+          { title: "Existing Again", uri: "spotify:track:existing", kind: "track", source: "Spotify" },
+          { title: "New Track", uri: "spotify:track:new", kind: "track", source: "Spotify" },
+          { title: "New Track Duplicate", uri: "spotify:track:new", kind: "track", source: "Spotify" }
+        ]
+      })
+      .expect(200);
+
+    expect(response.body.queued).toHaveLength(1);
+    expect(response.body.queued[0].title).toBe("New Track");
+    expect(appState.queue.filter((item) => item.uri === "spotify:track:new")).toHaveLength(1);
+  });
+
   it("keeps queued tracks visible until next consumes them", async () => {
     appState.queue.splice(0, appState.queue.length);
     const played: Array<{ action: string; track: { title?: string } }> = [];

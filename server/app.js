@@ -183,10 +183,18 @@ export function createApp({ lms = new LmsClient() } = {}) {
       logEvent("track.request", { action, track: trackSummary(track), playerId });
       let queued = null;
       if (action === "add-queue") {
+        if (queuedTrackInputExists(track)) {
+          res.status(409).json({ error: "That song is already in the queue", queue: appState.queue });
+          return;
+        }
         queued = addQueueItem({ ...track, requestedBy: "guest" });
         logEvent("queue.add", { action, queued: trackSummary(queued), queue: queueSummary() });
         runPlaybackCommand(lms, playerId, queued, "add-queue");
       } else if (action === "play-next") {
+        if (queuedTrackInputExists(track)) {
+          res.status(409).json({ error: "That song is already in the queue", queue: appState.queue });
+          return;
+        }
         queued = addQueueItemNext({ ...track, requestedBy: "guest" });
         logEvent("queue.add-next", { action, queued: trackSummary(queued), queue: queueSummary() });
         runPlaybackCommand(lms, playerId, queued, "play-next");
@@ -222,8 +230,14 @@ export function createApp({ lms = new LmsClient() } = {}) {
       return;
     }
 
+    const uniquePlayable = uniquePlayableInputs(playable);
+    if (uniquePlayable.length === 0) {
+      res.status(409).json({ error: "Those songs are already in the queue", queue: appState.queue });
+      return;
+    }
+
     const queued = [];
-    const ordered = action === "play-next" ? [...playable].reverse() : playable;
+    const ordered = action === "play-next" ? [...uniquePlayable].reverse() : uniquePlayable;
     for (const track of ordered) {
       const item = action === "play-next"
         ? addQueueItemNext({ ...track, requestedBy: "guest" })
@@ -636,6 +650,29 @@ function isPlayableTrackInput(track) {
   const kind = String(track.kind || "").toLowerCase();
   if (kind && kind !== "track") return false;
   return String(track.uri).includes(":track:");
+}
+
+function queuedTrackInputExists(track) {
+  const key = playableTrackInputKey(track);
+  if (!key) return false;
+  return appState.queue.some((item) => playableTrackInputKey(item) === key);
+}
+
+function uniquePlayableInputs(tracks) {
+  const seen = new Set(appState.queue.map(playableTrackInputKey).filter(Boolean));
+  const unique = [];
+  for (const track of tracks) {
+    const key = playableTrackInputKey(track);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(track);
+  }
+  return unique;
+}
+
+function playableTrackInputKey(track) {
+  if (!track || typeof track !== "object") return "";
+  return String(track.uri || track.path || track.lmsTrackId || "").trim().toLowerCase();
 }
 
 async function checkUrl(url) {

@@ -27,6 +27,7 @@ try {
 
   await assertMalformedJson();
   await assertQueueCrud();
+  await assertPlayableDuplicateRejection();
   await assertSpotifyContainersOpenToTracks();
   await assertSpotifyLibrarySections();
   await assertSpotifyContainersCannotPlayDirectly();
@@ -175,6 +176,28 @@ async function assertQueueCrud() {
     body: { direction: "up" }
   });
   assert(moved.item?.id === created.id, "queue move did not return the target item");
+}
+
+async function assertPlayableDuplicateRejection() {
+  const title = `Smoke Verify Duplicate ${Date.now()}`;
+  const first = await requestJson("/player/tracks", {
+    method: "POST",
+    body: {
+      action: "add-queue",
+      tracks: [{ title, artist: "CloudSqueeze", uri: "spotify:track:smokeduplicate", source: "Spotify", kind: "track" }]
+    }
+  });
+  for (const item of first.queued || []) createdQueueIds.push(item.id);
+  assert((first.queued || []).length === 1, "first duplicate smoke insert did not queue one row");
+
+  const duplicate = await requestJson("/player/tracks", {
+    method: "POST",
+    body: {
+      action: "add-queue",
+      tracks: [{ title, artist: "CloudSqueeze", uri: "spotify:track:smokeduplicate", source: "Spotify", kind: "track" }]
+    }
+  }, { expectedStatus: 409 });
+  assert(duplicate.error === "Those songs are already in the queue", "batch duplicate rejection returned an unexpected error");
 }
 
 async function assertSpotifyContainersOpenToTracks() {
