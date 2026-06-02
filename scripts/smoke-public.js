@@ -28,6 +28,7 @@ try {
   await assertSpotifyContainersOpenToTracks();
   await assertLocalStream(search.results);
   await assertBatchQueueAndShuffle();
+  await assertSmartShuffleSources();
 
   const slow = latency.filter((row) => row.avgMs > latencyBudgetMs);
   assert(slow.length === 0, `latency budget exceeded: ${slow.map((row) => `${row.path} avg ${row.avgMs}ms`).join(", ")}`);
@@ -97,6 +98,52 @@ async function assertBatchQueueAndShuffle() {
   const after = await requestJson("/state");
   const leftovers = (after.queue || []).filter((item) => item.title?.startsWith("Smoke Verify "));
   assert(leftovers.length === 0, "smoke queue rows were not cleaned up");
+}
+
+async function assertSmartShuffleSources() {
+  const manual = await requestJson("/player/tracks", {
+    method: "POST",
+    body: {
+      action: "add-queue",
+      tracks: [
+        { title: "Smoke Verify Manual Keeper", artist: "CloudSqueeze", uri: "spotify:track:smokekeeper", source: "Spotify", kind: "track" }
+      ]
+    }
+  });
+  for (const item of manual.queued || []) createdQueueIds.push(item.id);
+
+  const spotify = await requestJson("/player/smart-shuffle", {
+    method: "POST",
+    body: { source: "spotify", count: 3, seed: "drake" }
+  });
+  const spotifyRows = (spotify.queued || []).filter((item) => item.requestedBy === "smart shuffle");
+  assert(spotify.playback?.smartQueue === true, "spotify smart shuffle did not enable smart queue");
+  assert(spotify.playback?.smartShuffleSource === "spotify", "spotify smart shuffle did not set spotify source");
+  assert(spotifyRows.length > 0, "spotify smart shuffle did not queue generated rows");
+  assert(spotifyRows.every((item) => String(item.uri || "").includes(":track:") && !item.path), "spotify smart shuffle queued non-Spotify tracks");
+
+  const local = await requestJson("/player/smart-shuffle", {
+    method: "POST",
+    body: { source: "local", count: 3, seed: "juice" }
+  });
+  const localRows = (local.queued || []).filter((item) => item.requestedBy === "smart shuffle");
+  assert(local.playback?.smartQueue === true, "local smart shuffle did not leave smart queue enabled");
+  assert(local.playback?.smartShuffleSource === "local", "local smart shuffle did not set local source");
+  assert(localRows.length > 0, "local smart shuffle did not queue generated rows");
+  assert(localRows.every((item) => item.path && !item.uri), "local smart shuffle queued Spotify or non-local tracks");
+
+  const reset = await requestJson("/player/playback", {
+    method: "POST",
+    body: { smartQueue: false, shuffle: false }
+  });
+  const generatedAfterReset = (reset.queue || []).filter((item) => item.requestedBy === "smart shuffle" || item.requestedBy === "shuffle");
+  assert(generatedAfterReset.length === 0, "turning smart queue off left generated rows behind");
+  assert((reset.queue || []).some((item) => item.title === "Smoke Verify Manual Keeper"), "turning smart queue off removed a manual queue row");
+
+  await cleanupQueue();
+  const after = await requestJson("/state");
+  const leftovers = (after.queue || []).filter((item) => item.title?.startsWith("Smoke Verify "));
+  assert(leftovers.length === 0, "smart shuffle smoke rows were not cleaned up");
 }
 
 async function assertQueueCrud() {
