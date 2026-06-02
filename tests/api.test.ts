@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createApp, nextQueueItemForPlayback, shouldNudgePlayback } from "../server/app.js";
+import { createApp, nextQueueItemForPlayback, resetRefreshStateForTests, shouldNudgePlayback } from "../server/app.js";
 import { addQueueItem, appState, config, removeQueueItem, updateNowPlaying } from "../server/state.js";
 
 const mockLms = {
@@ -240,6 +240,58 @@ describe("Cloud Squeeze API", () => {
     expect(played).toEqual([{ action: "play-now", track: expect.objectContaining({ title: "Previous Track", path: "/music/previous.mp3" }) }]);
     expect(controls).not.toContainEqual({ action: "previous" });
     expect(appState.playback.previousTracks).toEqual([]);
+  });
+
+  it("remembers LMS-observed track changes for the previous button", async () => {
+    appState.playback = { ...appState.playback, previousTracks: [] };
+    appState.nowPlaying = {
+      id: "idle",
+      title: "No track playing",
+      artist: "Connect a player or request a song",
+      album: "",
+      source: "LMS",
+      duration: 0,
+      elapsed: 0,
+      canSeek: false,
+      art: null
+    };
+    const observedTracks = [
+      { id: "track-a", title: "Track A", artist: "Tester", album: "", source: "LMS", path: "/music/a.mp3", duration: 120, elapsed: 10, canSeek: true, art: null },
+      { id: "track-b", title: "Track B", artist: "Tester", album: "", source: "LMS", path: "/music/b.mp3", duration: 120, elapsed: 5, canSeek: true, art: null }
+    ];
+    const played: Array<{ action: string; track: { title?: string; path?: string } }> = [];
+    const controls: Array<{ action: string }> = [];
+    let nowPlayingIndex = 0;
+    const lms = {
+      ...mockLms,
+      async nowPlaying() {
+        return observedTracks[nowPlayingIndex];
+      },
+      async playTrack(_playerId: string, track: { title?: string; path?: string }, action: string) {
+        played.push({ action, track });
+        return "ok";
+      },
+      async control(_playerId: string, action: string) {
+        controls.push({ action });
+        return "ok";
+      }
+    };
+    const app = createApp({ lms });
+
+    resetRefreshStateForTests();
+    await request(app).get("/api/state").expect(200);
+    nowPlayingIndex = 1;
+    resetRefreshStateForTests();
+    const state = await request(app).get("/api/state").expect(200);
+
+    expect(state.body.nowPlaying.title).toBe("Track B");
+    expect(appState.playback.previousTracks[0]).toMatchObject({ title: "Track A", path: "/music/a.mp3" });
+
+    const previous = await request(app).post("/api/player/previous").expect(200);
+
+    expect(previous.body.action).toBe("app-previous");
+    expect(played).toEqual([{ action: "play-now", track: expect.objectContaining({ title: "Track A", path: "/music/a.mp3" }) }]);
+    expect(controls).not.toContainEqual({ action: "previous" });
   });
 
   it("uses the hot player id for previous without waiting on a fresh status call", async () => {

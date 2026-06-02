@@ -70,7 +70,17 @@ const adminToken = process.env.CLOUD_SQUEEZE_ADMIN_TOKEN || "cloud-squeeze-admin
 const serviceRefreshMs = 60000;
 const trackInfoRefreshMs = 30000;
 const trackInfoBudgetMs = Number(process.env.TRACK_INFO_BUDGET_MS || 1800);
-const refreshState = { promise: null, updatedAt: 0, servicesAt: 0, trackInfoAt: 0, trackKey: "", trackInfoPromise: null, trackInfoPendingKey: "" };
+const refreshState = {
+  promise: null,
+  updatedAt: 0,
+  servicesAt: 0,
+  trackInfoAt: 0,
+  trackKey: "",
+  trackInfoPromise: null,
+  trackInfoPendingKey: "",
+  pendingPlaybackKey: "",
+  pendingPlaybackAt: 0
+};
 const prewarmState = { key: "", at: 0 };
 const spotifyLibraryPrewarmState = { playerId: "", at: 0 };
 const libraryRescanState = { promise: null };
@@ -99,11 +109,11 @@ export function createApp({ lms = new LmsClient() } = {}) {
     if (appState.playback.smartQueue || appState.queue.length > 0) refreshLms(lms, { maintainPlayback: true }).catch(() => null);
   }, 8000);
   shuffleMonitor.unref?.();
-  const startupRefresh = setTimeout(() => {
-    refreshLms(lms, { force: true, skipTrackInfo: true }).catch(() => null);
-  }, 250);
-  startupRefresh.unref?.();
   if (process.env.NODE_ENV !== "test") {
+    const startupRefresh = setTimeout(() => {
+      refreshLms(lms, { force: true, skipTrackInfo: true }).catch(() => null);
+    }, 250);
+    startupRefresh.unref?.();
     const startupLibraryScan = setTimeout(() => {
       scanLibrary(undefined, 5000, "all").catch(() => null);
     }, 500);
@@ -704,6 +714,7 @@ async function hotPlayerId(lms) {
 }
 
 function runPlaybackCommand(lms, playerId, track, action) {
+  markPendingPlayback(track);
   lms.playTrack(playerId, track, action)
     .then(() => {
       logEvent("lms.playTrack.ok", { action, track: trackSummary(track), queue: queueSummary() });
@@ -930,6 +941,7 @@ async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force =
           !skipTrackInfo &&
           isTrackInfoCandidate(track) &&
           (key !== refreshState.trackKey || Date.now() - refreshState.trackInfoAt > trackInfoRefreshMs);
+        rememberObservedTrackTransition(track);
         updateNowPlaying(track);
         if (!isTrackInfoCandidate(track)) {
           updatePlayback({ previousTracks: [] });
@@ -1176,6 +1188,34 @@ function isTrackInfoCandidate(track) {
   return Boolean(track?.title && track.id !== "idle" && track.title !== "No track playing");
 }
 
+function rememberObservedTrackTransition(track) {
+  if (!isTrackInfoCandidate(track)) return;
+  const previousKey = trackKey(appState.nowPlaying);
+  const nextKey = trackKey(track);
+  if (!previousKey || !nextKey || previousKey === nextKey) return;
+  const pendingKey = refreshState.pendingPlaybackKey;
+  if (pendingKey && Date.now() - refreshState.pendingPlaybackAt > 8000) {
+    clearPendingPlayback();
+  } else if (pendingKey && nextKey === pendingKey) {
+    clearPendingPlayback();
+  } else if (pendingKey && previousKey === pendingKey) {
+    return;
+  }
+  rememberPreviousTrack(appState.nowPlaying);
+}
+
+function markPendingPlayback(track) {
+  const key = trackKey(track);
+  if (!key) return;
+  refreshState.pendingPlaybackKey = key;
+  refreshState.pendingPlaybackAt = Date.now();
+}
+
+function clearPendingPlayback() {
+  refreshState.pendingPlaybackKey = "";
+  refreshState.pendingPlaybackAt = 0;
+}
+
 export function nextQueueItemForPlayback(queue = appState.queue, { generatedOnly = false } = {}) {
   if (!generatedOnly) return queue[0] || null;
   return queue.find(isGeneratedQueueItem) || null;
@@ -1185,6 +1225,7 @@ async function playQueuedItem(lms, playerId, item) {
   rememberPreviousTrack(appState.nowPlaying);
   removeQueueItem(item.id);
   rememberShuffleTrack(item);
+  markPendingPlayback(item);
   logEvent("queue.play-item", { item: trackSummary(item), queueAfterRemove: queueSummary(), playback: appState.playback });
   await lms.playTrack(playerId, item, "play-now");
   return item;
@@ -1245,6 +1286,17 @@ export function shouldNudgePlayback(status, track, playback = appState.playback)
   const duration = Number(track?.duration || 0);
   const elapsed = Number(track?.elapsed || 0);
   return duration > 0 && elapsed >= duration - 2;
+}
+
+export function resetRefreshStateForTests() {
+  refreshState.promise = null;
+  refreshState.updatedAt = 0;
+  refreshState.servicesAt = 0;
+  refreshState.trackInfoAt = 0;
+  refreshState.trackKey = "";
+  refreshState.trackInfoPromise = null;
+  refreshState.trackInfoPendingKey = "";
+  clearPendingPlayback();
 }
 
 function trackKey(track) {
