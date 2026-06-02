@@ -13,12 +13,12 @@ const resultCache = new Map();
 const scanCacheMs = Number(process.env.LIBRARY_SCAN_CACHE_MS || 5 * 60 * 1000);
 const resultCacheMs = Number(process.env.LIBRARY_RESULT_CACHE_MS || 2 * 60 * 1000);
 
-export async function scanLibrary(root = null, limit = 5000, source = "all") {
-  if (!root) return scanAllLibraries(limit, source);
+export async function scanLibrary(root = null, limit = 5000, source = "all", { updateStatus = true } = {}) {
+  if (!root) return scanAllLibraries(limit, source, { updateStatus });
   const cacheKey = `${normalizeFsPath(root)}:${source}`;
   const cached = scanCache.get(cacheKey);
   if (cached && Date.now() - cached.createdAt < scanCacheMs) {
-    updateLibraryStatus(cached.status);
+    if (updateStatus) updateLibraryStatus(cached.status);
     return cached.tracks.slice(0, limit);
   }
   const isUploadRoot = normalizeFsPath(root) === normalizeFsPath(config.uploadDir);
@@ -37,10 +37,10 @@ export async function scanLibrary(root = null, limit = 5000, source = "all") {
     const tracks = files.sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).map(fileToTrack);
     const status = { root, reachable: true, trackCount: files.length };
     scanCache.set(cacheKey, { tracks, status, createdAt: Date.now() });
-    updateLibraryStatus(status);
+    if (updateStatus) updateLibraryStatus(status);
     return tracks.slice(0, limit);
   } catch (error) {
-    updateLibraryStatus({ root, reachable: false, trackCount: 0, error: error.message });
+    if (updateStatus) updateLibraryStatus({ root, reachable: false, trackCount: 0, error: error.message });
     return [];
   }
 }
@@ -51,7 +51,7 @@ export async function searchLibrary(query, root = undefined, limit = 100, source
   const cacheKey = `search:${normalizeFsPath(root || "all")}:${source}:${normalized}:${max}`;
   const cached = getCachedResult(cacheKey);
   if (cached) return cached;
-  const tracks = await scanLibrary(root, 5000, source);
+  const tracks = await scanLibrary(root, 5000, source, { updateStatus: source === "all" && !root });
   let results;
   if (!normalized) {
     results = tracks.slice(0, max);
@@ -71,7 +71,7 @@ export async function getCollections(root = undefined, source = "all") {
   const cacheKey = `collections:${normalizeFsPath(root || "all")}:${source}`;
   const cached = getCachedResult(cacheKey);
   if (cached) return cached;
-  const tracks = await scanLibrary(root, 5000, source);
+  const tracks = await scanLibrary(root, 5000, source, { updateStatus: source === "all" && !root });
   const groups = new Map();
   for (const track of tracks) {
     const key = `${track.collection || "Local library"}|${track.folder || track.album || "Ungrouped"}`;
@@ -97,7 +97,7 @@ export async function getCollectionTracks({ collection = "", folder = "", source
   const cacheKey = `collectionTracks:${source}:${normalizedCollection}:${normalizedFolder}:${max}`;
   const cached = getCachedResult(cacheKey);
   if (cached) return cached;
-  const tracks = await scanLibrary(undefined, 5000, source);
+  const tracks = await scanLibrary(undefined, 5000, source, { updateStatus: source === "all" });
   const results = tracks
     .filter((track) => {
       const trackCollection = normalize(track.collection || "Local library");
@@ -160,21 +160,23 @@ function pathMeta(filePath) {
   return {};
 }
 
-async function scanAllLibraries(limit, source) {
+async function scanAllLibraries(limit, source, { updateStatus = true } = {}) {
   const wantsUploaded = source === "all" || source === "uploaded";
   const wantsLocal = source === "all" || source === "local";
   const [local, uploaded] = await Promise.all([
-    wantsLocal ? scanLibrary(config.musicSourceDir, limit, "local") : [],
-    wantsUploaded ? scanLibrary(config.uploadDir, limit, "uploaded") : []
+    wantsLocal ? scanLibrary(config.musicSourceDir, limit, "local", { updateStatus: false }) : [],
+    wantsUploaded ? scanLibrary(config.uploadDir, limit, "uploaded", { updateStatus: false }) : []
   ]);
   const uploadedPaths = new Set(uploaded.map((track) => track.path));
   const merged = [...uploaded, ...local.filter((track) => !uploadedPaths.has(track.path))];
-  updateLibraryStatus({
-    root: config.musicSourceDir,
-    reachable: true,
-    trackCount: merged.length,
-    uploadedCount: uploaded.length
-  });
+  if (updateStatus && source === "all") {
+    updateLibraryStatus({
+      root: config.musicSourceDir,
+      reachable: true,
+      trackCount: merged.length,
+      uploadedCount: uploaded.length
+    });
+  }
   return merged.slice(0, limit);
 }
 

@@ -574,6 +574,9 @@ describe("Cloud Squeeze API", () => {
       const uploadedSearch = await request(app).get("/api/library/search?source=uploaded").expect(200);
       expect(uploadedSearch.body.results).toHaveLength(1);
       expect(uploadedSearch.body.results[0].source).toBe("Uploaded");
+      const stateAfterUploadedSearch = await request(app).get("/api/state").expect(200);
+      expect(stateAfterUploadedSearch.body.services.localLibrary.root).toBe(root);
+      expect(stateAfterUploadedSearch.body.services.localLibrary.trackCount).toBe(1);
 
       const encodedPath = Buffer.from(uploaded.body.track.path).toString("base64url");
       const stream = await request(app).get(`/api/stream/${encodedPath}`).expect(200);
