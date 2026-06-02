@@ -35,7 +35,8 @@ try {
   await assertQueueCrud();
   await assertPlayableDuplicateRejection();
   await assertSpotifyContainersCannotPlayDirectly();
-  if (spotifyStatus.reachable === false || state.services?.spotify?.reachable === false) {
+  const spotifyReachable = spotifyStatus.reachable !== false && state.services?.spotify?.reachable !== false;
+  if (!spotifyReachable) {
     await assertSpotifyUnavailableResponses();
     console.log(`Spotify content checks skipped: ${spotifyStatus.detail || state.services?.spotify?.detail || "Spotify browsing unavailable"}`);
   } else {
@@ -45,7 +46,7 @@ try {
   await assertLocalStream(search.results);
   await assertMalformedStreamRange(search.results);
   await assertBatchQueueAndShuffle();
-  await assertSmartShuffleSources();
+  await assertSmartShuffleSources({ spotifyReachable });
 
   const slow = latency.filter((row) => row.avgMs > latencyBudgetMs);
   assert(slow.length === 0, `latency budget exceeded: ${slow.map((row) => `${row.path} avg ${row.avgMs}ms`).join(", ")}`);
@@ -117,7 +118,7 @@ async function assertBatchQueueAndShuffle() {
   assert(leftovers.length === 0, "smoke queue rows were not cleaned up");
 }
 
-async function assertSmartShuffleSources() {
+async function assertSmartShuffleSources({ spotifyReachable } = {}) {
   const manual = await requestJson("/player/tracks", {
     method: "POST",
     body: {
@@ -129,15 +130,23 @@ async function assertSmartShuffleSources() {
   });
   for (const item of manual.queued || []) createdQueueIds.push(item.id);
 
-  const spotify = await requestJson("/player/smart-shuffle", {
-    method: "POST",
-    body: { source: "spotify", count: 3, seed: "drake" }
-  });
-  const spotifyRows = (spotify.queued || []).filter((item) => item.requestedBy === "smart shuffle");
-  assert(spotify.playback?.smartQueue === true, "spotify smart shuffle did not enable smart queue");
-  assert(spotify.playback?.smartShuffleSource === "spotify", "spotify smart shuffle did not set spotify source");
-  assert(spotifyRows.length > 0, "spotify smart shuffle did not queue generated rows");
-  assert(spotifyRows.every((item) => String(item.uri || "").includes(":track:") && !item.path), "spotify smart shuffle queued non-Spotify tracks");
+  if (spotifyReachable) {
+    const spotify = await requestJson("/player/smart-shuffle", {
+      method: "POST",
+      body: { source: "spotify", count: 3, seed: "drake" }
+    });
+    const spotifyRows = (spotify.queued || []).filter((item) => item.requestedBy === "smart shuffle");
+    assert(spotify.playback?.smartQueue === true, "spotify smart shuffle did not enable smart queue");
+    assert(spotify.playback?.smartShuffleSource === "spotify", "spotify smart shuffle did not set spotify source");
+    assert(spotifyRows.length > 0, "spotify smart shuffle did not queue generated rows");
+    assert(spotifyRows.every((item) => String(item.uri || "").includes(":track:") && !item.path), "spotify smart shuffle queued non-Spotify tracks");
+  } else {
+    const spotify = await requestJson("/player/smart-shuffle", {
+      method: "POST",
+      body: { source: "spotify", count: 3, seed: "drake" }
+    }, { expectedStatus: 503 });
+    assert((spotify.queued || []).length === 0, "unavailable spotify smart shuffle queued rows");
+  }
 
   const local = await requestJson("/player/smart-shuffle", {
     method: "POST",

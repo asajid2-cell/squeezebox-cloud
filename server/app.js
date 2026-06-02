@@ -563,6 +563,14 @@ export function createApp({ lms = new LmsClient() } = {}) {
       if (body.smartShuffleSource) {
         next.smartShuffleSource = body.smartShuffleSource;
       }
+      const requestedSource = next.smartShuffleSource || appState.playback.smartShuffleSource;
+      const spotifyGeneratedRequested =
+        requestedSource === "spotify" &&
+        (next.smartQueue === true || next.shuffle === true || (sourceChanged && (appState.playback.smartQueue || appState.playback.shuffle)));
+      if (spotifyGeneratedRequested && !spotifyBrowsingAvailable()) {
+        res.status(503).json({ error: spotifyUnavailableMessage(), playback: appState.playback, queue: appState.queue });
+        return;
+      }
       const queueModeChanged = sourceChanged || shuffleChanged || smartQueueChanged;
       if (queueModeChanged && (next.smartQueue === false || next.shuffle === false || next.shuffle === true || sourceChanged)) {
         removeGeneratedQueueItems();
@@ -586,6 +594,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
     try {
       const status = await refreshLms(lms);
       const mode = ["mixed", "spotify", "local"].includes(req.body?.source) ? req.body.source : appState.playback.smartShuffleSource;
+      if (mode === "spotify" && !spotifyBrowsingAvailable()) {
+        res.status(503).json({ error: spotifyUnavailableMessage(), queued: [], playback: appState.playback });
+        return;
+      }
       const count = Math.max(1, Math.min(8, Number(req.body?.count) || 5));
       const seed = String(req.body?.seed || appState.nowPlaying.artist || appState.nowPlaying.title || "").trim();
       logEvent("smart-shuffle.request", { mode, count, seed, queue: queueSummary() });
@@ -729,6 +741,10 @@ function spotifyBrowsingAvailable() {
   return Boolean(appState.services.spotify.configured) && appState.services.spotify.reachable !== false;
 }
 
+function spotifyUnavailableMessage() {
+  return appState.services.spotify.detail || "Spotify browsing is unavailable";
+}
+
 async function checkUrl(url) {
   try {
     const response = await fetch(url, { signal: AbortSignal.timeout(2500) });
@@ -823,7 +839,7 @@ function refreshTrackInfoInBackground(track, key) {
 }
 
 function prewarmShuffleCandidates(lms, playerId, track) {
-  if (!playerId || !appState.services.spotify.configured || !track) return;
+  if (!playerId || !spotifyBrowsingAvailable() || !track) return;
   const seed = String(track.artist || track.title || "").trim();
   const key = `${playerId}:${seed.toLowerCase()}`;
   if (!seed || (prewarmState.key === key && Date.now() - prewarmState.at < 45000)) return;
@@ -833,7 +849,7 @@ function prewarmShuffleCandidates(lms, playerId, track) {
 }
 
 function prewarmSpotifyLibrary(lms, playerId) {
-  if (!playerId || !appState.services.spotify.configured) return;
+  if (!playerId || !spotifyBrowsingAvailable()) return;
   if (spotifyLibraryPrewarmState.playerId === playerId && Date.now() - spotifyLibraryPrewarmState.at < 90000) return;
   spotifyLibraryPrewarmState.playerId = playerId;
   spotifyLibraryPrewarmState.at = Date.now();
@@ -905,7 +921,7 @@ async function buildGeneratedQueue(lms, playerId, seed, mode, count, requestedBy
   const exclude = shuffleExclusionSet();
   const hardExclude = currentAndQueueExclusionSet();
   const [spotify, localFocused, localWide] = await Promise.all([
-    mode !== "local" ? spotifyShuffleCandidates(lms, playerId, normalizedSeed, count).catch(() => []) : [],
+    mode !== "local" && spotifyBrowsingAvailable() ? spotifyShuffleCandidates(lms, playerId, normalizedSeed, count).catch(() => []) : [],
     mode !== "spotify" ? searchLibrary(normalizedSeed, undefined, 120).catch(() => []) : [],
     mode !== "spotify" ? searchLibrary("", undefined, 500).catch(() => []) : []
   ]);

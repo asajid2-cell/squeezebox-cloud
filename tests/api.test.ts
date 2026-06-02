@@ -467,6 +467,32 @@ describe("Cloud Squeeze API", () => {
     }
   });
 
+  it("rejects Spotify-only generated queues when Spotify browsing is unreachable", async () => {
+    const previousSpotify = { ...appState.services.spotify };
+    const previousPlayback = { ...appState.playback };
+    appState.services.spotify = { configured: true, reachable: false, detail: "Reauthorize Spotty in LMS" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "mixed" };
+    try {
+      const app = createApp({ lms: mockLms });
+      const smartShuffle = await request(app)
+        .post("/api/player/smart-shuffle")
+        .send({ source: "spotify", count: 2, seed: "drake" })
+        .expect(503);
+      const playback = await request(app)
+        .post("/api/player/playback")
+        .send({ smartQueue: true, smartShuffleSource: "spotify" })
+        .expect(503);
+
+      expect(smartShuffle.body.error).toContain("Reauthorize Spotty");
+      expect(smartShuffle.body.queued).toEqual([]);
+      expect(playback.body.error).toContain("Reauthorize Spotty");
+      expect(appState.playback.smartQueue).toBe(false);
+    } finally {
+      appState.services.spotify = previousSpotify;
+      appState.playback = previousPlayback;
+    }
+  });
+
   it("accepts only validated audio uploads", async () => {
     const previousUploadDir = config.uploadDir;
     const previousMusicDir = config.musicSourceDir;
