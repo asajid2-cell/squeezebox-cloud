@@ -195,8 +195,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       return;
     }
     try {
-      const playerId = await hotPlayerId(lms);
-      logEvent("track.request", { action, track: trackSummary(track), playerId });
+      logEvent("track.request", { action, track: trackSummary(track), playerId: appState.player.id });
       let queued = null;
       if (action === "add-queue") {
         if (queuedTrackInputExists(track)) {
@@ -205,7 +204,6 @@ export function createApp({ lms = new LmsClient() } = {}) {
         }
         queued = addQueueItem({ ...track, requestedBy: "guest" });
         logEvent("queue.add", { action, queued: trackSummary(queued), queue: queueSummary() });
-        runPlaybackCommand(lms, playerId, queued, "add-queue");
       } else if (action === "play-next") {
         if (queuedTrackInputExists(track)) {
           res.status(409).json({ error: "That song is already in the queue", queue: appState.queue });
@@ -213,8 +211,8 @@ export function createApp({ lms = new LmsClient() } = {}) {
         }
         queued = addQueueItemNext({ ...track, requestedBy: "guest" });
         logEvent("queue.add-next", { action, queued: trackSummary(queued), queue: queueSummary() });
-        runPlaybackCommand(lms, playerId, queued, "play-next");
       } else {
+        const playerId = await hotPlayerId(lms);
         stopGeneratedPlayback();
         setMode("play");
         const optimistic = optimisticTrack(track);

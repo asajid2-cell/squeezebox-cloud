@@ -178,7 +178,7 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.player.connected).toBe(true);
   });
 
-  it("sends local tracks to LMS playback controls", async () => {
+  it("keeps single-track queue requests out of the hidden LMS playlist", async () => {
     const played: Array<{ action: string; track: { title?: string } }> = [];
     const lms = {
       ...mockLms,
@@ -198,7 +198,11 @@ describe("Cloud Squeeze API", () => {
       .post("/api/player/track")
       .send({ action: "play-next", track: { title: "Manual Next", artist: "Tester", path: "/music/test/manual.mp3" } })
       .expect(200);
-    expect(played).toContainEqual({ action: "play-next", track: expect.objectContaining({ title: "Manual Next" }) });
+    await request(createApp({ lms }))
+      .post("/api/player/track")
+      .send({ action: "add-queue", track: { title: "Manual Add", artist: "Tester", path: "/music/test/manual-add.mp3" } })
+      .expect(200);
+    expect(played).toHaveLength(0);
   });
 
   it("rejects Spotify containers as direct playback targets", async () => {
@@ -282,8 +286,7 @@ describe("Cloud Squeeze API", () => {
     const next = await request(app).post("/api/player/next").expect(200);
 
     expect(next.body.action).toBe("visible-queue-next");
-    expect(played).toContainEqual({ action: "add-queue", track: expect.objectContaining({ title: "Visible Queue Song" }) });
-    expect(played).toContainEqual({ action: "play-now", track: expect.objectContaining({ title: "Visible Queue Song" }) });
+    expect(played).toEqual([{ action: "play-now", track: expect.objectContaining({ title: "Visible Queue Song" }) }]);
     expect(appState.queue.some((item) => item.title === "Visible Queue Song")).toBe(false);
   });
 
@@ -574,7 +577,7 @@ describe("Cloud Squeeze API", () => {
       .expect(200);
 
     expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Manual Heavy", "Generated A", "Generated B"]);
-    expect(played).toContainEqual({ action: "play-next", track: expect.objectContaining({ title: "Manual Heavy" }) });
+    expect(played).toHaveLength(0);
   });
 
   it("manual next does not disable repeat one", async () => {
