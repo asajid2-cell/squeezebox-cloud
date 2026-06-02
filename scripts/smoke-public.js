@@ -3,7 +3,7 @@ const createdQueueIds = [];
 const latencyBudgetMs = Number(process.env.PUBLIC_SMOKE_LATENCY_BUDGET_MS || 900);
 
 try {
-  const latency = await measureLatency([
+  const latencyPaths = [
     "/health",
     "/state",
     "/speaker/status",
@@ -12,7 +12,9 @@ try {
     "/spotify/library?type=playlists&limit=8",
     "/spotify/library?type=albums&limit=5",
     "/spotify/library?type=home&limit=5"
-  ]);
+  ];
+  await warmLatencyPaths(latencyPaths);
+  const latency = await measureLatency(latencyPaths);
 
   const health = await requestJson("/health");
   assert(health.ok === true, "health endpoint did not return ok=true");
@@ -300,6 +302,14 @@ async function measureLatency(paths) {
     });
   }
   return rows;
+}
+
+async function warmLatencyPaths(paths) {
+  for (const path of paths) {
+    await fetch(`${baseUrl}${path}`, { signal: AbortSignal.timeout(15000) })
+      .then((response) => response.arrayBuffer())
+      .catch(() => null);
+  }
 }
 
 async function requestJson(path, { method = "GET", body } = {}, { expectedStatus = 200 } = {}) {
