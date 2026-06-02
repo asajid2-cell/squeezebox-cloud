@@ -492,4 +492,37 @@ describe("LMS client parsing", () => {
     expect(Date.now() - started).toBeLessThan(2500);
     expect(results).toEqual([expect.objectContaining({ title: "Stale Album" })]);
   });
+
+  it("returns only playable tracks from Spotify children", async () => {
+    const client = new LmsClient();
+    client.jsonRequest = async () => ({
+      result: {
+        item_loop: [
+          { text: "Daily Mix\nby Spotify", presetParams: { favorites_url: "spotify:playlist:daily", favorites_title: "Daily Mix" } },
+          { text: "Track One\nArtist - Album", presetParams: { favorites_url: "spotify:track:one", favorites_title: "Track One" } },
+          { text: "Album One\nby Artist", presetParams: { favorites_url: "spotify:album:one", favorites_title: "Album One" } }
+        ]
+      }
+    });
+
+    const results = await client.spotifyChildren("player-1", { uri: "spotify:playlist:test", kind: "playlist" }, 10, 0);
+
+    expect(results).toEqual([expect.objectContaining({ title: "Track One", uri: "spotify:track:one", kind: "track" })]);
+  });
+
+  it("briefly caches empty Spotify children pages", async () => {
+    let requests = 0;
+    const client = new LmsClient();
+    client.jsonRequest = async () => {
+      requests += 1;
+      return { result: { item_loop: [{ text: "Nested Playlist", presetParams: { favorites_url: "spotify:playlist:nested", favorites_title: "Nested Playlist" } }] } };
+    };
+
+    const first = await client.spotifyChildren("player-1", { uri: "spotify:playlist:empty", kind: "playlist" }, 10, 0);
+    const second = await client.spotifyChildren("player-1", { uri: "spotify:playlist:empty", kind: "playlist" }, 10, 0);
+
+    expect(first).toEqual([]);
+    expect(second).toEqual([]);
+    expect(requests).toBe(2);
+  });
 });

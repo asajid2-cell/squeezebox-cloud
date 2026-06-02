@@ -8,6 +8,7 @@ const spotifySearchCacheMs = 2 * 60 * 1000;
 const spotifyBrowseCacheMs = 5 * 60 * 1000;
 const spotifyBrowseDeadlineMs = Number(process.env.SPOTIFY_BROWSE_DEADLINE_MS || 1800);
 const spotifyColdBrowseDeadlineMs = Number(process.env.SPOTIFY_COLD_BROWSE_DEADLINE_MS || 6500);
+const spotifyChildrenColdBrowseDeadlineMs = Number(process.env.SPOTIFY_CHILDREN_COLD_BROWSE_DEADLINE_MS || 2200);
 
 export class LmsClient {
   constructor(options = {}) {
@@ -367,7 +368,9 @@ export class LmsClient {
       for (const id of candidates) {
         const response = await this.jsonRequest([playerId, ["spotty", "items", start, count, "menu:spotty", `item_id:${id}`]]).catch(() => null);
         const items = response?.result?.item_loop || response?.result?.loop_loop || [];
-        const tracks = spotifyPlayableItems(items, "track").map((item) => spotifyItemToTrack(item));
+        const tracks = spotifyPlayableItems(items, "track")
+          .map((item) => spotifyItemToTrack(item))
+          .filter((track) => track.kind === "track" && String(track.uri || "").includes(":track:"));
         if (tracks.length > 0) {
           this.setCached(cacheKey, tracks, spotifyBrowseCacheMs);
           return tracks;
@@ -376,7 +379,7 @@ export class LmsClient {
       this.setCached(cacheKey, [], 30000);
       return [];
     });
-    const deadline = stale.length > 0 ? spotifyBrowseDeadlineMs : spotifyColdBrowseDeadlineMs;
+    const deadline = stale.length > 0 ? spotifyBrowseDeadlineMs : spotifyChildrenColdBrowseDeadlineMs;
     const results = await withDeadline(request, deadline, stale);
     if (results?.length) return results;
     if (uri && kind === "track") return [{ id: uri, uri, title: "Spotify track", artist: "Spotify", source: "Spotify", kind: "track" }];
