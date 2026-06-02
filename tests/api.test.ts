@@ -68,14 +68,17 @@ describe("Cloud Squeeze API", () => {
   });
 
   it("adds queue items and rejects duplicates", async () => {
+    appState.queue.splice(0, appState.queue.length);
     const app = createApp({ lms: mockLms });
     const payload = { title: "Unit Test Track", artist: "Tester", requestedBy: "vitest" };
     const created = await request(app).post("/api/queue").send(payload).expect(201);
     expect(created.body.title).toBe(payload.title);
+    expect(created.body.requestedBy).toBe("guest");
     await request(app).post("/api/queue").send(payload).expect(409);
   });
 
   it("trims queue text fields and rejects whitespace-only titles", async () => {
+    appState.queue.splice(0, appState.queue.length);
     const app = createApp({ lms: mockLms });
     await request(app).post("/api/queue").send({ title: "   ", artist: "Tester" }).expect(400);
 
@@ -88,6 +91,7 @@ describe("Cloud Squeeze API", () => {
   });
 
   it("edits reorders and removes queue items", async () => {
+    appState.queue.splice(0, appState.queue.length);
     const app = createApp({ lms: mockLms });
     const first = await request(app).post("/api/queue").send({ title: "First", artist: "Tester" }).expect(201);
     const second = await request(app).post("/api/queue").send({ title: "Second", artist: "Tester" }).expect(201);
@@ -105,6 +109,7 @@ describe("Cloud Squeeze API", () => {
   });
 
   it("rejects invalid queue move requests", async () => {
+    appState.queue.splice(0, appState.queue.length);
     const app = createApp({ lms: mockLms });
     const item = await request(app).post("/api/queue").send({ title: "Move Me", artist: "Tester" }).expect(201);
 
@@ -383,6 +388,46 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.queued).toHaveLength(1);
     expect(response.body.queued[0].title).toBe("New Track");
     expect(appState.queue.filter((item) => item.uri === "spotify:track:new")).toHaveLength(1);
+  });
+
+  it("enforces the public guest queue limit for single and batch requests", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.admin = { ...appState.admin, maxQueuePerUser: 3 };
+    addQueueItem({ title: "Limit Existing 1", artist: "Tester", uri: "spotify:track:limit-existing-1", kind: "track", requestedBy: "guest" });
+    addQueueItem({ title: "Limit Existing 2", artist: "Tester", uri: "spotify:track:limit-existing-2", kind: "track", requestedBy: "guest" });
+    addQueueItem({ title: "Generated Does Not Count", artist: "Tester", uri: "spotify:track:generated-limit", kind: "track", requestedBy: "smart shuffle" });
+    const app = createApp({ lms: mockLms });
+
+    const tooManyBatch = await request(app)
+      .post("/api/player/tracks")
+      .send({
+        action: "add-queue",
+        tracks: [
+          { title: "Limit New 1", uri: "spotify:track:limit-new-1", kind: "track", source: "Spotify" },
+          { title: "Limit New 2", uri: "spotify:track:limit-new-2", kind: "track", source: "Spotify" }
+        ]
+      })
+      .expect(429);
+    expect(tooManyBatch.body.error).toContain("max 3");
+    expect(appState.queue.some((item) => item.title === "Limit New 1")).toBe(false);
+
+    await request(app)
+      .post("/api/player/track")
+      .send({ action: "play-next", track: { title: "Limit Allowed", uri: "spotify:track:limit-allowed", kind: "track", source: "Spotify" } })
+      .expect(200);
+
+    const tooManySingle = await request(app)
+      .post("/api/player/track")
+      .send({ action: "add-queue", track: { title: "Limit Rejected", uri: "spotify:track:limit-rejected", kind: "track", source: "Spotify" } })
+      .expect(429);
+    expect(tooManySingle.body.error).toContain("max 3");
+
+    const spoofed = await request(app)
+      .post("/api/queue")
+      .send({ title: "Limit Spoofed", artist: "Tester", requestedBy: "admin" })
+      .expect(429);
+    expect(spoofed.body.error).toContain("max 3");
+    expect(appState.queue.filter((item) => item.requestedBy === "guest")).toHaveLength(3);
   });
 
   it("keeps queued tracks visible until next consumes them", async () => {

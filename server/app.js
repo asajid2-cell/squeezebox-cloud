@@ -158,12 +158,16 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(400).json({ error: "Invalid queue item", issues: parsed.error.issues });
       return;
     }
+    if (!canQueueMoreGuestTracks(1)) {
+      res.status(429).json({ error: queueLimitMessage(), queue: appState.queue });
+      return;
+    }
     const duplicate = appState.queue.some((item) => item.title.toLowerCase() === parsed.data.title.toLowerCase());
     if (duplicate) {
       res.status(409).json({ error: "That song is already in the queue" });
       return;
     }
-    res.status(201).json(addQueueItem(parsed.data));
+    res.status(201).json(addQueueItem({ ...parsed.data, requestedBy: "guest" }));
   });
 
   app.patch("/api/queue/:id", (req, res) => {
@@ -222,11 +226,19 @@ export function createApp({ lms = new LmsClient() } = {}) {
           res.status(409).json({ error: "That song is already in the queue", queue: appState.queue });
           return;
         }
+        if (!canQueueMoreGuestTracks(1)) {
+          res.status(429).json({ error: queueLimitMessage(), queue: appState.queue });
+          return;
+        }
         queued = addQueueItem({ ...track, requestedBy: "guest" });
         logEvent("queue.add", { action, queued: trackSummary(queued), queue: queueSummary() });
       } else if (action === "play-next") {
         if (queuedTrackInputExists(track)) {
           res.status(409).json({ error: "That song is already in the queue", queue: appState.queue });
+          return;
+        }
+        if (!canQueueMoreGuestTracks(1)) {
+          res.status(429).json({ error: queueLimitMessage(), queue: appState.queue });
           return;
         }
         queued = addQueueItemNext({ ...track, requestedBy: "guest" });
@@ -268,6 +280,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
     const uniquePlayable = uniquePlayableInputs(playable);
     if (uniquePlayable.length === 0) {
       res.status(409).json({ error: "Those songs are already in the queue", queue: appState.queue });
+      return;
+    }
+    if (!canQueueMoreGuestTracks(uniquePlayable.length)) {
+      res.status(429).json({ error: queueLimitMessage(), queue: appState.queue, accepted: Math.max(0, guestQueueLimit() - guestQueueCount()) });
       return;
     }
 
@@ -772,6 +788,23 @@ function uniquePlayableInputs(tracks) {
 function playableTrackInputKey(track) {
   if (!track || typeof track !== "object") return "";
   return String(track.uri || track.path || track.lmsTrackId || "").trim().toLowerCase();
+}
+
+function guestQueueLimit() {
+  const limit = Number(appState.admin.maxQueuePerUser);
+  return Number.isFinite(limit) && limit > 0 ? limit : config.publicQueueMaxPerUser;
+}
+
+function guestQueueCount() {
+  return appState.queue.filter((item) => item.requestedBy === "guest").length;
+}
+
+function canQueueMoreGuestTracks(count = 1) {
+  return guestQueueCount() + Math.max(1, Number(count) || 1) <= guestQueueLimit();
+}
+
+function queueLimitMessage() {
+  return `Queue limit reached: max ${guestQueueLimit()} guest songs`;
 }
 
 function spotifyBrowsingAvailable() {
