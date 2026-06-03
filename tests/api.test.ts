@@ -2026,6 +2026,12 @@ describe("Cloud Squeeze API", () => {
         .set("content-type", "application/octet-stream")
         .send(Buffer.from("MZ fake executable"))
         .expect(400);
+      const wrongType = await request(app)
+        .post("/api/library/upload?filename=test.mp3")
+        .set("content-type", "text/plain")
+        .send(Buffer.from("ID3"))
+        .expect(415);
+      expect(wrongType.body.error).toContain("application/octet-stream");
 
       const uploaded = await request(app)
         .post("/api/library/upload?filename=test.mp3")

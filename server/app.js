@@ -648,6 +648,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
 
   app.post("/api/library/upload", express.raw({ type: "application/octet-stream", limit: "80mb" }), async (req, res) => {
     try {
+      if (!req.is("application/octet-stream")) {
+        res.status(415).json({ error: "Upload content type must be application/octet-stream" });
+        return;
+      }
       if (!publicRequestsOpen()) {
         res.status(403).json({ error: publicRequestsClosedMessage() });
         return;
