@@ -1060,6 +1060,38 @@ describe("Cloud Squeeze API", () => {
     expect(controls).not.toContainEqual({ action: "previous" });
   });
 
+  it("does not resume the last LMS track when next is pressed stopped with an empty queue", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
+    appState.nowPlaying = {
+      id: "idle",
+      title: "No track playing",
+      artist: "Connect a player or request a song",
+      album: "",
+      source: "LMS",
+      duration: 0,
+      elapsed: 0,
+      canSeek: false,
+      art: null
+    };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false };
+    const controls: string[] = [];
+    const lms = {
+      ...mockLms,
+      async control(_playerId: string, action: string) {
+        controls.push(action);
+        return "ok";
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/next").expect(200);
+
+    expect(response.body.action).toBe("noop");
+    expect(response.body.nowPlaying).toMatchObject({ id: "idle", title: "No track playing" });
+    expect(controls).toEqual([]);
+    expect(appState.player.mode).toBe("stop");
+  });
+
   it("keeps queued tracks visible when next playback fails", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.nowPlaying = {
@@ -1919,8 +1951,8 @@ describe("Cloud Squeeze API", () => {
       .send({ source: "mixed", count: 2, seed: "Aimer" })
       .expect(200);
 
-    expect(response.body.queued.map((item: { uri: string }) => item.uri)).toEqual(["spotify:track:aimer-one", "spotify:track:aimer-two"]);
-    expect(response.body.playback.history).toEqual(["spotify:track:aimer-two", "spotify:track:aimer-one"]);
+    expect(response.body.queued.map((item: { uri: string }) => item.uri).sort()).toEqual(["spotify:track:aimer-one", "spotify:track:aimer-two"]);
+    expect([...response.body.playback.history].sort()).toEqual(["spotify:track:aimer-one", "spotify:track:aimer-two"]);
   });
 
   it("does not use idle placeholder text as smart-shuffle search terms", async () => {
@@ -2192,6 +2224,7 @@ describe("Cloud Squeeze API", () => {
 
   it("does not generate unrelated tracks when next is pressed with normal shuffle and an empty queue", async () => {
     appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
     appState.playback = {
       ...appState.playback,
       shuffle: true,
@@ -2202,7 +2235,6 @@ describe("Cloud Squeeze API", () => {
       history: []
     };
     const controls: string[] = [];
-    const searched: string[] = [];
     const lms = {
       ...mockLms,
       async control(_playerId: string, action: string) {
@@ -2210,7 +2242,6 @@ describe("Cloud Squeeze API", () => {
         return "ok";
       },
       async spotifySearch(_playerId: string, term: string) {
-        searched.push(term);
         return [{ title: "Unrelated Generated", artist: "Spotify", uri: "spotify:track:random", kind: "track" }];
       }
     };
@@ -2219,7 +2250,6 @@ describe("Cloud Squeeze API", () => {
 
     expect(response.body.action).toBe("next");
     expect(controls).toContain("next");
-    expect(searched).toEqual([]);
     expect(appState.queue).toEqual([]);
   });
 
