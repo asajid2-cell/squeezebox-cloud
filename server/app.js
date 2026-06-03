@@ -208,7 +208,11 @@ export function createApp({ lms = new LmsClient() } = {}) {
   });
 
   app.get("/api/debug/logs", requireAdmin, (req, res) => {
-    const limit = Math.max(1, Math.min(500, Number(req.query.limit) || 120));
+    const limit = parseBoundedIntegerParam(req.query.limit, { defaultValue: 120, min: 1, max: 500 });
+    if (limit === null) {
+      res.status(400).json({ error: "Debug log limit must be a positive integer up to 500", events: [] });
+      return;
+    }
     res.json({ events: debugLog.slice(-limit) });
   });
 

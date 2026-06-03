@@ -2307,6 +2307,26 @@ describe("Cloud Squeeze API", () => {
       .post("/api/player/playback")
       .send({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" })
       .expect(200);
+    await request(app)
+      .get("/api/debug/logs?limit=abc")
+      .set("Authorization", `Bearer ${login.body.token}`)
+      .expect(400);
+    await request(app)
+      .get("/api/debug/logs?limit=0")
+      .set("Authorization", `Bearer ${login.body.token}`)
+      .expect(400);
+    await request(app)
+      .get("/api/debug/logs?limit=-1")
+      .set("Authorization", `Bearer ${login.body.token}`)
+      .expect(400);
+    await request(app)
+      .get("/api/debug/logs?limit=1.5")
+      .set("Authorization", `Bearer ${login.body.token}`)
+      .expect(400);
+    await request(app)
+      .get("/api/debug/logs?limit=501")
+      .set("Authorization", `Bearer ${login.body.token}`)
+      .expect(400);
     const logs = await request(app)
       .get("/api/debug/logs?limit=10")
       .set("Authorization", `Bearer ${login.body.token}`)
