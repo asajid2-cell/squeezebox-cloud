@@ -1455,7 +1455,10 @@ async function ensureSmartShuffleQueue(lms, playerId, { force = false } = {}) {
   if (!force && smartQueued >= 4) return [];
   if (!force && now - Number(appState.playback.lastShuffleRefillAt || 0) < 12000) return [];
   const desired = force ? Math.max(3, 5 - smartQueued) : Math.max(1, 5 - smartQueued);
-  const seed = String(appState.nowPlaying.artist || appState.nowPlaying.title || appState.playback.lastShuffleSeed || "drake").trim();
+  const currentSeed = isTrackInfoCandidate(appState.nowPlaying)
+    ? (appState.nowPlaying.artist || appState.nowPlaying.title)
+    : "";
+  const seed = String(currentSeed || appState.playback.lastShuffleSeed || "drake").trim();
   const queued = await buildGeneratedQueue(lms, playerId, seed, appState.playback.smartShuffleSource, desired, requestType);
   updatePlayback({ lastShuffleRefillAt: now, lastShuffleSeed: seed });
   if (queued.length > 0) logEvent("queue.refill", { requestType, desired, queued: queued.map(trackSummary), queue: queueSummary() });
