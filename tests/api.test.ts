@@ -1402,6 +1402,37 @@ describe("Cloud Squeeze API", () => {
     expect(appState.queue.filter((item: { path: string }) => item.path === "/music/test/delete-race.mp3")).toHaveLength(addResponse.status === 200 ? 1 : 0);
   });
 
+  it("serializes generated playback activation with queue clear", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "spotify", history: [] };
+    addQueueItem({ title: "Manual Before Clear", path: "/music/test/manual-before-clear.mp3", requestedBy: "guest" });
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async spotifySearch() {
+          return [
+            { id: "spotify:generated-one", title: "Generated One", artist: "Tester", source: "Spotify", uri: "spotify:track:0000000000000000001001", kind: "track" },
+            { id: "spotify:generated-two", title: "Generated Two", artist: "Tester", source: "Spotify", uri: "spotify:track:0000000000000000001002", kind: "track" }
+          ];
+        }
+      }
+    });
+
+    const [clearResponse, smartResponse] = await Promise.all([
+      request(app).delete("/api/queue"),
+      request(app).post("/api/player/smart-shuffle").send({ source: "spotify", seed: "Tester", count: 2 })
+    ]);
+
+    expect([clearResponse.status, smartResponse.status].sort()).toEqual([200, 200]);
+    expect(appState.queue.some((item: { title: string }) => item.title === "Manual Before Clear")).toBe(false);
+    if (appState.queue.length > 0) {
+      expect(appState.playback.smartQueue).toBe(true);
+      expect(appState.queue.every((item: { requestedBy: string }) => item.requestedBy === "smart shuffle")).toBe(true);
+    } else {
+      expect(appState.playback.smartQueue).toBe(false);
+    }
+  });
+
   it("does not advance playback while refreshing public state", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = { ...appState.playback, shuffle: true, smartShuffleSource: "spotify", history: [] };

@@ -831,7 +831,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
     }
   });
 
-  app.post("/api/player/playback", async (req, res) => {
+  app.post("/api/player/playback", async (req, res) => withQueueMutationLock(async () => {
     const next = {};
     try {
       const parsed = playbackSchema.safeParse(req.body || {});
@@ -912,9 +912,9 @@ export function createApp({ lms = new LmsClient() } = {}) {
     } catch (error) {
       res.status(502).json({ error: error.message, playback: appState.playback });
     }
-  });
+  }));
 
-  app.post("/api/player/smart-shuffle", async (req, res) => {
+  app.post("/api/player/smart-shuffle", async (req, res) => withQueueMutationLock(async () => {
     try {
       if (!publicRequestsOpen()) {
         res.status(403).json({ error: publicRequestsClosedMessage(), queued: [], playback: appState.playback });
@@ -936,7 +936,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
     } catch (error) {
       res.status(502).json({ error: error.message, queued: [] });
     }
-  });
+  }));
 
   app.post("/api/admin/settings", requireAdmin, (req, res) => {
     const parsed = adminSettingsSchema.safeParse(req.body || {});
