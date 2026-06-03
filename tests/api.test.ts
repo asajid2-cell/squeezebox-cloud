@@ -98,10 +98,12 @@ describe("Cloud Squeeze API", () => {
     try {
       const trackPath = path.join(root, "Artist - Art Match.mp3");
       await fs.writeFile(trackPath, "ID3");
+      let enrichmentLimit = 0;
       const response = await request(createApp({
         lms: {
           ...mockLms,
-          async enrichLocalArtwork(tracks: Array<{ title: string; path?: string }>) {
+          async enrichLocalArtwork(tracks: Array<{ title: string; path?: string }>, options?: { limit?: number }) {
+            enrichmentLimit = Number(options?.limit || 0);
             return tracks.map((track) => ({ ...track, art: "api/artwork/local-cover" }));
           }
         }
@@ -110,6 +112,7 @@ describe("Cloud Squeeze API", () => {
         .expect(200);
 
       expect(response.body.results[0]).toMatchObject({ title: "Art Match", art: "api/artwork/local-cover" });
+      expect(enrichmentLimit).toBeGreaterThanOrEqual(200);
     } finally {
       config.musicSourceDir = previousMusicDir;
       await fs.rm(root, { recursive: true, force: true });
