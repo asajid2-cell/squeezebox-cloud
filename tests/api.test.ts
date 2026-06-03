@@ -254,8 +254,9 @@ describe("Cloud Squeeze API", () => {
     await request(createApp({ lms: mockLms })).post("/api/player/volume").send({ volume: "loud" }).expect(400);
   });
 
-  it("does not mutate player mode when play or pause control fails", async () => {
+  it("does not mutate player mode when play pause or stop control fails", async () => {
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
+    updateNowPlaying({ id: "stale-track", title: "Stale Track", artist: "Tester", source: "LMS" });
     const lms = {
       ...mockLms,
       async control() {
@@ -269,9 +270,36 @@ describe("Cloud Squeeze API", () => {
     appState.player = { ...appState.player, mode: "play" };
     await request(createApp({ lms })).post("/api/player/pause").expect(502);
     expect(appState.player.mode).toBe("play");
+
+    await request(createApp({ lms })).post("/api/player/stop").expect(502);
+    expect(appState.player.mode).toBe("play");
+    expect(appState.nowPlaying.title).toBe("Stale Track");
+  });
+
+  it("stops playback and clears stale now playing after LMS accepts stop", async () => {
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    updateNowPlaying({ id: "stale-track", title: "Stale Track", artist: "Tester", source: "LMS", duration: 100, elapsed: 12 });
+    const controls: string[] = [];
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string) {
+          controls.push(action);
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/stop")
+      .expect(200);
+
+    expect(controls).toEqual(["stop"]);
+    expect(response.body.mode).toBe("stop");
+    expect(appState.player.mode).toBe("stop");
+    expect(appState.nowPlaying).toMatchObject({ id: "idle", title: "No track playing", elapsed: 0, canSeek: false });
   });
 
   it("seeks the current player position", async () => {
+    updateNowPlaying({ id: "seek-track", title: "Seek Track", artist: "Tester", source: "LMS", duration: 100, elapsed: 12, canSeek: true });
     const response = await request(createApp({ lms: mockLms })).post("/api/player/seek").send({ seconds: 42 }).expect(200);
     expect(response.body.ok).toBe(true);
     expect(response.body.seconds).toBe(42);

@@ -158,6 +158,7 @@ export class LmsClient {
     const commandMap = {
       play: `${encoded} play`,
       pause: `${encoded} pause`,
+      stop: `${encoded} stop`,
       next: `${encoded} playlist index +1`,
       previous: `${encoded} playlist index -1`,
       volume: `${encoded} mixer volume ${Number(value)}`,

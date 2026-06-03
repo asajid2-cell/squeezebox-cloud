@@ -181,6 +181,19 @@ describe("LMS client parsing", () => {
     expect(commands[0]).toBe("00%3A04%3A20%3A1f%3A2c%3A56 time 88");
   });
 
+  it("builds stop commands", async () => {
+    const commands: string[] = [];
+    const client = new LmsClient();
+    client.command = async (command: string) => {
+      commands.push(command);
+      return "ok";
+    };
+
+    await client.control("00:04:20:1f:2c:56", "stop");
+
+    expect(commands[0]).toBe("00%3A04%3A20%3A1f%3A2c%3A56 stop");
+  });
+
   it("detects authorized Spotty accounts from LMS config", async () => {
     const previousConfigDir = config.lmsConfigDir;
     config.lmsConfigDir = path.resolve("tests", "fixtures", "lms-config");

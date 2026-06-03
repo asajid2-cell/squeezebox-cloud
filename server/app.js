@@ -108,6 +108,17 @@ const idleTrackInfo = {
   lyrics: "Lyrics will appear here when the LMS plugin exposes them.",
   art: null
 };
+const idleNowPlaying = {
+  id: "idle",
+  title: "No track playing",
+  artist: "Connect a player or request a song",
+  album: "",
+  source: "LMS",
+  duration: 0,
+  elapsed: 0,
+  canSeek: false,
+  art: null
+};
 
 export function createApp({ lms = new LmsClient() } = {}) {
   const app = express();
@@ -596,10 +607,15 @@ export function createApp({ lms = new LmsClient() } = {}) {
     res.json({ token: adminToken });
   });
 
-  for (const action of ["play", "pause"]) {
+  for (const action of ["play", "pause", "stop"]) {
     app.post(`/api/player/${action}`, async (_req, res) => {
       try {
         await control(lms, action);
+        if (action === "stop") {
+          clearPendingPlayback();
+          updateNowPlaying(idleNowPlaying);
+          updateTrackInfo(idleTrackInfo);
+        }
         res.json({ ok: true, mode: appState.player.mode, player: appState.player });
       } catch (error) {
         res.status(502).json({ error: error.message, mode: appState.player.mode, player: appState.player });
@@ -1199,7 +1215,7 @@ function updateStablePlayerStatus(status) {
 }
 
 async function control(lms, action, value) {
-  const modeMap = { play: "play", pause: "pause", next: "play", previous: "play" };
+  const modeMap = { play: "play", pause: "pause", stop: "stop", next: "play", previous: "play" };
   await lms.control(appState.player.id, action, value);
   if (modeMap[action]) setMode(modeMap[action]);
 }
