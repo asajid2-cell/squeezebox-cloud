@@ -18,6 +18,7 @@ export class LmsClient {
     this.timeoutMs = options.timeoutMs || 3500;
     this.cache = new Map();
     this.inflight = new Map();
+    this.spotifyBrowseIds = new Map();
   }
 
   command(command) {
@@ -319,6 +320,7 @@ export class LmsClient {
     const firstPageTrackCount = Math.max(6, count - Math.min(12, categoryPlayable.length));
     const fullResults = uniqueByUri([...directPlayable.slice(0, firstPageTrackCount), ...categoryPlayable, ...directPlayable.slice(firstPageTrackCount)])
       .map((item) => spotifyItemToTrack(item));
+    this.rememberSpotifyBrowseIds(fullResults);
     const results = fullResults.slice(0, count);
     if (results.length > 0) {
       this.setCached(cacheKey, results, spotifySearchCacheMs);
@@ -359,6 +361,7 @@ export class LmsClient {
       const response = await this.jsonRequest([playerId, ["spotty", "items", start, requestCount, "menu:spotty", `item_id:${selection.id}`]]);
       const items = response?.result?.item_loop || response?.result?.loop_loop || [];
       const results = spotifyPlayableItems(items, selection.kind).map((item) => spotifyItemToTrack(item));
+      this.rememberSpotifyBrowseIds(results);
       if (results.length > 0) this.setCached(requestKey, results, spotifyBrowseCacheMs);
       return results;
     });
@@ -375,7 +378,8 @@ export class LmsClient {
     const requestCount = shouldWiden ? 200 : count;
     const fallbackTitle = String(title || "").trim();
     const normalizedFallbackTitle = comparableSpotifyText(fallbackTitle);
-    const cacheBase = `spotifyChildren:${playerId}:${browseId}:${uri}:${kind}:${normalizedFallbackTitle}`;
+    const resolvedBrowseId = String(browseId || this.spotifyBrowseIds.get(normalizedSpotifyUri(uri)) || "");
+    const cacheBase = `spotifyChildren:${playerId}:${resolvedBrowseId}:${uri}:${kind}:${normalizedFallbackTitle}`;
     const cacheKey = `${cacheBase}:${count}:${start}`;
     const cached = this.getCached(cacheKey);
     if (cached) return cached;
@@ -397,7 +401,7 @@ export class LmsClient {
       const deadline = stale.length > 0 ? spotifyBrowseDeadlineMs : coldDeadline;
       return (await withDeadline(widerInflight.then((results) => results.slice(0, count)), deadline, stale)) || [];
     }
-    const candidates = [browseId, uri].filter(Boolean);
+    const candidates = [resolvedBrowseId, uri].filter(Boolean);
     if (uri && !candidates.includes(uri.replace(/^spotify:/, "spotify://"))) candidates.push(uri.replace(/^spotify:/, "spotify://"));
     const request = this.once(requestKey, async () => {
       if (kind === "artist" && fallbackTitle) {
@@ -434,6 +438,22 @@ export class LmsClient {
     if (results?.length) return results.slice(0, count);
     if (uri && kind === "track" && isSpotifyTrackUri(uri)) return [{ id: uri, uri, title: "Spotify track", artist: "Spotify", source: "Spotify", kind: "track" }];
     return results || [];
+  }
+
+  rememberSpotifyBrowseIds(tracks = []) {
+    for (const track of tracks || []) {
+      const uri = normalizedSpotifyUri(track?.uri);
+      const browseId = String(track?.browseId || "");
+      if (!uri || !browseId || browseId === track?.uri) continue;
+      if (!/^spotify:(playlist|album|artist):/i.test(uri)) continue;
+      this.spotifyBrowseIds.set(uri, browseId);
+    }
+    if (this.spotifyBrowseIds.size > 1000) {
+      for (const key of this.spotifyBrowseIds.keys()) {
+        this.spotifyBrowseIds.delete(key);
+        if (this.spotifyBrowseIds.size <= 800) break;
+      }
+    }
   }
 
   async spotifyStatus() {
@@ -619,6 +639,12 @@ function spottyPlaybackUri(value) {
 
 function isSpotifyTrackUri(value) {
   return /^(spotify:track:|spotify:\/\/track:)[A-Za-z0-9]{22}$/i.test(String(value || ""));
+}
+
+function normalizedSpotifyUri(value) {
+  return String(value || "")
+    .replace(/^spotify:\/\/(playlist|album|artist|track):/i, "spotify:$1:")
+    .toLowerCase();
 }
 
 function isIdleStatus(status) {

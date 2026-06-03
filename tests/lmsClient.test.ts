@@ -838,6 +838,47 @@ describe("LMS client parsing", () => {
     ]);
   });
 
+  it("uses cached Spotify container browse ids when children are requested by URI only", async () => {
+    const requests: unknown[] = [];
+    const client = new LmsClient();
+    client.jsonRequest = async (params: unknown) => {
+      requests.push(params);
+      const args = (params as unknown[])[1] as string[];
+      const itemId = args.find((value) => String(value).startsWith("item_id:"));
+      if (itemId === "item_id:8") {
+        return {
+          result: {
+            item_loop: [{
+              text: "Cached Playlist\nby Spotify",
+              actions: { go: { params: { item_id: "8.4" } } },
+              presetParams: { favorites_url: "spotify:playlist:cached", favorites_title: "Cached Playlist", favorites_type: "playlist" }
+            }]
+          }
+        };
+      }
+      if (itemId === "item_id:8.4") {
+        return {
+          result: {
+            item_loop: [{
+              text: "Cached Child\nTester - Album",
+              presetParams: { favorites_url: "spotify:track:cachedchild", favorites_title: "Cached Child" }
+            }]
+          }
+        };
+      }
+      return { result: { item_loop: [] } };
+    };
+
+    const playlists = await client.spotifyLibrary("player-1", "playlists", 1, 0);
+    const children = await client.spotifyChildren("player-1", { uri: playlists[0].uri, kind: "playlist", title: playlists[0].title }, 5, 0);
+
+    expect(children).toEqual([expect.objectContaining({ title: "Cached Child", uri: "spotify:track:cachedchild" })]);
+    expect(requests).toEqual([
+      ["player-1", ["spotty", "items", 0, 80, "menu:spotty", "item_id:8"]],
+      ["player-1", ["spotty", "items", 0, 200, "menu:spotty", "item_id:8.4"]]
+    ]);
+  });
+
   it("serves narrow Spotify children requests from an in-flight wider browse", async () => {
     let requests = 0;
     let release: (value: unknown) => void = () => {};
