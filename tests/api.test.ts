@@ -1849,6 +1849,35 @@ describe("Cloud Squeeze API", () => {
     }
   });
 
+  it("clears generated history when smart-shuffle source or seed changes", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = {
+      ...appState.playback,
+      shuffle: false,
+      smartQueue: true,
+      smartShuffleSource: "spotify",
+      lastShuffleSeed: "Aimer",
+      history: ["spotify:track:aimer-one", "spotify:track:aimer-two"]
+    };
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async spotifySearch(_playerId: string, term: string) {
+          return [
+            { id: "spotify:one", title: `${term} One`, artist: term, source: "Spotify", uri: "spotify:track:aimer-one", kind: "track" },
+            { id: "spotify:two", title: `${term} Two`, artist: term, source: "Spotify", uri: "spotify:track:aimer-two", kind: "track" }
+          ];
+        }
+      }
+    }))
+      .post("/api/player/smart-shuffle")
+      .send({ source: "mixed", count: 2, seed: "Aimer" })
+      .expect(200);
+
+    expect(response.body.queued.map((item: { uri: string }) => item.uri)).toEqual(["spotify:track:aimer-one", "spotify:track:aimer-two"]);
+    expect(response.body.playback.history).toEqual(["spotify:track:aimer-two", "spotify:track:aimer-one"]);
+  });
+
   it("does not use idle placeholder text as smart-shuffle search terms", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.nowPlaying = {
