@@ -365,6 +365,38 @@ describe("LMS client parsing", () => {
     expect(commands).toContain(`player-1 playlist play http://192.168.1.142:4177/api/stream/${encodedPath}/upload.mp3`);
   });
 
+  it("does not resolve a local track to a fuzzy basename match", async () => {
+    const requests: unknown[] = [];
+    const commands: string[] = [];
+    const client = new LmsClient();
+    client.command = async (command: string) => {
+      commands.push(command);
+      return "ok";
+    };
+    client.jsonRequest = async (params: unknown) => {
+      requests.push(params);
+      if (JSON.stringify(params).includes("titles")) {
+        return {
+          result: {
+            titles_loop: [
+              {
+                id: 999,
+                url: "file:///music/wrong/remix-upload.mp3"
+              }
+            ]
+          }
+        };
+      }
+      return { result: {} };
+    };
+
+    await client.playTrack("player-1", { title: "Upload", source: "Uploaded", uploaded: true, path: "/music/uploads/upload.mp3" }, "play-now");
+
+    const encodedPath = Buffer.from("/music/uploads/upload.mp3").toString("base64url");
+    expect(requests).not.toContainEqual(["player-1", ["playlistcontrol", "cmd:load", "track_id:999"]]);
+    expect(commands).toContain(`player-1 playlist play http://192.168.1.142:4177/api/stream/${encodedPath}/upload.mp3`);
+  });
+
   it("inserts Spotify URI tracks as the next LMS item", async () => {
     const commands: string[] = [];
     const client = new LmsClient();

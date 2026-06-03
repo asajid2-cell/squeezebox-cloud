@@ -248,13 +248,6 @@ export class LmsClient {
       return target;
     }
 
-    const urlMatch = candidates.find((item) => normalizePath(decodeSafe(String(item.url || ""))).includes(normalizedBasename));
-    if (urlMatch?.id) {
-      const target = { type: "track_id", value: urlMatch.id };
-      if (cacheKey) this.setCached(cacheKey, target, 15 * 60 * 1000);
-      return target;
-    }
-
     return null;
   }
 
