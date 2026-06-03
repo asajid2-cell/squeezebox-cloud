@@ -675,21 +675,41 @@ export function createApp({ lms = new LmsClient() } = {}) {
     res.json({ token: adminToken });
   });
 
-  for (const action of ["play", "pause", "stop"]) {
-    app.post(`/api/player/${action}`, async (_req, res) => {
-      try {
-        await control(lms, action);
-        if (action === "stop") {
-          clearPendingPlayback();
-          updateNowPlaying(idleNowPlaying);
-          updateTrackInfo(idleTrackInfo);
-        }
-        res.json({ ok: true, mode: appState.player.mode, player: appState.player });
-      } catch (error) {
-        res.status(502).json({ error: error.message, mode: appState.player.mode, player: appState.player });
-      }
-    });
-  }
+  app.post("/api/player/play", async (_req, res) => {
+    try {
+      const playerId = await hotPlayerId(lms);
+      const shouldPlayVisibleQueue =
+        (appState.player.mode === "stop" || appState.player.mode === "stopped") &&
+        appState.queue.length > 0;
+      const played = shouldPlayVisibleQueue ? await playNextVisibleQueueItem(lms, playerId) : null;
+      if (!played) await control(lms, "play");
+      refreshLms(lms, { force: true }).catch(() => null);
+      res.json({ ok: true, action: played ? "visible-queue-play" : "play", mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying, queue: appState.queue });
+    } catch (error) {
+      res.status(502).json({ error: error.message, mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying, queue: appState.queue });
+    }
+  });
+
+  app.post("/api/player/pause", async (_req, res) => {
+    try {
+      await control(lms, "pause");
+      res.json({ ok: true, mode: appState.player.mode, player: appState.player });
+    } catch (error) {
+      res.status(502).json({ error: error.message, mode: appState.player.mode, player: appState.player });
+    }
+  });
+
+  app.post("/api/player/stop", async (_req, res) => {
+    try {
+      await control(lms, "stop");
+      clearPendingPlayback();
+      updateNowPlaying(idleNowPlaying);
+      updateTrackInfo(idleTrackInfo);
+      res.json({ ok: true, mode: appState.player.mode, player: appState.player });
+    } catch (error) {
+      res.status(502).json({ error: error.message, mode: appState.player.mode, player: appState.player });
+    }
+  });
 
   app.post("/api/player/next", async (_req, res) => {
     try {

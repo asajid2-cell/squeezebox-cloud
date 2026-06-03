@@ -276,6 +276,36 @@ describe("Cloud Squeeze API", () => {
     expect(appState.nowPlaying.title).toBe("Stale Track");
   });
 
+  it("plays the visible queue when play is pressed while stopped", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
+    updateNowPlaying({ id: "idle", title: "No track playing", artist: "Connect a player or request a song", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null });
+    addQueueItem({ title: "Queued Play", artist: "Tester", path: "/music/test/queued-play.mp3", requestedBy: "guest" });
+    const played: Array<{ action: string; title?: string }> = [];
+    const controls: string[] = [];
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async playTrack(_playerId: string, track: { title?: string }, action: string) {
+          played.push({ action, title: track.title });
+          return "ok";
+        },
+        async control(_playerId: string, action: string) {
+          controls.push(action);
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/play")
+      .expect(200);
+
+    expect(response.body.action).toBe("visible-queue-play");
+    expect(response.body.nowPlaying.title).toBe("Queued Play");
+    expect(response.body.queue).toHaveLength(0);
+    expect(played).toEqual([{ action: "play-now", title: "Queued Play" }]);
+    expect(controls).not.toContain("play");
+  });
+
   it("stops playback and clears stale now playing after LMS accepts stop", async () => {
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
     updateNowPlaying({ id: "stale-track", title: "Stale Track", artist: "Tester", source: "LMS", duration: 100, elapsed: 12 });
