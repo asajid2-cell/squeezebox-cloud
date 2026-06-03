@@ -124,21 +124,30 @@ async function assertBatchQueueAndShuffle() {
 
 async function assertSmartShuffleSources({ spotifyReachable } = {}) {
   await cleanupQueue();
-  const localSearch = await requestJson("/library/search?source=local&limit=1");
-  const manualTrack = (localSearch.results || []).find((item) => item.path);
-  assert(manualTrack, "local library did not expose a playable track for smart shuffle keeper");
+  const localSearch = await requestJson("/library/search?source=local&limit=4");
+  const localTracks = (localSearch.results || []).filter((item) => item.path);
+  const manualTrack = localTracks[0];
+  assert(manualTrack, "local library did not expose a playable track for smart shuffle blocker");
   const manual = await requestJson("/player/tracks", {
     method: "POST",
     body: {
       action: "add-queue",
       tracks: [
-        { ...manualTrack, title: "Smoke Verify Manual Keeper", artist: "CloudSqueeze", source: "Local library" }
+        { ...manualTrack, title: "Smoke Verify Manual Blocker", artist: "CloudSqueeze", source: "Local library" }
       ]
     }
   });
   for (const item of manual.queued || []) createdQueueIds.push(item.id);
 
   if (spotifyReachable) {
+    const blocked = await requestJson("/player/smart-shuffle", {
+      method: "POST",
+      body: { source: "spotify", count: 3, seed: "drake" }
+    }, { expectedStatus: 409 });
+    assert((blocked.queued || []).length === 0, "manual queue smart-shuffle rejection queued rows");
+    assert(String(blocked.error || "").includes("Clear the queue"), "manual queue smart-shuffle rejection returned an unexpected error");
+
+    await cleanupQueue();
     const spotify = await requestJson("/player/smart-shuffle", {
       method: "POST",
       body: { source: "spotify", count: 3, seed: "drake" }
@@ -172,7 +181,6 @@ async function assertSmartShuffleSources({ spotifyReachable } = {}) {
   });
   const generatedAfterReset = (reset.queue || []).filter((item) => item.requestedBy === "smart shuffle" || item.requestedBy === "shuffle");
   assert(generatedAfterReset.length === 0, "turning smart queue off left generated rows behind");
-  assert((reset.queue || []).some((item) => item.title === "Smoke Verify Manual Keeper"), "turning smart queue off removed a manual queue row");
 
   await cleanupQueue();
   const after = await requestJson("/state");
@@ -239,18 +247,13 @@ async function assertQueueLimit() {
   await cleanupQueue();
   const sourceTracks = await localSmokeTracks(4);
   const tracks = sourceTracks.map((track, index) => smokeTrack(track, `Smoke Verify Limit ${index + 1}`));
-  const rejected = await requestJson("/player/tracks", {
+  const limited = await requestJson("/player/tracks", {
     method: "POST",
     body: { action: "add-queue", tracks }
-  }, { expectedStatus: 429 });
-  assert(String(rejected.error || "").includes("max 3"), "queue limit did not report the configured max");
-
-  const allowed = await requestJson("/player/tracks", {
-    method: "POST",
-    body: { action: "add-queue", tracks: tracks.slice(0, 3) }
   });
-  for (const item of allowed.queued || []) createdQueueIds.push(item.id);
-  assert((allowed.queued || []).length === 3, "queue limit did not allow exactly three guest rows");
+  for (const item of limited.queued || []) createdQueueIds.push(item.id);
+  assert((limited.queued || []).length === 3, "queue limit did not accept exactly three rows from a four-row batch");
+  assert(limited.accepted === 3 && limited.rejected === 1, "queue limit did not report partial batch acceptance");
 
   const spoofed = await requestJson("/queue", {
     method: "POST",
