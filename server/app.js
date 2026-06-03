@@ -102,11 +102,11 @@ const playbackTracksSchema = z.object({
 
 const volumeSchema = z.object({
   volume: z.number().finite()
-});
+}).strict();
 
 const seekSchema = z.object({
   seconds: z.number().finite()
-});
+}).strict();
 
 const playbackSchema = z.object({
   shuffle: z.boolean().optional(),

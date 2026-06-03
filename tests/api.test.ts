@@ -314,6 +314,24 @@ describe("Cloud Squeeze API", () => {
     await request(app).post("/api/player/volume").send({ volume: [] }).expect(400);
   });
 
+  it("rejects extra volume command fields before sending LMS controls", async () => {
+    const controls: Array<{ action: string; value: unknown }> = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string, value: unknown) {
+          controls.push({ action, value });
+          return "ok";
+        }
+      }
+    });
+
+    await request(app).post("/api/player/volume").send({ volume: 45, extra: true }).expect(400);
+    await request(app).post("/api/player/volume").send({ volume: 45, seconds: 10 }).expect(400);
+
+    expect(controls).toEqual([]);
+  });
+
   it("does not mutate player mode when play pause or stop control fails", async () => {
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
     updateNowPlaying({ id: "stale-track", title: "Stale Track", artist: "Tester", source: "LMS" });
@@ -466,6 +484,24 @@ describe("Cloud Squeeze API", () => {
     await request(app).post("/api/player/seek").send({ seconds: "" }).expect(400);
     await request(app).post("/api/player/seek").send({ seconds: false }).expect(400);
     await request(app).post("/api/player/seek").send({ seconds: [] }).expect(400);
+  });
+
+  it("rejects extra seek command fields before checking playback state", async () => {
+    const controls: Array<{ action: string; value: unknown }> = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string, value: unknown) {
+          controls.push({ action, value });
+          return "ok";
+        }
+      }
+    });
+
+    await request(app).post("/api/player/seek").send({ seconds: 0, extra: true }).expect(400);
+    await request(app).post("/api/player/seek").send({ seconds: 0, volume: 45 }).expect(400);
+
+    expect(controls).toEqual([]);
   });
 
   it("does not restart the current track when previous has no app history", async () => {
