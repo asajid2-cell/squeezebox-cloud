@@ -882,12 +882,38 @@ describe("LMS client parsing", () => {
       };
     };
 
-    const first = await client.spotifySearch("player-1", "asdfqwerzxv", 10);
-    const second = await client.spotifySearch("player-1", "asdfqwerzxv", 10);
+    const first = await client.spotifySearch("player-1", "asdfghjk", 10);
+    const second = await client.spotifySearch("player-1", "asdfghjk", 10);
 
     expect(first).toEqual([]);
     expect(second).toEqual([]);
     expect(requests).toBe(1);
+  });
+
+  it("short-circuits obvious random single-token Spotify searches before Spotty", async () => {
+    let requests = 0;
+    const client = new LmsClient();
+    client.jsonRequest = async () => {
+      requests += 1;
+      return {
+        result: {
+          item_loop: [
+            {
+              text: "The Duck Song\nThe Duck - single",
+              goAction: "playControl",
+              presetParams: { favorites_url: "spotify:track:duck", favorites_title: "The Duck Song by The Duck from single" }
+            }
+          ]
+        }
+      };
+    };
+
+    const first = await client.spotifySearch("player-1", "zzxqwrtyps", 10);
+    const second = await client.spotifySearch("player-1", "zzxqwrtyps", 10);
+
+    expect(first).toEqual([]);
+    expect(second).toEqual([]);
+    expect(requests).toBe(0);
   });
 
   it("keeps compact single-token Spotify searches when title artist or album actually matches", async () => {

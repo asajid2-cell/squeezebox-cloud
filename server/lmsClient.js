@@ -320,6 +320,10 @@ export class LmsClient {
     const cacheKey = `spotifySearch:${playerId}:${search.toLowerCase()}:${count}`;
     const cached = this.getCached(cacheKey);
     if (cached) return cached;
+    if (looksLikeRandomSingleTokenNoise(search)) {
+      this.setCached(cacheKey, [], 30000);
+      return [];
+    }
     const requestCount = Math.max(count, 20);
     const requestKey = `spotifySearch:${playerId}:${search.toLowerCase()}:${requestCount}`;
     const widerKeys = requestCount < 50
@@ -763,6 +767,18 @@ function filterSpotifySearchResults(results, query) {
 function looksLikeSingleTokenNoise(query) {
   const normalized = comparableSpotifyText(query);
   return normalized.length >= 8 && !normalized.includes(" ");
+}
+
+function looksLikeRandomSingleTokenNoise(query) {
+  const normalized = comparableSpotifyText(query);
+  if (normalized.length < 10 || normalized.includes(" ")) return false;
+  if (/\d/.test(normalized)) return false;
+  const vowels = normalized.match(/[aeiou]/g)?.length || 0;
+  const vowelRatio = vowels / normalized.length;
+  const rareLetters = normalized.match(/[qzx]/g)?.length || 0;
+  if (vowelRatio < 0.18 && rareLetters > 0) return true;
+  if (/[qzx][qzx]|[bcdfghjklmnpqrstvwxyz]{5,}/.test(normalized)) return true;
+  return false;
 }
 
 function spotifySearchResultMatches(track, query) {
