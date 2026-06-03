@@ -32,4 +32,25 @@ describe("library scanner helpers", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("honors full typed-search limits above the compact default", async () => {
+    clearLibraryCaches();
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-library-full-limit-"));
+    try {
+      await Promise.all(
+        Array.from({ length: 650 }, (_, index) =>
+          fs.writeFile(path.join(root, `Artist - Match ${String(index).padStart(3, "0")}.mp3`), "fake")
+        )
+      );
+
+      const compact = await searchLibrary("match", root, 500, "local");
+      const full = await searchLibrary("match", root, 2000, "local");
+
+      expect(compact).toHaveLength(500);
+      expect(full).toHaveLength(650);
+    } finally {
+      clearLibraryCaches();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });

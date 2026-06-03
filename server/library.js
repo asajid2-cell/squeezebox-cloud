@@ -47,7 +47,7 @@ export async function scanLibrary(root = null, limit = 5000, source = "all", { u
 
 export async function searchLibrary(query, root = undefined, limit = 100, source = "all") {
   const normalized = normalize(query);
-  const max = Math.max(1, Math.min(500, Number(limit) || 100));
+  const max = Math.max(1, Math.min(2000, Number(limit) || 100));
   const cacheKey = `search:${normalizeFsPath(root || "all")}:${source}:${normalized}:${max}`;
   const cached = getCachedResult(cacheKey);
   if (cached) return cached;
