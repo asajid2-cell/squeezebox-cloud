@@ -1842,6 +1842,15 @@ describe("Cloud Squeeze API", () => {
     }
   });
 
+  it("returns JSON 404s for unknown API routes", async () => {
+    const app = createApp({ lms: mockLms });
+
+    const response = await request(app).get("/api/artwork/").expect(404);
+
+    expect(response.body).toEqual({ error: "API route not found" });
+    expect(response.headers["content-type"]).toContain("application/json");
+  });
+
   it("does not follow library symlinks outside allowed roots", async () => {
     appState.queue.splice(0, appState.queue.length);
     const previousStrict = process.env.STRICT_PUBLIC_TRACK_VALIDATION;

@@ -948,6 +948,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
     res.json(appState.admin);
   });
 
+  app.use("/api", (_req, res) => {
+    res.status(404).json({ error: "API route not found" });
+  });
+
   return app;
 }
 
