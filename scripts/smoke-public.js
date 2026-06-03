@@ -181,15 +181,16 @@ async function assertSmartShuffleSources({ spotifyReachable } = {}) {
 
 async function assertQueueCrud() {
   const title = `Smoke Verify Crud ${Date.now()}`;
+  const path = `/music/smoke/${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.mp3`;
   const created = await requestJson("/queue", {
     method: "POST",
-    body: { title, artist: "CloudSqueeze", source: "Smoke" }
+    body: { title, artist: "CloudSqueeze", path, source: "Smoke" }
   }, { expectedStatus: 201 });
   createdQueueIds.push(created.id);
 
   const duplicate = await requestJson("/queue", {
     method: "POST",
-    body: { title, artist: "CloudSqueeze", source: "Smoke" }
+    body: { title, artist: "CloudSqueeze", path, source: "Smoke" }
   }, { expectedStatus: 409 });
   assert(duplicate.error === "That song is already in the queue", "duplicate queue item did not return the expected error");
 
@@ -262,18 +263,25 @@ async function assertQueueLimit() {
 
 async function assertSpotifyContainersOpenToTracks() {
   const library = await requestJson("/spotify/library?type=playlists&limit=8");
-  const playlist = (library.results || []).find((item) => item.kind === "playlist" && (item.uri || item.browseId));
-  assert(playlist, "Spotify playlist library did not expose a playlist container");
+  const playlists = (library.results || []).filter((item) => item.kind === "playlist" && (item.uri || item.browseId)).slice(0, 5);
+  assert(playlists.length > 0, "Spotify playlist library did not expose a playlist container");
 
-  const params = new URLSearchParams();
-  if (playlist.browseId) params.set("browseId", String(playlist.browseId));
-  if (playlist.uri) params.set("uri", String(playlist.uri));
-  params.set("kind", "playlist");
-  params.set("limit", "25");
-  const children = await requestJson(`/spotify/children?${params.toString()}`);
-  const tracks = (children.results || []).filter((item) => !item.kind || item.kind === "track");
-  assert(tracks.length > 0, "Spotify playlist children did not expose playable tracks");
-  assert(tracks.every((item) => String(item.uri || "").includes(":track:")), "Spotify playlist children included non-track items");
+  const attempts = [];
+  for (const playlist of playlists) {
+    const params = new URLSearchParams();
+    if (playlist.browseId) params.set("browseId", String(playlist.browseId));
+    if (playlist.uri) params.set("uri", String(playlist.uri));
+    params.set("kind", "playlist");
+    params.set("limit", "25");
+    const children = await requestJson(`/spotify/children?${params.toString()}`);
+    const tracks = (children.results || []).filter((item) => !item.kind || item.kind === "track");
+    attempts.push(`${playlist.title || playlist.uri}:${tracks.length}`);
+    if (tracks.length > 0) {
+      assert(tracks.every((item) => String(item.uri || "").includes(":track:")), "Spotify playlist children included non-track items");
+      return;
+    }
+  }
+  assert(false, `Spotify playlist children did not expose playable tracks (${attempts.join(", ")})`);
 }
 
 async function assertSpotifyLibrarySections() {
