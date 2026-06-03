@@ -38,13 +38,13 @@ const mockLms = {
     return "ok";
   },
   async spotifySearch() {
-    return [{ id: "spotify:1", title: "Headlines", artist: "Drake", source: "Spotify", uri: "spotify:track:abc123" }];
+    return [{ id: "spotify:1", title: "Headlines", artist: "Drake", source: "Spotify", uri: "spotify:track:0000000000000000000101", kind: "track" }];
   },
   async spotifyLibrary() {
     return [{ id: "spotify:playlist:1", title: "Test Playlist", artist: "Spotify", source: "Spotify playlist", uri: "spotify:playlist:1", kind: "playlist" }];
   },
   async spotifyChildren() {
-    return [{ id: "spotify:track:child", title: "Playlist Track", artist: "Spotify", source: "Spotify", uri: "spotify:track:child", kind: "track" }];
+    return [{ id: "spotify:track:0000000000000000000102", title: "Playlist Track", artist: "Spotify", source: "Spotify", uri: "spotify:track:0000000000000000000102", kind: "track" }];
   },
   async artwork() {
     return { contentType: "image/jpeg", bytes: Buffer.from("fake-jpeg") };
@@ -384,6 +384,49 @@ describe("Cloud Squeeze API", () => {
 
     expect(response.body.error).toBe("Playable local path, LMS track id, or Spotify URI is required");
     expect(played).toEqual([]);
+  });
+
+  it("rejects unknown Spotify play-now tracks even when their ids are well formed", async () => {
+    const played: Array<{ action: string; track: { uri?: string } }> = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async playTrack(_playerId: string, track: { uri?: string }, action: string) {
+          played.push({ action, track });
+          return "ok";
+        }
+      }
+    });
+
+    const response = await request(app)
+      .post("/api/player/track")
+      .send({ action: "play-now", track: { title: "Unknown Spotify", uri: "spotify:track:0000000000000000000199", kind: "track", source: "Spotify" } })
+      .expect(400);
+
+    expect(response.body.error).toContain("Cloud Squeeze search");
+    expect(played).toEqual([]);
+  });
+
+  it("allows Spotify play-now tracks returned by Cloud Squeeze search", async () => {
+    const played: Array<{ action: string; track: { uri?: string } }> = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async playTrack(_playerId: string, track: { uri?: string }, action: string) {
+          played.push({ action, track });
+          return "ok";
+        }
+      }
+    });
+    const search = await request(app).get("/api/spotify/search?q=drake").expect(200);
+    const track = search.body.results[0];
+
+    await request(app)
+      .post("/api/player/track")
+      .send({ action: "play-now", track })
+      .expect(200);
+
+    expect(played).toEqual([{ action: "play-now", track: expect.objectContaining({ uri: "spotify:track:0000000000000000000101" }) }]);
   });
 
   it("rejects unknown single-track playback actions", async () => {
@@ -726,7 +769,7 @@ describe("Cloud Squeeze API", () => {
 
   it("returns Spotify search results from Spotty", async () => {
     const response = await request(createApp({ lms: mockLms })).get("/api/spotify/search?q=drake").expect(200);
-    expect(response.body.results[0].uri).toBe("spotify:track:abc123");
+    expect(response.body.results[0].uri).toBe("spotify:track:0000000000000000000101");
   });
 
   it("returns Spotify library sections from Spotty", async () => {
@@ -935,7 +978,7 @@ describe("Cloud Squeeze API", () => {
         ...mockLms,
         async spotifySearch() {
           return [
-            { id: "spotify:current", title: "Headlines", artist: "Drake", source: "Spotify", uri: "spotify:track:abc123", kind: "track" },
+            { id: "spotify:current", title: "Headlines", artist: "Drake", source: "Spotify", uri: "spotify:track:0000000000000000000103", kind: "track" },
             { id: "spotify:other", title: "Nonstop", artist: "Drake", source: "Spotify", uri: "spotify:track:other", kind: "track" }
           ];
         }
@@ -1092,7 +1135,7 @@ describe("Cloud Squeeze API", () => {
 
     const response = await request(app)
       .post("/api/player/track")
-      .send({ action: "play-now", track: { title: "Manual Play", artist: "New Artist", uri: "spotify:track:0000000000000000000015", source: "Spotify" } })
+      .send({ action: "play-now", track: { title: "Manual Play", artist: "New Artist", path: "/music/manual-play.mp3", source: "Local library" } })
       .expect(200);
 
     expect(response.body.playback).toMatchObject({ shuffle: false, smartQueue: false });

@@ -91,6 +91,9 @@ const refreshState = {
 const prewarmState = { key: "", at: 0 };
 const spotifyLibraryPrewarmState = { playerId: "", at: 0 };
 const libraryRescanState = { promise: null };
+const knownSpotifyTracks = new Map();
+const knownSpotifyTrackTtlMs = 30 * 60 * 1000;
+const knownSpotifyTrackLimit = 1500;
 const debugLog = [];
 const debugLogLimit = 500;
 const debugLogPath = process.env.CLOUD_SQUEEZE_LOG_PATH || "/tmp/cloud-squeeze-events.jsonl";
@@ -274,6 +277,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
         queued = addQueueItemNext({ ...track, requestedBy: "guest" });
         logEvent("queue.add-next", { action, queued: trackSummary(queued), queue: queueSummary() });
       } else {
+        if (isSpotifyTrackInput(track) && !isKnownSpotifyTrack(track.uri)) {
+          res.status(400).json({ error: "Spotify track must come from Cloud Squeeze search, playlist, or library results" });
+          return;
+        }
         const playerId = await hotPlayerId(lms);
         stopGeneratedPlayback();
         setMode("play");
@@ -350,7 +357,9 @@ export function createApp({ lms = new LmsClient() } = {}) {
         return;
       }
       const playerId = await hotPlayerId(lms);
-      res.json({ results: await lms.spotifySearch(playerId, String(req.query.q || ""), req.query.limit || 20) });
+      const results = await lms.spotifySearch(playerId, String(req.query.q || ""), req.query.limit || 20);
+      rememberKnownSpotifyTracks(results);
+      res.json({ results });
     } catch (error) {
       res.status(502).json({ error: error.message, results: [] });
     }
@@ -367,6 +376,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       const limit = req.query.limit || 50;
       const offset = req.query.offset || 0;
       const results = await lms.spotifyLibrary(playerId, type, limit, offset);
+      rememberKnownSpotifyTracks(results);
       res.json({
         results
       });
@@ -382,14 +392,14 @@ export function createApp({ lms = new LmsClient() } = {}) {
         return;
       }
       const playerId = await hotPlayerId(lms);
-      res.json({
-        results: await lms.spotifyChildren(
-          playerId,
-          { browseId: String(req.query.browseId || ""), uri: String(req.query.uri || ""), kind: String(req.query.kind || "playlist") },
-          req.query.limit || 200,
-          req.query.offset || 0
-        )
-      });
+      const results = await lms.spotifyChildren(
+        playerId,
+        { browseId: String(req.query.browseId || ""), uri: String(req.query.uri || ""), kind: String(req.query.kind || "playlist") },
+        req.query.limit || 200,
+        req.query.offset || 0
+      );
+      rememberKnownSpotifyTracks(results);
+      res.json({ results });
     } catch (error) {
       res.status(502).json({ error: error.message, results: [] });
     }
@@ -822,8 +832,41 @@ function isPlayableTrackInput(track) {
   return isValidSpotifyTrackUri(track.uri);
 }
 
+function isSpotifyTrackInput(track) {
+  return Boolean(track?.uri && isValidSpotifyTrackUri(track.uri));
+}
+
 function isValidSpotifyTrackUri(uri) {
   return /^(spotify:track:|spotify:\/\/track:)[A-Za-z0-9]{22}$/i.test(String(uri || ""));
+}
+
+function rememberKnownSpotifyTracks(tracks = []) {
+  const expiresAt = Date.now() + knownSpotifyTrackTtlMs;
+  for (const track of tracks || []) {
+    const key = normalizedSpotifyTrackUri(track?.uri);
+    if (key) knownSpotifyTracks.set(key, expiresAt);
+  }
+  if (knownSpotifyTracks.size > knownSpotifyTrackLimit) {
+    for (const [key, expiry] of knownSpotifyTracks) {
+      if (expiry <= Date.now() || knownSpotifyTracks.size > knownSpotifyTrackLimit) knownSpotifyTracks.delete(key);
+    }
+  }
+}
+
+function isKnownSpotifyTrack(uri) {
+  const key = normalizedSpotifyTrackUri(uri);
+  if (!key) return false;
+  const expiresAt = knownSpotifyTracks.get(key);
+  if (!expiresAt || expiresAt <= Date.now()) {
+    knownSpotifyTracks.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function normalizedSpotifyTrackUri(uri) {
+  if (!isValidSpotifyTrackUri(uri)) return "";
+  return String(uri).replace(/^spotify:\/\/track:/i, "spotify:track:").toLowerCase();
 }
 
 function queuedTrackInputExists(track) {
