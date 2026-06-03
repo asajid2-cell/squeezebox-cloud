@@ -973,11 +973,12 @@ export function createApp({ lms = new LmsClient() } = {}) {
         next.smartShuffleSource = body.smartShuffleSource;
       }
       if (smartQueueChanged && body.smartQueue === true && manualQueueCount() > 0) {
-        next.smartQueue = false;
-        next.shuffle = false;
-        next.lastShuffleRefillAt = 0;
-        next.lastShuffleSeed = "";
-        next.lastSmartQueueBase = "";
+        res.status(409).json({
+          error: "Smart shuffle is disabled while requested songs are queued. Clear the queue before starting generated smart shuffle.",
+          playback: appState.playback,
+          queue: appState.queue
+        });
+        return;
       }
       const finalShuffle = typeof next.shuffle === "boolean" ? next.shuffle : appState.playback.shuffle;
       const finalSmartQueue = typeof next.smartQueue === "boolean" ? next.smartQueue : appState.playback.smartQueue;

@@ -2278,7 +2278,7 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.playback.repeat).toBe("off");
   });
 
-  it("does not cycle a manual playlist queue into generated smart-shuffle rows", async () => {
+  it("rejects smart-shuffle cycling while manual playlist rows are queued", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = {
       ...appState.playback,
@@ -2303,14 +2303,16 @@ describe("Cloud Squeeze API", () => {
     }))
       .post("/api/player/playback")
       .send({ smartQueue: true, smartShuffleSource: "spotify" })
-      .expect(200);
+      .expect(409);
 
-    expect(response.body.playback).toMatchObject({ shuffle: false, smartQueue: false, smartShuffleSource: "spotify" });
-    expect(response.body.playback.lastShuffleRefillAt).toBe(0);
-    expect(response.body.playback.lastShuffleSeed).toBe("");
-    expect(response.body.playback.lastSmartQueueBase).toBe("");
+    expect(response.body.error).toContain("Clear the queue");
+    expect(response.body.playback).toMatchObject({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" });
+    expect(response.body.playback.lastShuffleRefillAt).toBe(12345);
+    expect(response.body.playback.lastShuffleSeed).toBe("playlist");
+    expect(response.body.playback.lastSmartQueueBase).toBe("playlist-base");
     expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Playlist A", "Playlist B"]);
     expect(response.body.queue).not.toEqual(expect.arrayContaining([expect.objectContaining({ requestedBy: "smart shuffle" })]));
+    expect(appState.playback).toMatchObject({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" });
   });
 
   it("requires admin access for recent queue and playback debug events", async () => {
