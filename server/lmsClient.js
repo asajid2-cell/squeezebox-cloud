@@ -244,10 +244,9 @@ export class LmsClient {
     );
     const candidates = candidateGroups.flatMap((response) => response?.result?.titles_loop || []);
     const normalizedPath = normalizePath(track.path);
-    const normalizedBasename = normalizePath(path.basename(track.path));
     const match = candidates.find((item) => {
       const candidateUrl = normalizePath(decodeSafe(String(item.url || "")));
-      return candidateUrl.endsWith(normalizedPath) || candidateUrl.endsWith(`/${normalizedBasename}`);
+      return candidateUrl.endsWith(normalizedPath);
     });
     if (match?.id) {
       const target = { type: "track_id", value: match.id };
