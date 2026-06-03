@@ -78,8 +78,10 @@ export async function searchLibrary(query: string, limit = 100, source = "all"):
 }
 
 export async function searchSpotify(query: string, limit = 50): Promise<Track[]> {
+  const trimmed = query.trim();
+  if (!trimmed) return [];
   try {
-    const response = await fetch(`${apiBase}/spotify/search?q=${encodeURIComponent(query)}&limit=${limit}`);
+    const response = await fetch(`${apiBase}/spotify/search?q=${encodeURIComponent(trimmed)}&limit=${limit}`);
     if (!response.ok) return [];
     const data = await response.json();
     return data.results || [];

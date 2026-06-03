@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchState, playTrack, playTracks, playerAction, postQueue, resetApiClientStateForTests, savePlayback, seekPlayer, setPlayerVolume } from "../src/lib/api";
+import { fetchState, playTrack, playTracks, playerAction, postQueue, resetApiClientStateForTests, savePlayback, searchSpotify, seekPlayer, setPlayerVolume } from "../src/lib/api";
 
 function mockJsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -67,6 +67,15 @@ describe("API client mutating requests", () => {
       accepted: 3,
       rejected: 9
     });
+  });
+
+  it("skips Spotify search requests for blank queries", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(searchSpotify("   ")).resolves.toEqual([]);
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("throws backend errors for failed volume and seek controls", async () => {
