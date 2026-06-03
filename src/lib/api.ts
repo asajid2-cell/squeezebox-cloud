@@ -46,7 +46,7 @@ const fallbackState: AppState = {
     albumReview: "No album review available yet.",
     lyrics: "Lyrics will appear when available."
   },
-  playback: { shuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "mixed", lastShuffleRefillAt: 0, lastShuffleSeed: "", lastSmartQueueBase: "", history: [], previousTracks: [] },
+  playback: { shuffle: false, manualShuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "mixed", lastShuffleRefillAt: 0, lastShuffleSeed: "", lastSmartQueueBase: "", history: [], previousTracks: [] },
   admin: { publicRequests: true, maxQueuePerUser: 3, moderation: "basic", scheduleEnabled: true }
 };
 

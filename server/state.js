@@ -61,6 +61,7 @@ export const appState = {
   },
   playback: {
     shuffle: false,
+    manualShuffle: false,
     smartQueue: false,
     repeat: "off",
     smartShuffleSource: "mixed",

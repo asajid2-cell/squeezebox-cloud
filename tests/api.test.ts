@@ -1524,6 +1524,7 @@ describe("Cloud Squeeze API", () => {
     const playlistUris = new Set(playlistTracks.map((track) => track.uri));
     expect(queued.body.accepted).toBe(3);
     expect(shuffled.body.queued).toEqual([]);
+    expect(shuffled.body.playback).toMatchObject({ shuffle: true, manualShuffle: true, smartQueue: false });
     expect(shuffled.body.queue).toHaveLength(3);
     expect(shuffled.body.queue.every((item: { uri?: string; requestedBy?: string }) => playlistUris.has(item.uri || "") && item.requestedBy === "guest")).toBe(true);
     expect(shuffled.body.queue.some((item: { title: string }) => item.title === "Stale Local")).toBe(false);
@@ -2641,6 +2642,7 @@ describe("Cloud Squeeze API", () => {
     appState.playback = {
       ...appState.playback,
       shuffle: true,
+      manualShuffle: false,
       smartQueue: false,
       repeat: "off",
       appManagedPlayback: true,
@@ -2691,6 +2693,7 @@ describe("Cloud Squeeze API", () => {
     appState.playback = {
       ...appState.playback,
       shuffle: true,
+      manualShuffle: false,
       smartQueue: false,
       repeat: "off",
       appManagedPlayback: true,
@@ -3261,7 +3264,7 @@ describe("Cloud Squeeze API", () => {
 
   it("regular shuffle randomizes only the visible queue", async () => {
     appState.queue.splice(0, appState.queue.length);
-    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "spotify", history: [] };
+    appState.playback = { ...appState.playback, shuffle: false, manualShuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "spotify", history: [] };
     addQueueItem({ title: "Queued A", artist: "Tester", uri: "spotify:track:a", source: "Spotify", requestedBy: "guest" });
     addQueueItem({ title: "Queued B", artist: "Tester", uri: "spotify:track:b", source: "Spotify", requestedBy: "guest" });
     const response = await request(createApp({
@@ -3287,7 +3290,8 @@ describe("Cloud Squeeze API", () => {
 
   it("regular shuffle generates a visible queue when no manual songs are queued", async () => {
     appState.queue.splice(0, appState.queue.length);
-    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "spotify", history: [] };
+    updateSpotifyStatus({ configured: true, reachable: true, detail: "Spotty detected" });
+    appState.playback = { ...appState.playback, shuffle: false, manualShuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "spotify", history: [] };
     const response = await request(createApp({
       lms: {
         ...mockLms,
@@ -3315,6 +3319,7 @@ describe("Cloud Squeeze API", () => {
     appState.playback = {
       ...appState.playback,
       shuffle: true,
+      manualShuffle: false,
       smartQueue: false,
       repeat: "off",
       smartShuffleSource: "spotify",
@@ -3903,6 +3908,7 @@ describe("Cloud Squeeze API", () => {
     appState.playback = {
       ...appState.playback,
       shuffle: true,
+      manualShuffle: true,
       smartQueue: false,
       smartShuffleSource: "spotify",
       lastShuffleRefillAt: 0,
@@ -3937,11 +3943,53 @@ describe("Cloud Squeeze API", () => {
     expect(appState.queue).toEqual([]);
   });
 
+  it("does not generate random rows after a manually shuffled playlist queue is exhausted", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      manualShuffle: true,
+      smartQueue: false,
+      smartShuffleSource: "spotify",
+      appManagedPlayback: true,
+      lastShuffleRefillAt: 0,
+      lastShuffleSeed: "",
+      history: []
+    };
+    const searched: string[] = [];
+    const played: string[] = [];
+
+    await maintainVisiblePlaybackQueueForTests(
+      {
+        ...mockLms,
+        async control() {
+          return "ok";
+        },
+        async playTrack(_playerId: string, track: { title?: string }) {
+          played.push(String(track.title || ""));
+          return "ok";
+        },
+        async spotifySearch(_playerId: string, term: string) {
+          searched.push(term);
+          return [{ title: "Random Leak", artist: "Spotify", uri: "spotify:track:random-leak", kind: "track", source: "Spotify" }];
+        }
+      },
+      { id: "player-1", mode: "stopped" },
+      { title: "Playlist Final", artist: "Tester", duration: 100, elapsed: 100, uri: "spotify:track:playlist-final" }
+    );
+
+    expect(searched).toEqual([]);
+    expect(played).toEqual([]);
+    expect(appState.queue).toEqual([]);
+    expect(appState.playback).toMatchObject({ shuffle: true, manualShuffle: true, smartQueue: false });
+  });
+
   it("does not add generated shuffle rows after shuffle is disabled mid-refill", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = {
       ...appState.playback,
       shuffle: true,
+      manualShuffle: false,
       smartQueue: false,
       smartShuffleSource: "spotify",
       lastShuffleRefillAt: 0,
@@ -3985,6 +4033,7 @@ describe("Cloud Squeeze API", () => {
     appState.playback = {
       ...appState.playback,
       shuffle: true,
+      manualShuffle: false,
       smartQueue: false,
       smartShuffleSource: "spotify",
       lastShuffleRefillAt: 0,

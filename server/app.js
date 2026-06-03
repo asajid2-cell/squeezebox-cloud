@@ -1021,10 +1021,14 @@ export function createApp({ lms = new LmsClient() } = {}) {
       if (typeof body.shuffle === "boolean") {
         next.shuffle = body.shuffle;
         if (body.shuffle) next.smartQueue = false;
+        if (!body.shuffle) next.manualShuffle = false;
       }
       if (typeof body.smartQueue === "boolean") {
         next.smartQueue = body.smartQueue;
-        if (body.smartQueue) next.shuffle = false;
+        if (body.smartQueue) {
+          next.shuffle = false;
+          next.manualShuffle = false;
+        }
       }
       if (body.repeat) {
         next.repeat = body.repeat;
@@ -1053,7 +1057,14 @@ export function createApp({ lms = new LmsClient() } = {}) {
         next.lastSmartQueueBase = "";
       }
       const requestedSource = next.smartShuffleSource || appState.playback.smartShuffleSource;
-      const needsGeneratedQueue = finalSmartQueue || (finalShuffle && manualQueueCount() === 0);
+      const finalManualShuffle = finalShuffle && !finalSmartQueue && (
+        queueModeChanged
+          ? manualQueueCount() > 0
+          : Boolean(next.manualShuffle ?? appState.playback.manualShuffle)
+      );
+      if (finalManualShuffle) next.manualShuffle = true;
+      if (!finalShuffle || finalSmartQueue) next.manualShuffle = false;
+      const needsGeneratedQueue = finalSmartQueue || (finalShuffle && !finalManualShuffle && manualQueueCount() === 0);
       const spotifyGeneratedRequested =
         requestedSource === "spotify" &&
         needsGeneratedQueue &&
@@ -1081,7 +1092,8 @@ export function createApp({ lms = new LmsClient() } = {}) {
       } else if (queueModeChanged && appState.playback.shuffle) {
         if (manualQueueCount() > 0) {
           shuffleVisibleQueue();
-        } else {
+          updatePlayback({ manualShuffle: true });
+        } else if (!appState.playback.manualShuffle) {
           queued = await activateGeneratedQueue(lms, playerId, { shuffle: true, mode: appState.playback.smartShuffleSource, controlsReady: true });
         }
       }
@@ -1774,6 +1786,7 @@ async function activateGeneratedQueue(lms, playerId, { smart = false, shuffle: s
   updatePlayback({
     smartQueue: Boolean(smart),
     shuffle: Boolean(shuffleOn && !smart),
+    manualShuffle: false,
     smartShuffleSource: mode,
     lastShuffleRefillAt: 0,
     lastShuffleSeed: queueSeed,
@@ -1913,6 +1926,7 @@ async function ensureSmartShuffleQueue(lms, playerId, { force = false } = {}) {
 async function topOffGeneratedQueue(lms, playerId) {
   if ((!appState.playback.smartQueue && !appState.playback.shuffle) || !playerId) return [];
   const requestType = appState.playback.smartQueue ? "smart shuffle" : "shuffle";
+  if (requestType === "shuffle" && appState.playback.manualShuffle) return [];
   if (requestType === "shuffle" && manualQueueCount() > 0) return [];
   const generatedCount = appState.queue.filter((item) => item.requestedBy === requestType).length;
   if (generatedCount >= 4) return [];
@@ -1937,7 +1951,7 @@ function addGeneratedQueueItem(track, mode = appState.playback.smartShuffleSourc
 
 function generatedRequestActive(requestedBy) {
   if (requestedBy === "smart shuffle") return Boolean(appState.playback.smartQueue);
-  if (requestedBy === "shuffle") return Boolean(appState.playback.shuffle);
+  if (requestedBy === "shuffle") return Boolean(appState.playback.shuffle && !appState.playback.manualShuffle);
   return true;
 }
 
@@ -2096,7 +2110,7 @@ function isGeneratedQueueItem(item) {
 function stopGeneratedPlayback() {
   if (!appState.playback.shuffle && !appState.playback.smartQueue) return;
   removeGeneratedQueueItems();
-  updatePlayback({ shuffle: false, smartQueue: false, lastShuffleRefillAt: 0, lastShuffleSeed: "", lastSmartQueueBase: "" });
+  updatePlayback({ shuffle: false, manualShuffle: false, smartQueue: false, lastShuffleRefillAt: 0, lastShuffleSeed: "", lastSmartQueueBase: "" });
 }
 
 function shuffleVisibleQueue() {

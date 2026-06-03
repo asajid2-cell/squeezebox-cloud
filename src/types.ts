@@ -54,6 +54,7 @@ export type AppState = {
   };
   playback: {
     shuffle: boolean;
+    manualShuffle?: boolean;
     smartQueue?: boolean;
     repeat: "off" | "one" | "all";
     smartShuffleSource: "mixed" | "spotify" | "local";
