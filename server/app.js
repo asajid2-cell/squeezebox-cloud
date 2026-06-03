@@ -622,6 +622,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       logEvent("transport.previous.request", { queue: queueSummary(), playback: appState.playback, nowPlaying: trackSummary(appState.nowPlaying) });
       const previous = popPreviousTrack();
       if (previous) {
+        rememberPreviousTrack(appState.nowPlaying);
         setMode("play");
         updateNowPlaying(optimisticTrack(previous));
         runPlaybackCommand(lms, playerId, previous, "play-now");

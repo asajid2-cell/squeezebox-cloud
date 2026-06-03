@@ -285,7 +285,7 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.nowPlaying.title).toBe("Previous Track");
     expect(played).toEqual([{ action: "play-now", track: expect.objectContaining({ title: "Previous Track", path: "/music/previous.mp3" }) }]);
     expect(controls).not.toContainEqual({ action: "previous" });
-    expect(appState.playback.previousTracks).toEqual([]);
+    expect(appState.playback.previousTracks[0]).toMatchObject({ title: "Current Track", path: "/music/current.mp3" });
   });
 
   it("remembers LMS-observed track changes for the previous button", async () => {
@@ -338,6 +338,7 @@ describe("Cloud Squeeze API", () => {
     expect(previous.body.action).toBe("app-previous");
     expect(played).toEqual([{ action: "play-now", track: expect.objectContaining({ title: "Track A", path: "/music/a.mp3" }) }]);
     expect(controls).not.toContainEqual({ action: "previous" });
+    expect(appState.playback.previousTracks[0]).toMatchObject({ title: "Track B", path: "/music/b.mp3" });
   });
 
   it("uses the hot player id for previous without waiting on a fresh status call", async () => {
