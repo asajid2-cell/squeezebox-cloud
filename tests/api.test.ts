@@ -70,7 +70,7 @@ describe("Cloud Squeeze API", () => {
   it("adds queue items and rejects duplicates", async () => {
     appState.queue.splice(0, appState.queue.length);
     const app = createApp({ lms: mockLms });
-    const payload = { title: "Unit Test Track", artist: "Tester", requestedBy: "vitest" };
+    const payload = { title: "Unit Test Track", artist: "Tester", path: "/music/test/unit-test-track.mp3", requestedBy: "vitest" };
     const created = await request(app).post("/api/queue").send(payload).expect(201);
     expect(created.body.title).toBe(payload.title);
     expect(created.body.requestedBy).toBe("guest");
@@ -84,17 +84,28 @@ describe("Cloud Squeeze API", () => {
 
     const created = await request(app)
       .post("/api/queue")
-      .send({ title: "  Trimmed Track  ", artist: "  Trimmed Artist  ", requestedBy: "  guest  " })
+      .send({ title: "  Trimmed Track  ", artist: "  Trimmed Artist  ", path: "  /music/test/trimmed-track.mp3  ", requestedBy: "  guest  " })
       .expect(201);
 
     expect(created.body).toMatchObject({ title: "Trimmed Track", artist: "Trimmed Artist", requestedBy: "guest" });
   });
 
+  it("rejects text-only queue rows that transport cannot play", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const response = await request(createApp({ lms: mockLms }))
+      .post("/api/queue")
+      .send({ title: "Text Only", artist: "Tester" })
+      .expect(400);
+
+    expect(response.body.error).toBe("Playable local path, LMS track id, or Spotify URI is required");
+    expect(appState.queue).toHaveLength(0);
+  });
+
   it("edits reorders and removes queue items", async () => {
     appState.queue.splice(0, appState.queue.length);
     const app = createApp({ lms: mockLms });
-    const first = await request(app).post("/api/queue").send({ title: "First", artist: "Tester" }).expect(201);
-    const second = await request(app).post("/api/queue").send({ title: "Second", artist: "Tester" }).expect(201);
+    const first = await request(app).post("/api/queue").send({ title: "First", artist: "Tester", path: "/music/test/first.mp3" }).expect(201);
+    const second = await request(app).post("/api/queue").send({ title: "Second", artist: "Tester", path: "/music/test/second.mp3" }).expect(201);
 
     const edited = await request(app).patch(`/api/queue/${first.body.id}`).send({ title: "Edited First" }).expect(200);
     expect(edited.body.item.title).toBe("Edited First");
@@ -111,7 +122,7 @@ describe("Cloud Squeeze API", () => {
   it("rejects invalid queue move requests", async () => {
     appState.queue.splice(0, appState.queue.length);
     const app = createApp({ lms: mockLms });
-    const item = await request(app).post("/api/queue").send({ title: "Move Me", artist: "Tester" }).expect(201);
+    const item = await request(app).post("/api/queue").send({ title: "Move Me", artist: "Tester", path: "/music/test/move-me.mp3" }).expect(201);
 
     await request(app).post(`/api/queue/${item.body.id}/move`).send({ direction: "up" }).expect(200);
     await request(app).post(`/api/queue/${item.body.id}/move`).send({ direction: "sideways" }).expect(400);
@@ -587,7 +598,7 @@ describe("Cloud Squeeze API", () => {
     const app = createApp({ lms: mockLms });
     const created = await request(app)
       .post("/api/queue")
-      .send({ title: "Ownership Lock", artist: "Tester", requestedBy: "admin" })
+      .send({ title: "Ownership Lock", artist: "Tester", path: "/music/test/ownership-lock.mp3", requestedBy: "admin" })
       .expect(201);
 
     expect(created.body.requestedBy).toBe("guest");

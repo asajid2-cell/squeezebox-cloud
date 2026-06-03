@@ -37,6 +37,11 @@ const queueSchema = z.object({
   album: optionalText,
   source: optionalText,
   path: optionalText,
+  uri: optionalText,
+  kind: optionalText,
+  lmsTrackId: z.union([z.string().trim().min(1), z.number()]).optional(),
+  art: optionalText,
+  uploaded: z.boolean().optional(),
   requestedBy: optionalText
 });
 
@@ -189,6 +194,14 @@ export function createApp({ lms = new LmsClient() } = {}) {
     }
     if (!canQueueMoreGuestTracks(1)) {
       res.status(429).json({ error: queueLimitMessage(), queue: appState.queue });
+      return;
+    }
+    if (!isPlayableTrackInput(parsed.data)) {
+      res.status(400).json({ error: "Playable local path, LMS track id, or Spotify URI is required" });
+      return;
+    }
+    if (!spotifyTracksAreKnown([parsed.data])) {
+      res.status(400).json({ error: "Spotify tracks must come from Cloud Squeeze search, playlist, or library results" });
       return;
     }
     const duplicate = appState.queue.some((item) => item.title.toLowerCase() === parsed.data.title.toLowerCase());
