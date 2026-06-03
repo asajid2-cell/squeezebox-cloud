@@ -208,8 +208,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(400).json({ error: "Local tracks must come from the Cloud Squeeze library or uploads" });
       return;
     }
-    const duplicate = appState.queue.some((item) => item.title.toLowerCase() === parsed.data.title.toLowerCase());
-    if (duplicate) {
+    if (queuedTrackInputExists(parsed.data)) {
       res.status(409).json({ error: "That song is already in the queue" });
       return;
     }

@@ -77,6 +77,26 @@ describe("Cloud Squeeze API", () => {
     await request(app).post("/api/queue").send(payload).expect(409);
   });
 
+  it("deduplicates direct queue posts by playable key instead of title", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const app = createApp({ lms: mockLms });
+
+    await request(app)
+      .post("/api/queue")
+      .send({ title: "Same Title", artist: "Artist A", path: "/music/test/same-title-a.mp3" })
+      .expect(201);
+    await request(app)
+      .post("/api/queue")
+      .send({ title: "Same Title", artist: "Artist B", path: "/music/test/same-title-b.mp3" })
+      .expect(201);
+    await request(app)
+      .post("/api/queue")
+      .send({ title: "Renamed Same File", artist: "Artist C", path: "/music/test/same-title-a.mp3" })
+      .expect(409);
+
+    expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Same Title", "Same Title"]);
+  });
+
   it("trims queue text fields and rejects whitespace-only titles", async () => {
     appState.queue.splice(0, appState.queue.length);
     const app = createApp({ lms: mockLms });
