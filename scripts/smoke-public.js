@@ -62,13 +62,14 @@ try {
 
 async function assertBatchQueueAndShuffle() {
   await cleanupQueue();
+  const smokeTracks = await localSmokeTracks(5);
   const batch = await requestJson("/player/tracks", {
     method: "POST",
     body: {
       action: "add-queue",
       tracks: [
-        { title: "Smoke Verify One", artist: "CloudSqueeze", path: "/music/smoke/verify-one.mp3", source: "Smoke" },
-        { title: "Smoke Verify Two", artist: "CloudSqueeze", path: "/music/smoke/verify-two.mp3", source: "Smoke" }
+        smokeTrack(smokeTracks[0], "Smoke Verify One"),
+        smokeTrack(smokeTracks[1], "Smoke Verify Two")
       ]
     }
   });
@@ -84,9 +85,9 @@ async function assertBatchQueueAndShuffle() {
     body: {
       action: "play-next",
       tracks: [
-        { title: "Smoke Verify Three", artist: "CloudSqueeze", path: "/music/smoke/verify-three.mp3", source: "Smoke" },
-        { title: "Smoke Verify Four", artist: "CloudSqueeze", path: "/music/smoke/verify-four.mp3", source: "Smoke" },
-        { title: "Smoke Verify Five", artist: "CloudSqueeze", path: "/music/smoke/verify-five.mp3", source: "Smoke" }
+        smokeTrack(smokeTracks[2], "Smoke Verify Three"),
+        smokeTrack(smokeTracks[3], "Smoke Verify Four"),
+        smokeTrack(smokeTracks[4], "Smoke Verify Five")
       ]
     }
   });
@@ -181,16 +182,17 @@ async function assertSmartShuffleSources({ spotifyReachable } = {}) {
 
 async function assertQueueCrud() {
   const title = `Smoke Verify Crud ${Date.now()}`;
-  const path = `/music/smoke/${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.mp3`;
+  const [track] = await localSmokeTracks(1);
+  const item = smokeTrack(track, title);
   const created = await requestJson("/queue", {
     method: "POST",
-    body: { title, artist: "CloudSqueeze", path, source: "Smoke" }
+    body: item
   }, { expectedStatus: 201 });
   createdQueueIds.push(created.id);
 
   const duplicate = await requestJson("/queue", {
     method: "POST",
-    body: { title, artist: "CloudSqueeze", path, source: "Smoke" }
+    body: item
   }, { expectedStatus: 409 });
   assert(duplicate.error === "That song is already in the queue", "duplicate queue item did not return the expected error");
 
@@ -210,11 +212,13 @@ async function assertQueueCrud() {
 async function assertPlayableDuplicateRejection() {
   await cleanupQueue();
   const title = `Smoke Verify Duplicate ${Date.now()}`;
+  const [track] = await localSmokeTracks(1);
+  const item = smokeTrack(track, title);
   const first = await requestJson("/player/tracks", {
     method: "POST",
     body: {
       action: "add-queue",
-      tracks: [{ title, artist: "CloudSqueeze", path: "/music/smoke/verify-duplicate.mp3", source: "Smoke" }]
+      tracks: [item]
     }
   });
   for (const item of first.queued || []) createdQueueIds.push(item.id);
@@ -224,7 +228,7 @@ async function assertPlayableDuplicateRejection() {
     method: "POST",
     body: {
       action: "add-queue",
-      tracks: [{ title, artist: "CloudSqueeze", path: "/music/smoke/verify-duplicate.mp3", source: "Smoke" }]
+      tracks: [item]
     }
   }, { expectedStatus: 409 });
   assert(duplicate.error === "Those songs are already in the queue", "batch duplicate rejection returned an unexpected error");
@@ -233,13 +237,8 @@ async function assertPlayableDuplicateRejection() {
 
 async function assertQueueLimit() {
   await cleanupQueue();
-  const ids = ["1000000000000000000007", "1000000000000000000008", "1000000000000000000009", "1000000000000000000010"];
-  const tracks = Array.from({ length: 4 }, (_, index) => ({
-    title: `Smoke Verify Limit ${index + 1}`,
-    artist: "CloudSqueeze",
-    path: `/music/smoke/verify-limit-${ids[index]}.mp3`,
-    source: "Smoke"
-  }));
+  const sourceTracks = await localSmokeTracks(4);
+  const tracks = sourceTracks.map((track, index) => smokeTrack(track, `Smoke Verify Limit ${index + 1}`));
   const rejected = await requestJson("/player/tracks", {
     method: "POST",
     body: { action: "add-queue", tracks }
@@ -430,6 +429,22 @@ async function requestJson(path, { method = "GET", body } = {}, { expectedStatus
     assert(response.ok, `${path} returned HTTP ${response.status}: ${text.slice(0, 160)}`);
   }
   return data;
+}
+
+async function localSmokeTracks(count) {
+  const body = await requestJson(`/library/search?source=local&limit=${Math.max(20, count)}`);
+  const tracks = (body.results || []).filter((item) => item.path);
+  assert(tracks.length >= count, `local library returned ${tracks.length} playable tracks, needed ${count}`);
+  return tracks.slice(0, count);
+}
+
+function smokeTrack(track, title) {
+  return {
+    ...track,
+    title,
+    artist: "CloudSqueeze",
+    source: track.source || "Local library"
+  };
 }
 
 function normalizeBaseUrl(value) {

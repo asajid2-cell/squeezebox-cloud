@@ -101,6 +101,41 @@ describe("Cloud Squeeze API", () => {
     expect(appState.queue).toHaveLength(0);
   });
 
+  it("rejects nonexistent local paths when strict public validation is enabled", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const previousStrict = process.env.STRICT_PUBLIC_TRACK_VALIDATION;
+    const previousMusicDir = config.musicSourceDir;
+    const previousUploadDir = config.uploadDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-strict-paths-"));
+    const uploads = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-strict-uploads-"));
+    const realPath = path.join(root, "real.mp3");
+    await fs.writeFile(realPath, Buffer.from("ID3"));
+    process.env.STRICT_PUBLIC_TRACK_VALIDATION = "1";
+    config.musicSourceDir = root;
+    config.uploadDir = uploads;
+    try {
+      const app = createApp({ lms: mockLms });
+      await request(app)
+        .post("/api/player/track")
+        .send({ action: "add-queue", track: { title: "Missing Local", artist: "Tester", path: path.join(root, "missing.mp3") } })
+        .expect(400);
+
+      await request(app)
+        .post("/api/player/track")
+        .send({ action: "add-queue", track: { title: "Real Local", artist: "Tester", path: realPath } })
+        .expect(200);
+
+      expect(appState.queue).toEqual([expect.objectContaining({ title: "Real Local", path: realPath })]);
+    } finally {
+      if (previousStrict === undefined) delete process.env.STRICT_PUBLIC_TRACK_VALIDATION;
+      else process.env.STRICT_PUBLIC_TRACK_VALIDATION = previousStrict;
+      config.musicSourceDir = previousMusicDir;
+      config.uploadDir = previousUploadDir;
+      await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(uploads, { recursive: true, force: true });
+    }
+  });
+
   it("edits reorders and removes queue items", async () => {
     appState.queue.splice(0, appState.queue.length);
     const app = createApp({ lms: mockLms });

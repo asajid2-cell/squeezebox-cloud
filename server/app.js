@@ -182,7 +182,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
     });
   });
 
-  app.post("/api/queue", (req, res) => {
+  app.post("/api/queue", async (req, res) => {
     const parsed = queueSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "Invalid queue item", issues: parsed.error.issues });
@@ -202,6 +202,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
     }
     if (!spotifyTracksAreKnown([parsed.data])) {
       res.status(400).json({ error: "Spotify tracks must come from Cloud Squeeze search, playlist, or library results" });
+      return;
+    }
+    if (!(await trackInputsExistOnDisk([parsed.data]))) {
+      res.status(400).json({ error: "Local tracks must come from the Cloud Squeeze library or uploads" });
       return;
     }
     const duplicate = appState.queue.some((item) => item.title.toLowerCase() === parsed.data.title.toLowerCase());
@@ -280,6 +284,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
           res.status(429).json({ error: queueLimitMessage(), queue: appState.queue });
           return;
         }
+        if (!(await trackInputsExistOnDisk([track]))) {
+          res.status(400).json({ error: "Local tracks must come from the Cloud Squeeze library or uploads" });
+          return;
+        }
         queued = addQueueItem({ ...track, requestedBy: "guest" });
         logEvent("queue.add", { action, queued: trackSummary(queued), queue: queueSummary() });
       } else if (action === "play-next") {
@@ -291,9 +299,17 @@ export function createApp({ lms = new LmsClient() } = {}) {
           res.status(429).json({ error: queueLimitMessage(), queue: appState.queue });
           return;
         }
+        if (!(await trackInputsExistOnDisk([track]))) {
+          res.status(400).json({ error: "Local tracks must come from the Cloud Squeeze library or uploads" });
+          return;
+        }
         queued = addQueueItemNext({ ...track, requestedBy: "guest" });
         logEvent("queue.add-next", { action, queued: trackSummary(queued), queue: queueSummary() });
       } else {
+        if (!(await trackInputsExistOnDisk([track]))) {
+          res.status(400).json({ error: "Local tracks must come from the Cloud Squeeze library or uploads" });
+          return;
+        }
         const playerId = await hotPlayerId(lms);
         stopGeneratedPlayback();
         setMode("play");
@@ -342,6 +358,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
     }
     if (!canQueueMoreGuestTracks(uniquePlayable.length)) {
       res.status(429).json({ error: queueLimitMessage(), queue: appState.queue, accepted: Math.max(0, guestQueueLimit() - guestQueueCount()) });
+      return;
+    }
+    if (!(await trackInputsExistOnDisk(uniquePlayable))) {
+      res.status(400).json({ error: "Local tracks must come from the Cloud Squeeze library or uploads" });
       return;
     }
 
@@ -883,6 +903,19 @@ function isKnownSpotifyTrack(uri) {
 
 function spotifyTracksAreKnown(tracks = []) {
   return (tracks || []).every((track) => !isSpotifyTrackInput(track) || isKnownSpotifyTrack(track.uri));
+}
+
+async function trackInputsExistOnDisk(tracks = []) {
+  if (!strictPublicTrackValidation()) return true;
+  for (const track of tracks || []) {
+    if (!track?.path) continue;
+    if (!(await safeMusicPath(track.path))) return false;
+  }
+  return true;
+}
+
+function strictPublicTrackValidation() {
+  return process.env.STRICT_PUBLIC_TRACK_VALIDATION === "1" || process.env.NODE_ENV !== "test";
 }
 
 function normalizedSpotifyTrackUri(uri) {
