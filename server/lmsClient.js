@@ -380,9 +380,13 @@ export class LmsClient {
 
       const categoryPlayable = playable.filter((item) => item.resultKind !== "track");
       const firstPageTrackCount = Math.max(6, count - Math.min(12, categoryPlayable.length));
-      const mapped = uniqueByUri([...directPlayable.slice(0, firstPageTrackCount), ...categoryPlayable, ...directPlayable.slice(firstPageTrackCount)])
-        .map((item) => spotifyItemToTrack(item));
+      const mapped = filterSpotifySearchResults(
+        uniqueByUri([...directPlayable.slice(0, firstPageTrackCount), ...categoryPlayable, ...directPlayable.slice(firstPageTrackCount)])
+          .map((item) => spotifyItemToTrack(item)),
+        search
+      );
       if (mapped.length > 0) this.setCached(requestKey, mapped.slice(0, requestCount), spotifySearchCacheMs);
+      else if (looksLikeSingleTokenNoise(search)) this.setCached(requestKey, [], 30000);
       return mapped;
     });
     if (stale.length > 0) {
@@ -400,6 +404,8 @@ export class LmsClient {
     const results = fullResults.slice(0, count);
     if (results.length > 0) {
       this.setCached(cacheKey, results, spotifySearchCacheMs);
+    } else if (looksLikeSingleTokenNoise(search)) {
+      this.setCached(cacheKey, [], 30000);
     }
     return results;
   }
@@ -747,6 +753,24 @@ function normalizedSpotifyUri(value) {
 
 function normalizeSearchQuery(value) {
   return String(value || "").trim().replace(/\s+/g, " ");
+}
+
+function filterSpotifySearchResults(results, query) {
+  if (!looksLikeSingleTokenNoise(query)) return results;
+  return results.filter((track) => spotifySearchResultMatches(track, query));
+}
+
+function looksLikeSingleTokenNoise(query) {
+  const normalized = comparableSpotifyText(query);
+  return normalized.length >= 8 && !normalized.includes(" ");
+}
+
+function spotifySearchResultMatches(track, query) {
+  const normalizedQuery = comparableSpotifyText(query);
+  const compactQuery = normalizedQuery.replace(/\s+/g, "");
+  const haystack = comparableSpotifyText([track?.title, track?.artist, track?.album].filter(Boolean).join(" "));
+  const compactHaystack = haystack.replace(/\s+/g, "");
+  return haystack.includes(normalizedQuery) || compactHaystack.includes(compactQuery);
 }
 
 function isIdleStatus(status) {

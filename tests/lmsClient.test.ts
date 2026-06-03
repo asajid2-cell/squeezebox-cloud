@@ -859,6 +859,61 @@ describe("LMS client parsing", () => {
     expect(searches).toEqual(["search:the weeknd"]);
   });
 
+  it("drops loose Spotty fuzzy matches for long single-token noise searches", async () => {
+    let requests = 0;
+    const client = new LmsClient();
+    client.jsonRequest = async () => {
+      requests += 1;
+      return {
+        result: {
+          item_loop: [
+            {
+              text: "abcdefu\nGAYLE - single",
+              goAction: "playControl",
+              presetParams: { favorites_url: "spotify:track:abcdefu", favorites_title: "abcdefu by GAYLE from single" }
+            },
+            {
+              text: "The Duck Song\nThe Duck - single",
+              goAction: "playControl",
+              presetParams: { favorites_url: "spotify:track:duck", favorites_title: "The Duck Song by The Duck from single" }
+            }
+          ]
+        }
+      };
+    };
+
+    const first = await client.spotifySearch("player-1", "asdfqwerzxv", 10);
+    const second = await client.spotifySearch("player-1", "asdfqwerzxv", 10);
+
+    expect(first).toEqual([]);
+    expect(second).toEqual([]);
+    expect(requests).toBe(1);
+  });
+
+  it("keeps compact single-token Spotify searches when title artist or album actually matches", async () => {
+    const client = new LmsClient();
+    client.jsonRequest = async () => ({
+      result: {
+        item_loop: [
+          {
+            text: "Lucid Dreams\nJuice WRLD - Goodbye & Good Riddance",
+            goAction: "playControl",
+            presetParams: { favorites_url: "spotify:track:lucid", favorites_title: "Lucid Dreams by Juice WRLD from Goodbye & Good Riddance" }
+          },
+          {
+            text: "Unrelated\nOther Artist - single",
+            goAction: "playControl",
+            presetParams: { favorites_url: "spotify:track:other", favorites_title: "Unrelated by Other Artist from single" }
+          }
+        ]
+      }
+    });
+
+    const results = await client.spotifySearch("player-1", "juicewrld", 10);
+
+    expect(results).toEqual([expect.objectContaining({ title: "Lucid Dreams", artist: "Juice WRLD" })]);
+  });
+
   it("serves concurrent Spotify searches from one in-flight request", async () => {
     let requests = 0;
     let release: (value: unknown) => void = () => {};
