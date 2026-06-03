@@ -800,7 +800,9 @@ export function createApp({ lms = new LmsClient() } = {}) {
     res.json({ token: adminToken });
   });
 
-  app.post("/api/player/play", async (_req, res) => withTransportLock(res, async () => {
+  app.post("/api/player/play", async (req, res) => {
+    if (rejectUnexpectedTransportBody(req, res, "Use /api/player/track to play a specific song")) return;
+    return withTransportLock(res, async () => {
     try {
       const playerId = await hotPlayerId(lms);
       const shouldPlayVisibleQueue =
@@ -816,18 +818,24 @@ export function createApp({ lms = new LmsClient() } = {}) {
     } catch (error) {
       res.status(502).json({ error: error.message, mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying, queue: appState.queue });
     }
-  }));
+    });
+  });
 
-  app.post("/api/player/pause", async (_req, res) => withTransportLock(res, async () => {
+  app.post("/api/player/pause", async (req, res) => {
+    if (rejectUnexpectedTransportBody(req, res)) return;
+    return withTransportLock(res, async () => {
     try {
       await control(lms, "pause");
       res.json({ ok: true, mode: appState.player.mode, player: appState.player });
     } catch (error) {
       res.status(502).json({ error: error.message, mode: appState.player.mode, player: appState.player });
     }
-  }));
+    });
+  });
 
-  app.post("/api/player/stop", async (_req, res) => withTransportLock(res, async () => {
+  app.post("/api/player/stop", async (req, res) => {
+    if (rejectUnexpectedTransportBody(req, res)) return;
+    return withTransportLock(res, async () => {
     try {
       await control(lms, "stop");
       clearPendingPlayback();
@@ -839,9 +847,12 @@ export function createApp({ lms = new LmsClient() } = {}) {
     } catch (error) {
       res.status(502).json({ error: error.message, mode: appState.player.mode, player: appState.player });
     }
-  }));
+    });
+  });
 
-  app.post("/api/player/next", async (_req, res) => withTransportLock(res, async () => {
+  app.post("/api/player/next", async (req, res) => {
+    if (rejectUnexpectedTransportBody(req, res)) return;
+    return withTransportLock(res, async () => {
     try {
       const playerId = await hotPlayerId(lms);
       logEvent("transport.next.request", { queue: queueSummary(), playback: appState.playback, nowPlaying: trackSummary(appState.nowPlaying) });
@@ -864,9 +875,12 @@ export function createApp({ lms = new LmsClient() } = {}) {
     } catch (error) {
       res.status(502).json({ error: error.message, player: appState.player, nowPlaying: appState.nowPlaying });
     }
-  }));
+    });
+  });
 
-  app.post("/api/player/previous", async (_req, res) => withTransportLock(res, async () => {
+  app.post("/api/player/previous", async (req, res) => {
+    if (rejectUnexpectedTransportBody(req, res)) return;
+    return withTransportLock(res, async () => {
     try {
       const playerId = await hotPlayerId(lms);
       logEvent("transport.previous.request", { queue: queueSummary(), playback: appState.playback, nowPlaying: trackSummary(appState.nowPlaying) });
@@ -891,7 +905,8 @@ export function createApp({ lms = new LmsClient() } = {}) {
     } catch (error) {
       res.status(502).json({ error: error.message, player: appState.player, nowPlaying: appState.nowPlaying });
     }
-  }));
+    });
+  });
 
   app.post("/api/player/volume", async (req, res) => {
     const parsed = volumeSchema.safeParse(req.body);
@@ -1107,6 +1122,18 @@ async function withQueueMutationLock(handler) {
   } finally {
     release();
   }
+}
+
+function rejectUnexpectedTransportBody(req, res, detail = "Transport controls do not accept request body fields") {
+  if (!hasUnexpectedBodyFields(req.body)) return false;
+  res.status(400).json({ error: "Unexpected transport control body", detail });
+  return true;
+}
+
+function hasUnexpectedBodyFields(body) {
+  if (body === undefined || body === null) return false;
+  if (typeof body !== "object" || Array.isArray(body)) return true;
+  return Object.keys(body).length > 0;
 }
 
 function runPlaybackCommand(lms, playerId, track, action) {

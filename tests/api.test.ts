@@ -407,6 +407,53 @@ describe("Cloud Squeeze API", () => {
     expect(controls).not.toContain("play");
   });
 
+  it("rejects track payloads sent to the transport play endpoint", async () => {
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    const controls: string[] = [];
+    const played: string[] = [];
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string) {
+          controls.push(action);
+          return "ok";
+        },
+        async playTrack() {
+          played.push("playTrack");
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/play")
+      .send({ action: "play-now", track: { title: "Wrong Route", uri: "spotify:track:0000000000000000000001", kind: "track" } })
+      .expect(400);
+
+    expect(response.body.error).toBe("Unexpected transport control body");
+    expect(response.body.detail).toContain("/api/player/track");
+    expect(controls).toEqual([]);
+    expect(played).toEqual([]);
+  });
+
+  it("allows empty transport control bodies", async () => {
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    const controls: string[] = [];
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string) {
+          controls.push(action);
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/pause")
+      .send({})
+      .expect(200);
+
+    expect(response.body.mode).toBe("pause");
+    expect(controls).toEqual(["pause"]);
+  });
+
   it("stops playback and clears stale now playing after LMS accepts stop", async () => {
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
     updateNowPlaying({ id: "stale-track", title: "Stale Track", artist: "Tester", source: "LMS", duration: 100, elapsed: 12 });
