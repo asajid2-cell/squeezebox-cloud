@@ -245,7 +245,8 @@ export function createApp({ lms = new LmsClient() } = {}) {
   app.get("/api/state", async (_req, res) => {
     await refreshLms(lms, {
       minAgeMs: appState.player.mode === "play" ? 650 : 1600,
-      waitForFresh: !refreshState.updatedAt || !appState.player.connected
+      waitForFresh: !refreshState.updatedAt || !appState.player.connected,
+      maintainPlayback: shouldMaintainQueueOnPoll()
     });
     res.json(getPublicState());
   });
@@ -976,7 +977,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
         }
         setMode("play");
       }
-      refreshLms(lms, { force: true }).catch(() => null);
+      refreshLms(lms, { force: true, maintainPlayback: appState.queue.length > 0 || appState.playback.smartQueue }).catch(() => null);
       res.json({ ok: true, seconds, player: appState.player, nowPlaying: appState.nowPlaying });
     } catch (error) {
       res.status(502).json({ error: error.message, seconds, seekApplied: false, player: appState.player, nowPlaying: appState.nowPlaying });
@@ -1408,6 +1409,11 @@ function publicRequestsOpen() {
   if (appState.admin.publicRequests === false) return false;
   if (appState.admin.scheduleEnabled && appState.schedule.current?.requestsPaused) return false;
   return true;
+}
+
+function shouldMaintainQueueOnPoll() {
+  if (appState.playback.smartQueue) return true;
+  return Boolean(appState.playback.appManagedPlayback && appState.queue.length > 0);
 }
 
 function publicRequestsClosedMessage() {

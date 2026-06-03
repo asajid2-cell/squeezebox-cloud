@@ -2288,6 +2288,52 @@ describe("Cloud Squeeze API", () => {
     expect(appState.queue).toEqual([]);
   });
 
+  it("state polling auto-advances a stopped app-managed visible queue", async () => {
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: true, smartQueue: false, history: [], previousTracks: [], appManagedPlayback: true };
+    appState.nowPlaying = {
+      id: "current",
+      title: "Ending Track",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 99,
+      canSeek: true,
+      art: null,
+      path: "/music/ending-track.mp3"
+    };
+    addQueueItem({ title: "Queued From State", artist: "Tester", requestedBy: "guest", path: "/music/queued-from-state.mp3" });
+    const played: string[] = [];
+
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async status() {
+          return { id: "player-1", name: "Test Speaker", connected: true, online: true, mode: "stop", volume: 44, detail: "stopped" };
+        },
+        async nowPlaying() {
+          return { id: "idle", title: "No track playing", artist: "Connect a player or request a song", album: "", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null };
+        },
+        async control() {
+          return "ok";
+        },
+        async playTrack(_playerId: string, track: { title?: string }) {
+          played.push(String(track.title || ""));
+          return "ok";
+        }
+      }
+    }))
+      .get("/api/state")
+      .expect(200);
+
+    expect(played).toEqual(["Queued From State"]);
+    expect(response.body.nowPlaying.title).toBe("Queued From State");
+    expect(response.body.queue).toEqual([]);
+    expect(response.body.playback.appManagedPlayback).toBe(true);
+  });
+
   it("keeps app-managed state during idle polling while a visible queue is waiting", async () => {
     resetRefreshStateForTests();
     appState.queue.splice(0, appState.queue.length);
