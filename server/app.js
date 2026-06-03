@@ -311,13 +311,15 @@ export function createApp({ lms = new LmsClient() } = {}) {
           return;
         }
         const playerId = await hotPlayerId(lms);
+        await lms.playTrack(playerId, track, "play-now");
         stopGeneratedPlayback();
         setMode("play");
         rememberPreviousTrack(appState.nowPlaying);
+        markPendingPlayback(track);
         const optimistic = optimisticTrack(track);
         updateNowPlaying(optimistic);
-        logEvent("track.play-now.optimistic", { track: trackSummary(track), queue: queueSummary() });
-        runPlaybackCommand(lms, playerId, track, "play-now");
+        logEvent("track.play-now", { track: trackSummary(track), queue: queueSummary() });
+        refreshLms(lms, { force: true }).catch(() => null);
       }
       res.json({ ok: true, action, queued, queue: appState.queue, player: appState.player, nowPlaying: appState.nowPlaying, playback: appState.playback });
     } catch (error) {

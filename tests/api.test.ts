@@ -476,6 +476,42 @@ describe("Cloud Squeeze API", () => {
     expect(played).toEqual([{ action: "play-now", track: expect.objectContaining({ uri: "spotify:track:0000000000000000000101" }) }]);
   });
 
+  it("does not mutate now playing when direct play-now fails", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
+    appState.nowPlaying = {
+      id: "stable-current",
+      title: "Stable Current",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 20,
+      canSeek: true,
+      art: null,
+      path: "/music/test/stable-current.mp3"
+    };
+    appState.playback = { ...appState.playback, shuffle: true, smartQueue: false, history: ["stable-history"], previousTracks: [] };
+    addQueueItem({ title: "Generated Keeper", artist: "Tester", requestedBy: "shuffle", path: "/music/test/generated-keeper.mp3" });
+    const lms = {
+      ...mockLms,
+      async playTrack() {
+        throw new Error("LMS refused direct playback");
+      }
+    };
+
+    const response = await request(createApp({ lms }))
+      .post("/api/player/track")
+      .send({ action: "play-now", track: { title: "Failed Direct", artist: "Tester", path: "/music/test/failed-direct.mp3", source: "Local library" } })
+      .expect(502);
+
+    expect(response.body.error).toContain("LMS refused direct playback");
+    expect(appState.nowPlaying.title).toBe("Stable Current");
+    expect(appState.player.mode).toBe("stop");
+    expect(appState.playback).toMatchObject({ shuffle: true, smartQueue: false, history: ["stable-history"], previousTracks: [] });
+    expect(appState.queue).toEqual([expect.objectContaining({ title: "Generated Keeper" })]);
+  });
+
   it("rejects unknown Spotify queue tracks even when their ids are well formed", async () => {
     appState.queue.splice(0, appState.queue.length);
     const app = createApp({ lms: mockLms });
