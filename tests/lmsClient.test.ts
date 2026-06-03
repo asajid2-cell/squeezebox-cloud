@@ -761,6 +761,47 @@ describe("LMS client parsing", () => {
     expect(malformedTrack).toEqual([]);
   });
 
+  it("falls back to Spotify search when artist children are empty", async () => {
+    const requests: unknown[] = [];
+    const client = new LmsClient();
+    client.jsonRequest = async (params: unknown) => {
+      requests.push(params);
+      const args = Array.isArray(params) && Array.isArray(params[1]) ? params[1] : [];
+      if (args.some((item) => item === "search:Ado")) {
+        return {
+          result: {
+            item_loop: [
+              {
+                text: "Artist Song\nAdo - Album",
+                presetParams: { favorites_url: "spotify:track:artist-song", favorites_title: "Artist Song by Ado from Album" }
+              },
+              {
+                text: "Other Song\nDifferent Artist - Album",
+                presetParams: { favorites_url: "spotify:track:other-song", favorites_title: "Other Song by Different Artist from Album" }
+              }
+            ]
+          }
+        };
+      }
+      return { result: { item_loop: [] } };
+    };
+
+    const results = await client.spotifyChildren(
+      "player-1",
+      { browseId: "7.0", uri: "spotify:artist:artist", kind: "artist", title: "Ado" },
+      10,
+      0
+    );
+
+    expect(results).toEqual([expect.objectContaining({ title: "Artist Song", artist: "Ado", kind: "track" })]);
+    expect(requests).toEqual([
+      ["player-1", ["spotty", "items", 0, 200, "menu:spotty", "item_id:7.0"]],
+      ["player-1", ["spotty", "items", 0, 200, "menu:spotty", "item_id:spotify:artist:artist"]],
+      ["player-1", ["spotty", "items", 0, 200, "menu:spotty", "item_id:spotify://artist:artist"]],
+      ["player-1", ["spotty", "items", 0, 50, "menu:spotty", "item_id:1.0", "search:Ado", "cachesearch:1"]]
+    ]);
+  });
+
   it("serves smaller Spotify children requests through a wider cached page", async () => {
     const requests: unknown[] = [];
     const client = new LmsClient();

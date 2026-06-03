@@ -476,6 +476,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       const kind = String(req.query.kind || "playlist");
       const browseId = String(req.query.browseId || "");
       const uri = String(req.query.uri || "");
+      const title = String(req.query.title || "");
       if (!["playlist", "album", "artist", "track"].includes(kind)) {
         res.status(400).json({ error: "Spotify child kind must be playlist, album, artist, or track", results: [] });
         return;
@@ -500,7 +501,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       }
       const results = await lms.spotifyChildren(
         playerId,
-        { browseId, uri, kind },
+        { browseId, uri, kind, title },
         limit,
         offset
       );

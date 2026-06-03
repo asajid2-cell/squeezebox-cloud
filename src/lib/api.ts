@@ -100,6 +100,7 @@ export async function fetchSpotifyChildren(track: Partial<Track>, limit = 200): 
   if (track.browseId) params.set("browseId", String(track.browseId));
   if (track.uri) params.set("uri", String(track.uri));
   if (track.kind) params.set("kind", String(track.kind));
+  if (track.title) params.set("title", String(track.title));
   params.set("limit", String(limit));
   const response = await fetch(`${apiBase}/spotify/children?${params.toString()}`);
   if (!response.ok) return [];

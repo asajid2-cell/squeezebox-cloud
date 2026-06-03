@@ -367,13 +367,15 @@ export class LmsClient {
     return (results || []).slice(0, count);
   }
 
-  async spotifyChildren(playerId, { browseId = "", uri = "", kind = "playlist" } = {}, limit = 100, offset = 0) {
+  async spotifyChildren(playerId, { browseId = "", uri = "", kind = "playlist", title = "" } = {}, limit = 100, offset = 0) {
     if (!playerId) return [];
     const count = Math.max(1, Math.min(300, Number(limit) || 100));
     const start = Math.max(0, Number(offset) || 0);
     const shouldWiden = start === 0 && count < 200 && kind !== "track";
     const requestCount = shouldWiden ? 200 : count;
-    const cacheBase = `spotifyChildren:${playerId}:${browseId}:${uri}:${kind}`;
+    const fallbackTitle = String(title || "").trim();
+    const normalizedFallbackTitle = comparableSpotifyText(fallbackTitle);
+    const cacheBase = `spotifyChildren:${playerId}:${browseId}:${uri}:${kind}:${normalizedFallbackTitle}`;
     const cacheKey = `${cacheBase}:${count}:${start}`;
     const cached = this.getCached(cacheKey);
     if (cached) return cached;
@@ -403,6 +405,21 @@ export class LmsClient {
         const tracks = spotifyPlayableItems(items, "track")
           .map((item) => spotifyItemToTrack(item))
           .filter((track) => track.kind === "track" && String(track.uri || "").includes(":track:"));
+        if (tracks.length > 0) {
+          this.setCached(requestKey, tracks, spotifyBrowseCacheMs);
+          return tracks;
+        }
+      }
+      if (kind === "artist" && fallbackTitle) {
+        const fallbackTracks = (await this.spotifySearch(playerId, fallbackTitle, Math.min(50, requestCount)).catch(() => []))
+          .filter((track) => track.kind === "track" && String(track.uri || "").includes(":track:"));
+        const matchingArtistTracks = normalizedFallbackTitle
+          ? fallbackTracks.filter((track) => {
+              const artist = comparableSpotifyText(track.artist);
+              return artist.includes(normalizedFallbackTitle) || normalizedFallbackTitle.includes(artist);
+            })
+          : [];
+        const tracks = matchingArtistTracks.length > 0 ? matchingArtistTracks : fallbackTracks;
         if (tracks.length > 0) {
           this.setCached(requestKey, tracks, spotifyBrowseCacheMs);
           return tracks;
@@ -707,6 +724,15 @@ function uniqueByUri(items) {
     seen.add(uri);
     return true;
   });
+}
+
+function comparableSpotifyText(value) {
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 }
 
 function uniqueSearchTerms(values) {

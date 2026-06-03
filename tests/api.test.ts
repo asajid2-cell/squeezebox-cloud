@@ -1283,6 +1283,23 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.results[0]).toMatchObject({ title: "Playlist Track", kind: "track" });
   });
 
+  it("passes Spotify child titles through for artist fallback", async () => {
+    const calls: unknown[] = [];
+    const lms = {
+      ...mockLms,
+      async spotifyChildren(_playerId: string, target: unknown) {
+        calls.push(target);
+        return [];
+      }
+    };
+
+    await request(createApp({ lms }))
+      .get("/api/spotify/children?browseId=7.0&uri=spotify%3Aartist%3A1&kind=artist&title=Ado")
+      .expect(200);
+
+    expect(calls).toEqual([{ browseId: "7.0", uri: "spotify:artist:1", kind: "artist", title: "Ado" }]);
+  });
+
   it("returns fast empty Spotify results when Spotty is configured but unreachable", async () => {
     const previousSpotify = { ...appState.services.spotify };
     const calls: string[] = [];
