@@ -375,6 +375,7 @@ function PlaybackOptions({ state, disabled, onRefresh, onAction }: { state: AppS
   const playback = state.playback || { shuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "mixed" as const };
   const repeatIcon = playback.repeat === "one" ? <Repeat1 size={17} /> : <Repeat size={17} />;
   const shuffleLabel = playback.smartQueue ? "Smart shuffle" : playback.shuffle ? "Shuffle on" : "Shuffle";
+  const hasManualQueue = state.queue.some((item) => item.requestedBy !== "shuffle" && item.requestedBy !== "smart shuffle");
 
   async function setRepeat() {
     const next = playback.repeat === "off" ? "all" : playback.repeat === "all" ? "one" : "off";
@@ -389,7 +390,9 @@ function PlaybackOptions({ state, disabled, onRefresh, onAction }: { state: AppS
       playback.smartQueue
         ? { shuffle: false, smartQueue: false }
         : playback.shuffle
-          ? { shuffle: false, smartQueue: true }
+          ? hasManualQueue
+            ? { shuffle: false, smartQueue: false }
+            : { shuffle: false, smartQueue: true }
           : { shuffle: true, smartQueue: false };
     await onAction(async () => {
       await savePlayback(next);

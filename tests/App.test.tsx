@@ -193,6 +193,41 @@ describe("Cloud Squeeze UI", () => {
     });
   });
 
+  it("turns manual queue shuffle off instead of cycling into smart shuffle", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const defaultFetch = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (url.includes("/api/state")) {
+        return jsonResponse({
+          player: { id: "p1", name: "Test Speaker", connected: true, online: true, mode: "play", volume: 68 },
+          nowPlaying: { id: "t1", title: "Midnight City", artist: "M83", album: "Hurry Up", source: "Spotify", duration: 243, elapsed: 151, canSeek: true },
+          queue: [{ id: "q1", title: "Awake", artist: "Tycho", source: "Spotify", requestedBy: "alex", etaMinutes: 7 }],
+          recentPicks: [],
+          schedule: { current: { name: "Open Queue", until: "10:00 PM", requestsPaused: false }, next: { name: "Quiet Hours", time: "10:00 PM - 8:00 AM", requestsPaused: true } },
+          rules: [],
+          services: {
+            spotify: { configured: true, reachable: true, detail: "ok" },
+            localLibrary: { root: "Downloads", reachable: true, trackCount: 2 },
+            musicInfo: { configured: true, reachable: true, detail: "Plugin ready" }
+          },
+          trackInfo: { artistBio: "", albumReview: "", lyrics: "" },
+          playback: { shuffle: true, smartQueue: false, repeat: "off", smartShuffleSource: "spotify" },
+          admin: { publicRequests: true, maxQueuePerUser: 3, moderation: "basic", scheduleEnabled: true }
+        });
+      }
+      return defaultFetch?.(url, options) ?? jsonResponse({ ok: true });
+    });
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Shuffle on" }));
+
+    await waitFor(() => {
+      const playbackCall = fetchMock.mock.calls.find(([url, options]) => String(url).includes("/api/player/playback") && options?.method === "POST");
+      expect(playbackCall).toBeTruthy();
+      expect(JSON.parse(String(playbackCall?.[1]?.body))).toEqual({ shuffle: false, smartQueue: false });
+    });
+  });
+
   it("navigates public sections from the sidebar", async () => {
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Queue" }));
