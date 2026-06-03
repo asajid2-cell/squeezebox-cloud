@@ -1430,7 +1430,7 @@ async function maintainVisiblePlaybackQueue(lms, status, track) {
   const needsPlaybackNudge = shouldNudgePlayback(status, track);
   if (needsPlaybackNudge && appState.queue.length > 0) {
     logEvent("queue.auto-advance", { reason: "near-track-end", queue: queueSummary(), nowPlaying: trackSummary(track) });
-    await playNextVisibleQueueItem(lms, status.id, { generatedOnly: true });
+    await playNextVisibleQueueItem(lms, status.id, { generatedOnly: appState.playback.smartQueue });
   }
 }
 
@@ -1439,9 +1439,9 @@ export async function maintainVisiblePlaybackQueueForTests(lms, status, track) {
 }
 
 async function ensureSmartShuffleQueue(lms, playerId, { force = false } = {}) {
-  if ((!appState.playback.smartQueue && !appState.playback.shuffle) || !playerId) return [];
+  if (!appState.playback.smartQueue || !playerId) return [];
   const now = Date.now();
-  const requestType = appState.playback.smartQueue ? "smart shuffle" : "shuffle";
+  const requestType = "smart shuffle";
   const smartQueued = appState.queue.filter((item) => item.requestedBy === requestType).length;
   if (!force && smartQueued >= 4) return [];
   if (!force && now - Number(appState.playback.lastShuffleRefillAt || 0) < 12000) return [];

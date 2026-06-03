@@ -1962,6 +1962,78 @@ describe("Cloud Squeeze API", () => {
     expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Manual Keeper"]);
   });
 
+  it("auto-advances normal shuffle within the visible queue without generated refill", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      smartQueue: false,
+      smartShuffleSource: "spotify",
+      lastShuffleRefillAt: 0,
+      lastShuffleSeed: "",
+      history: []
+    };
+    addQueueItem({ title: "Playlist Next", artist: "Tester", requestedBy: "guest", uri: "spotify:track:playlist-next", kind: "track" });
+    const played: string[] = [];
+    const searched: string[] = [];
+
+    await maintainVisiblePlaybackQueueForTests(
+      {
+        ...mockLms,
+        async control() {
+          return "ok";
+        },
+        async playTrack(_playerId: string, track: { title?: string }) {
+          played.push(String(track.title || ""));
+          return "ok";
+        },
+        async spotifySearch(_playerId: string, term: string) {
+          searched.push(term);
+          return [{ title: "Unrelated Generated", artist: "Spotify", uri: "spotify:track:random", kind: "track" }];
+        }
+      },
+      { id: "player-1", mode: "play" },
+      { title: "Current", artist: "Tester", duration: 100, elapsed: 99, uri: "spotify:track:current" }
+    );
+
+    expect(played).toEqual(["Playlist Next"]);
+    expect(searched).toEqual([]);
+    expect(appState.queue).toEqual([]);
+  });
+
+  it("does not generate unrelated tracks when next is pressed with normal shuffle and an empty queue", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      smartQueue: false,
+      smartShuffleSource: "spotify",
+      lastShuffleRefillAt: 0,
+      lastShuffleSeed: "",
+      history: []
+    };
+    const controls: string[] = [];
+    const searched: string[] = [];
+    const lms = {
+      ...mockLms,
+      async control(_playerId: string, action: string) {
+        controls.push(action);
+        return "ok";
+      },
+      async spotifySearch(_playerId: string, term: string) {
+        searched.push(term);
+        return [{ title: "Unrelated Generated", artist: "Spotify", uri: "spotify:track:random", kind: "track" }];
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/next").expect(200);
+
+    expect(response.body.action).toBe("next");
+    expect(controls).toContain("next");
+    expect(searched).toEqual([]);
+    expect(appState.queue).toEqual([]);
+  });
+
   it("plays the next smart shuffle item from the visible queue", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = { ...appState.playback, shuffle: false, smartShuffleSource: "mixed", history: [] };
