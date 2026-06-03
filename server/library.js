@@ -25,6 +25,7 @@ export async function scanLibrary(root = null, limit = 5000, source = "all", { u
   const scanExtensions = isUploadRoot ? ["mp3"] : extensions;
   const patterns = scanExtensions.map((ext) => `**/*.${ext}`);
   try {
+    const ignore = nestedUploadIgnore(root, isUploadRoot);
     const files = await fg(patterns, {
       cwd: root,
       absolute: true,
@@ -32,7 +33,8 @@ export async function scanLibrary(root = null, limit = 5000, source = "all", { u
       suppressErrors: true,
       caseSensitiveMatch: false,
       dot: true,
-      deep: 8
+      deep: 8,
+      ignore
     });
     const sortedFiles = files.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
     const tracks = isUploadRoot
@@ -134,6 +136,14 @@ export function fileToTrack(filePath, tags = {}) {
     duration: null,
     path: filePath
   };
+}
+
+function nestedUploadIgnore(root, isUploadRoot) {
+  if (isUploadRoot) return [];
+  const relative = path.relative(path.resolve(root), path.resolve(config.uploadDir));
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return [];
+  const normalized = relative.replace(/\\/g, "/").replace(/\/$/, "");
+  return [`${normalized}/**`];
 }
 
 async function uploadedFileToTrack(filePath) {

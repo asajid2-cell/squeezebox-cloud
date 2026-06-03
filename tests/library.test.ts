@@ -36,6 +36,41 @@ describe("library scanner helpers", () => {
     });
   });
 
+  it("excludes nested uploads from local-only scans", async () => {
+    clearLibraryCaches();
+    const previousMusicDir = process.env.MUSIC_SOURCE_DIR;
+    const previousUploadDir = process.env.UPLOAD_DIR;
+    const { config } = await import("../server/state.js");
+    const oldMusicDir = config.musicSourceDir;
+    const oldUploadDir = config.uploadDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-nested-upload-"));
+    const uploadRoot = path.join(root, "uploads");
+    try {
+      config.musicSourceDir = root;
+      config.uploadDir = uploadRoot;
+      await fs.mkdir(uploadRoot, { recursive: true });
+      await fs.writeFile(path.join(root, "Local Artist - Local Song.mp3"), "ID3");
+      await fs.writeFile(path.join(uploadRoot, "Upload Artist - Upload Song.mp3"), "ID3");
+
+      const local = await searchLibrary("", undefined, 10, "local");
+      const uploaded = await searchLibrary("", undefined, 10, "uploaded");
+      const all = await searchLibrary("", undefined, 10, "all");
+
+      expect(local.map((track) => track.title)).toEqual(["Local Song"]);
+      expect(uploaded.map((track) => track.title)).toEqual(["Upload Song"]);
+      expect(all.map((track) => track.title).sort()).toEqual(["Local Song", "Upload Song"]);
+    } finally {
+      config.musicSourceDir = oldMusicDir;
+      config.uploadDir = oldUploadDir;
+      if (previousMusicDir === undefined) delete process.env.MUSIC_SOURCE_DIR;
+      else process.env.MUSIC_SOURCE_DIR = previousMusicDir;
+      if (previousUploadDir === undefined) delete process.env.UPLOAD_DIR;
+      else process.env.UPLOAD_DIR = previousUploadDir;
+      clearLibraryCaches();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("caches search results until library caches are cleared", async () => {
     clearLibraryCaches();
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-library-cache-"));
