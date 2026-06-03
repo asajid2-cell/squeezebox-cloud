@@ -1294,15 +1294,24 @@ async function maintainSmartShuffle(lms, status, track) {
 async function maintainVisiblePlaybackQueue(lms, status, track) {
   if (!status?.id) return;
   syncVisibleQueueWithCurrentTrack(track);
-  await topOffGeneratedQueue(lms, status.id);
   if (appState.playback.smartQueue || appState.playback.shuffle) {
-    lms.control(status.id, "shuffle", false).catch(() => null);
+    try {
+      await lms.control(status.id, "shuffle", false);
+    } catch (error) {
+      logEvent("queue.maintain-skip", { reason: "shuffle-control-failed", error: error.message, playback: appState.playback, queue: queueSummary() });
+      return;
+    }
   }
+  await topOffGeneratedQueue(lms, status.id);
   const needsPlaybackNudge = shouldNudgePlayback(status, track);
   if (needsPlaybackNudge && appState.queue.length > 0) {
     logEvent("queue.auto-advance", { reason: "near-track-end", queue: queueSummary(), nowPlaying: trackSummary(track) });
     await playNextVisibleQueueItem(lms, status.id, { generatedOnly: true });
   }
+}
+
+export async function maintainVisiblePlaybackQueueForTests(lms, status, track) {
+  return maintainVisiblePlaybackQueue(lms, status, track);
 }
 
 async function ensureSmartShuffleQueue(lms, playerId, { force = false } = {}) {

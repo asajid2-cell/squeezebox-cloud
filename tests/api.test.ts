@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createApp, nextQueueItemForPlayback, resetRefreshStateForTests, shouldNudgePlayback, syncVisibleQueueWithCurrentTrack } from "../server/app.js";
+import { createApp, maintainVisiblePlaybackQueueForTests, nextQueueItemForPlayback, resetRefreshStateForTests, shouldNudgePlayback, syncVisibleQueueWithCurrentTrack } from "../server/app.js";
 import { addQueueItem, appState, config, removeQueueItem, updateNowPlaying } from "../server/state.js";
 
 const mockLms = {
@@ -1660,6 +1660,40 @@ describe("Cloud Squeeze API", () => {
     expect(nextQueueItemForPlayback([manual, generated])).toBe(manual);
     expect(nextQueueItemForPlayback([manual, generated], { generatedOnly: true })).toBe(generated);
     expect(nextQueueItemForPlayback([manual], { generatedOnly: true })).toBeNull();
+  });
+
+  it("skips background generated top-off when LMS shuffle disable fails", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = {
+      ...appState.playback,
+      shuffle: false,
+      smartQueue: true,
+      smartShuffleSource: "spotify",
+      lastShuffleRefillAt: 12345,
+      lastShuffleSeed: "stable seed",
+      history: []
+    };
+    addQueueItem({ title: "Manual Keeper", artist: "Tester", requestedBy: "guest", path: "/music/manual.mp3" });
+    const searched: string[] = [];
+    await maintainVisiblePlaybackQueueForTests(
+      {
+        ...mockLms,
+        async control(_playerId: string, action: string) {
+          if (action === "shuffle") throw new Error("LMS refused shuffle");
+          return "ok";
+        },
+        async spotifySearch(_playerId: string, term: string) {
+          searched.push(term);
+          return [{ id: "spotify:fresh", title: "Fresh Generated", artist: "Tester", source: "Spotify", uri: "spotify:track:fresh", kind: "track" }];
+        }
+      },
+      { id: "player-1", mode: "play" },
+      { title: "Current", artist: "Tester", duration: 100, elapsed: 20, uri: "spotify:track:current" }
+    );
+
+    expect(searched).toHaveLength(0);
+    expect(appState.playback).toMatchObject({ smartQueue: true, lastShuffleRefillAt: 12345, lastShuffleSeed: "stable seed" });
+    expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Manual Keeper"]);
   });
 
   it("plays the next smart shuffle item from the visible queue", async () => {
