@@ -10,6 +10,7 @@ const spotifyStatusCacheMs = Number(process.env.SPOTIFY_STATUS_CACHE_MS || 30000
 const spotifyBrowseDeadlineMs = Number(process.env.SPOTIFY_BROWSE_DEADLINE_MS || 1800);
 const spotifyColdBrowseDeadlineMs = Number(process.env.SPOTIFY_COLD_BROWSE_DEADLINE_MS || 6500);
 const spotifyChildrenColdBrowseDeadlineMs = Number(process.env.SPOTIFY_CHILDREN_COLD_BROWSE_DEADLINE_MS || 4000);
+const spotifySearchCategoryDeadlineMs = Number(process.env.SPOTIFY_SEARCH_CATEGORY_DEADLINE_MS || 650);
 
 export class LmsClient {
   constructor(options = {}) {
@@ -289,11 +290,18 @@ export class LmsClient {
       const categoryIds = items
         .map((item) => item.actions?.go?.params?.item_id)
         .filter((id) => /^1\.0_.*\.[012]$/.test(String(id)));
-      const categoryResults = await Promise.all(
-        categoryIds.map((itemId) =>
-          this.jsonRequest([playerId, ["spotty", "items", 0, Math.min(10, requestCount), "menu:spotty", `item_id:${itemId}`]]).catch(() => null)
+      const categoryDeadline = directPlayable.length >= count ? spotifySearchCategoryDeadlineMs : spotifyBrowseDeadlineMs;
+      const categoryResults = categoryIds.length > 0
+        ? await withDeadline(
+          Promise.all(
+            categoryIds.map((itemId) =>
+              this.jsonRequest([playerId, ["spotty", "items", 0, Math.min(10, requestCount), "menu:spotty", `item_id:${itemId}`]]).catch(() => null)
+            )
+          ),
+          categoryDeadline,
+          []
         )
-      );
+        : [];
       for (const category of categoryResults) {
         const title = String(category?.result?.title || "").toLowerCase();
         const kind = title.includes("artist") ? "artist" : title.includes("album") ? "album" : title.includes("playlist") ? "playlist" : "track";

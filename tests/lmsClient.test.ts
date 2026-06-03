@@ -580,6 +580,39 @@ describe("LMS client parsing", () => {
     expect(results.map((result) => result.kind)).toEqual(["track", "track"]);
   });
 
+  it("does not block playable Spotify search results on slow category expansion", async () => {
+    const requests: unknown[] = [];
+    const client = new LmsClient();
+    client.jsonRequest = async (params: unknown) => {
+      requests.push(params);
+      const args = Array.isArray(params) && Array.isArray(params[1]) ? params[1] : [];
+      const itemArg = args.find((item) => typeof item === "string" && item.startsWith("item_id:"));
+      if (itemArg === "item_id:1.0_drake.0") {
+        return new Promise(() => {});
+      }
+      return {
+        result: {
+          item_loop: [
+            { text: "Artists", actions: { go: { params: { item_id: "1.0_drake.0" } } } },
+            ...Array.from({ length: 5 }, (_, index) => ({
+              text: `Track ${index}\nArtist - Album`,
+              goAction: "playControl",
+              presetParams: { favorites_url: `spotify:track:track${index}`, favorites_title: `Track ${index} by Artist from Album` }
+            }))
+          ]
+        }
+      };
+    };
+
+    const started = Date.now();
+    const results = await client.spotifySearch("player-1", "drake", 5);
+
+    expect(Date.now() - started).toBeLessThan(1200);
+    expect(results).toHaveLength(5);
+    expect(results.map((result) => result.kind)).toEqual(["track", "track", "track", "track", "track"]);
+    expect(requests).toHaveLength(2);
+  });
+
   it("reuses widened Spotify search cache for nearby small limits", async () => {
     let requests = 0;
     const client = new LmsClient();
