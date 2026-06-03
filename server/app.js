@@ -966,7 +966,7 @@ async function withTransportLock(res, handler) {
   });
   try {
     await previous;
-    if (!res.headersSent) await handler();
+    if (!res.headersSent) await withQueueMutationLock(handler);
   } finally {
     release();
   }

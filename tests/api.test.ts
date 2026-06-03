@@ -1433,6 +1433,43 @@ describe("Cloud Squeeze API", () => {
     }
   });
 
+  it("serializes transport queue consumption with concurrent batch additions", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, repeat: "off", history: [], previousTracks: [] };
+    appState.admin = { ...appState.admin, maxQueuePerUser: 3 };
+    addQueueItem({ title: "Transport First", path: "/music/test/transport-first.mp3", requestedBy: "guest" });
+    addQueueItem({ title: "Transport Second", path: "/music/test/transport-second.mp3", requestedBy: "guest" });
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async playTrack() {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          return "ok";
+        }
+      }
+    });
+
+    const playRequest = request(app).post("/api/player/play");
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    const batchRequest = request(app).post("/api/player/tracks").send({
+        action: "add-queue",
+        tracks: [
+          { title: "Transport Third", path: "/music/test/transport-third.mp3", source: "Local library" },
+          { title: "Transport Fourth", path: "/music/test/transport-fourth.mp3", source: "Local library" }
+        ]
+      });
+    const [playResponse, batchResponse] = await Promise.all([playRequest, batchRequest]);
+
+    expect(playResponse.status).toBe(200);
+    expect(batchResponse.status).toBe(200);
+    expect(playResponse.body.action).toBe("visible-queue-play");
+    expect(playResponse.body.nowPlaying.title).toBe("Transport First");
+    expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Transport Second", "Transport Third", "Transport Fourth"]);
+    expect(batchResponse.body.queue.map((item: { title: string }) => item.title)).toEqual(["Transport Second", "Transport Third", "Transport Fourth"]);
+    expect(batchResponse.body.queue.map((item: { title: string }) => item.title)).not.toContain("Transport First");
+  });
+
   it("does not advance playback while refreshing public state", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = { ...appState.playback, shuffle: true, smartShuffleSource: "spotify", history: [] };
