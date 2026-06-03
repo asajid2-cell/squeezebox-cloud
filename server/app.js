@@ -302,15 +302,16 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(400).json({ error: "Spotify tracks must come from Cloud Squeeze search, playlist, or library results" });
       return;
     }
-    if (!(await trackInputsExistOnDisk([parsed.data]))) {
+    const canonicalTrack = canonicalizeSpotifyTrack(parsed.data);
+    if (!(await trackInputsExistOnDisk([canonicalTrack]))) {
       res.status(400).json({ error: "Local tracks must come from the Cloud Squeeze library or uploads" });
       return;
     }
-    if (queuedTrackInputExists(parsed.data)) {
+    if (queuedTrackInputExists(canonicalTrack)) {
       res.status(409).json({ error: "That song is already in the queue" });
       return;
     }
-    res.status(201).json(addQueueItem({ ...parsed.data, requestedBy: "guest" }));
+    res.status(201).json(addQueueItem({ ...canonicalTrack, requestedBy: "guest" }));
   }));
 
   app.patch("/api/queue/:id", (req, res) => withQueueMutationLock(async () => {
@@ -397,7 +398,8 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(400).json({ error: "Track playback supports add-queue, play-next, or play-now", issues: parsed.error.issues, queue: appState.queue, playback: appState.playback });
       return;
     }
-    const { action, track } = parsed.data;
+    const { action } = parsed.data;
+    let { track } = parsed.data;
     if (!isPlayableTrackInput(track)) {
       res.status(400).json({ error: "Playable local path, LMS track id, or Spotify URI is required" });
       return;
@@ -410,6 +412,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(400).json({ error: "Spotify tracks must come from Cloud Squeeze search, playlist, or library results" });
       return;
     }
+    track = canonicalizeSpotifyTrack(track);
     try {
       logEvent("track.request", { action, track: trackSummary(track), playerId: appState.player.id });
       let queued = null;
@@ -499,13 +502,14 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(400).json({ error: "Spotify tracks must come from Cloud Squeeze search, playlist, or library results" });
       return;
     }
-    if (!(await trackInputsExistOnDisk(acceptedPlayable))) {
+    const canonicalAccepted = canonicalizeSpotifyTracks(acceptedPlayable);
+    if (!(await trackInputsExistOnDisk(canonicalAccepted))) {
       res.status(400).json({ error: "Local tracks must come from the Cloud Squeeze library or uploads" });
       return;
     }
 
     const queued = [];
-    const ordered = action === "play-next" ? [...acceptedPlayable].reverse() : acceptedPlayable;
+    const ordered = action === "play-next" ? [...canonicalAccepted].reverse() : canonicalAccepted;
     for (const track of ordered) {
       const item = action === "play-next"
         ? addQueueItemNext({ ...track, requestedBy: "guest" })
@@ -1302,28 +1306,56 @@ function rememberKnownSpotifyTracks(tracks = []) {
   const expiresAt = Date.now() + knownSpotifyTrackTtlMs;
   for (const track of tracks || []) {
     const key = normalizedSpotifyTrackUri(track?.uri);
-    if (key) knownSpotifyTracks.set(key, expiresAt);
+    if (key) knownSpotifyTracks.set(key, { track: canonicalSpotifyTrack(track), expiresAt });
   }
   if (knownSpotifyTracks.size > knownSpotifyTrackLimit) {
-    for (const [key, expiry] of knownSpotifyTracks) {
-      if (expiry <= Date.now() || knownSpotifyTracks.size > knownSpotifyTrackLimit) knownSpotifyTracks.delete(key);
+    for (const [key, entry] of knownSpotifyTracks) {
+      if (entry.expiresAt <= Date.now() || knownSpotifyTracks.size > knownSpotifyTrackLimit) knownSpotifyTracks.delete(key);
     }
   }
 }
 
-function isKnownSpotifyTrack(uri) {
+function knownSpotifyTrack(uri) {
   const key = normalizedSpotifyTrackUri(uri);
-  if (!key) return false;
-  const expiresAt = knownSpotifyTracks.get(key);
-  if (!expiresAt || expiresAt <= Date.now()) {
+  if (!key) return null;
+  const entry = knownSpotifyTracks.get(key);
+  if (!entry || entry.expiresAt <= Date.now()) {
     knownSpotifyTracks.delete(key);
-    return false;
+    return null;
   }
-  return true;
+  return entry.track;
+}
+
+function isKnownSpotifyTrack(uri) {
+  return Boolean(knownSpotifyTrack(uri));
 }
 
 function spotifyTracksAreKnown(tracks = []) {
   return (tracks || []).every((track) => !isSpotifyTrackInput(track) || isKnownSpotifyTrack(track.uri));
+}
+
+function canonicalizeSpotifyTracks(tracks = []) {
+  return (tracks || []).map(canonicalizeSpotifyTrack);
+}
+
+function canonicalizeSpotifyTrack(track) {
+  if (!isSpotifyTrackInput(track)) return track;
+  const known = knownSpotifyTrack(track.uri);
+  return known ? { ...known } : track;
+}
+
+function canonicalSpotifyTrack(track) {
+  return {
+    id: track.id,
+    title: track.title,
+    artist: track.artist,
+    album: track.album,
+    source: track.source || "Spotify",
+    uri: canonicalSpotifyUri(track.uri) || track.uri,
+    art: track.art,
+    kind: "track",
+    duration: track.duration
+  };
 }
 
 async function trackInputsExistOnDisk(tracks = []) {
@@ -1342,6 +1374,11 @@ function strictPublicTrackValidation() {
 function normalizedSpotifyTrackUri(uri) {
   if (!isValidSpotifyTrackUri(uri)) return "";
   return String(uri).replace(/^spotify:\/\/track:/i, "spotify:track:").toLowerCase();
+}
+
+function canonicalSpotifyUri(uri) {
+  if (!isValidSpotifyTrackUri(uri)) return "";
+  return String(uri).replace(/^spotify:\/\/track:/i, "spotify:track:");
 }
 
 function queuedTrackInputExists(track) {

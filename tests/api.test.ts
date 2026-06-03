@@ -1101,6 +1101,78 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.queued[0].uri).toBe("spotify:track:0000000000000000000101");
   });
 
+  it("canonicalizes known Spotify metadata before queueing or playback", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const played: Array<{ title?: string; artist?: string; uri?: string }> = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async playTrack(_playerId: string, track: { title?: string; artist?: string; uri?: string }) {
+          played.push(track);
+          return "ok";
+        }
+      }
+    });
+    const search = await request(app).get("/api/spotify/search?q=drake").expect(200);
+    const track = search.body.results[0];
+    const tampered = { ...track, title: "Wrong Visible Title", artist: "Wrong Artist", album: "Wrong Album", art: "wrong-art" };
+
+    const directQueue = await request(app)
+      .post("/api/queue")
+      .send(tampered)
+      .expect(201);
+
+    expect(directQueue.body).toMatchObject({ title: "Headlines", artist: "Drake", uri: "spotify:track:0000000000000000000101" });
+    appState.queue.splice(0, appState.queue.length);
+
+    const singleQueue = await request(app)
+      .post("/api/player/track")
+      .send({ action: "add-queue", track: tampered })
+      .expect(200);
+
+    expect(singleQueue.body.queued).toMatchObject({ title: "Headlines", artist: "Drake", uri: "spotify:track:0000000000000000000101" });
+    appState.queue.splice(0, appState.queue.length);
+
+    const batchQueue = await request(app)
+      .post("/api/player/tracks")
+      .send({ action: "add-queue", tracks: [tampered] })
+      .expect(200);
+
+    expect(batchQueue.body.queued[0]).toMatchObject({ title: "Headlines", artist: "Drake", uri: "spotify:track:0000000000000000000101" });
+
+    await request(app)
+      .post("/api/player/track")
+      .send({ action: "play-now", track: tampered })
+      .expect(200);
+
+    expect(played[0]).toMatchObject({ title: "Headlines", artist: "Drake", uri: "spotify:track:0000000000000000000101" });
+  });
+
+  it("preserves Spotify track URI case while canonicalizing metadata", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async spotifyLibrary() {
+          return [{ id: "spotify:track:AbCdEfGhIjKlMnOpQrStUv", title: "Mixed Case", artist: "Tester", source: "Spotify", uri: "spotify:track:AbCdEfGhIjKlMnOpQrStUv", kind: "track" }];
+        }
+      }
+    });
+    const library = await request(app).get("/api/spotify/library?type=tracks").expect(200);
+    const tampered = { ...library.body.results[0], title: "Wrong", artist: "Wrong" };
+
+    const response = await request(app)
+      .post("/api/player/track")
+      .send({ action: "add-queue", track: tampered })
+      .expect(200);
+
+    expect(response.body.queued).toMatchObject({
+      title: "Mixed Case",
+      artist: "Tester",
+      uri: "spotify:track:AbCdEfGhIjKlMnOpQrStUv"
+    });
+  });
+
   it("does not reject skipped Spotify rows beyond the public queue limit", async () => {
     appState.queue.splice(0, appState.queue.length);
     const previousMaxQueuePerUser = appState.admin.maxQueuePerUser;
