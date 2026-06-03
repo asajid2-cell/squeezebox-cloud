@@ -315,7 +315,7 @@ export class LmsClient {
     const results = uniqueByUri([...directPlayable.slice(0, firstPageTrackCount), ...categoryPlayable, ...directPlayable.slice(firstPageTrackCount)])
       .map((item) => spotifyItemToTrack(item))
       .slice(0, count);
-    this.setCached(cacheKey, results, spotifySearchCacheMs);
+    if (results.length > 0) this.setCached(cacheKey, results, spotifySearchCacheMs);
     return results;
   }
 

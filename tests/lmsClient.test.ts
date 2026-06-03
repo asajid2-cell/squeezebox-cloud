@@ -503,6 +503,33 @@ describe("LMS client parsing", () => {
     expect(results.find((result) => result.kind === "album")).toMatchObject({ title: "Take Care", artist: "Drake" });
   });
 
+  it("does not cache empty Spotify search pages", async () => {
+    let requests = 0;
+    const client = new LmsClient();
+    client.jsonRequest = async () => {
+      requests += 1;
+      if (requests === 1) return { result: { item_loop: [] } };
+      return {
+        result: {
+          item_loop: [
+            {
+              text: "Headlines\nDrake â€¢ Take Care",
+              goAction: "playControl",
+              presetParams: { favorites_url: "spotify:track:track1", favorites_title: "Headlines by Drake from Take Care" }
+            }
+          ]
+        }
+      };
+    };
+
+    const empty = await client.spotifySearch("player-1", "drake", 50);
+    const recovered = await client.spotifySearch("player-1", "drake", 50);
+
+    expect(empty).toEqual([]);
+    expect(recovered).toEqual([expect.objectContaining({ title: "Headlines", uri: "spotify:track:track1" })]);
+    expect(requests).toBe(2);
+  });
+
   it("serves smaller Spotify library requests through a wider cached page", async () => {
     let requests = 0;
     const client = new LmsClient();
