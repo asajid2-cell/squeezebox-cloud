@@ -311,6 +311,7 @@ describe("Cloud Squeeze API", () => {
   });
 
   it("uses the LMS previous command when previous is pressed", async () => {
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
     appState.playback = { ...appState.playback, previousTracks: [] };
     const controls: Array<{ action: string; value?: number }> = [];
     const lms = {
@@ -326,6 +327,30 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.action).toBe("previous");
     expect(controls).toContainEqual({ action: "previous", value: undefined });
     expect(controls.some((item) => item.action === "seek")).toBe(false);
+  });
+
+  it("does not resume stale LMS playback when previous is pressed after stop", async () => {
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
+    appState.playback = { ...appState.playback, previousTracks: [] };
+    updateNowPlaying({ id: "idle", title: "No track playing", artist: "Connect a player or request a song", album: "", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null });
+    const controls: Array<{ action: string }> = [];
+    const lms = {
+      ...mockLms,
+      async status() {
+        throw new Error("status should not block stopped previous");
+      },
+      async control(_playerId: string, action: string) {
+        controls.push({ action });
+        return "ok";
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/previous").expect(200);
+
+    expect(response.body.action).toBe("noop");
+    expect(response.body.mode).toBe("stop");
+    expect(response.body.nowPlaying.title).toBe("No track playing");
+    expect(controls).toEqual([]);
   });
 
   it("does not mutate mode when LMS previous fallback fails", async () => {

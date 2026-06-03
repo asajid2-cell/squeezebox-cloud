@@ -676,12 +676,15 @@ export function createApp({ lms = new LmsClient() } = {}) {
         setMode("play");
         markPendingPlayback(previous);
         updateNowPlaying(optimisticTrack(previous));
+      } else if (appState.player.mode === "stop" || appState.player.mode === "stopped") {
+        logEvent("transport.previous.noop", { reason: "stopped", queue: queueSummary(), nowPlaying: trackSummary(appState.nowPlaying) });
       } else {
         await control(lms, "previous");
       }
       refreshLms(lms, { force: true }).catch(() => null);
-      logEvent("transport.previous.result", { action: previous ? "app-previous" : "previous", previous: trackSummary(previous), queue: queueSummary(), playback: appState.playback, nowPlaying: trackSummary(appState.nowPlaying) });
-      res.json({ ok: true, action: previous ? "app-previous" : "previous", mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying });
+      const resultAction = previous ? "app-previous" : (appState.player.mode === "stop" || appState.player.mode === "stopped") ? "noop" : "previous";
+      logEvent("transport.previous.result", { action: resultAction, previous: trackSummary(previous), queue: queueSummary(), playback: appState.playback, nowPlaying: trackSummary(appState.nowPlaying) });
+      res.json({ ok: true, action: resultAction, mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying });
     } catch (error) {
       res.status(502).json({ error: error.message, player: appState.player, nowPlaying: appState.nowPlaying });
     }
