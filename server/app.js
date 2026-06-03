@@ -1362,10 +1362,10 @@ export function nextQueueItemForPlayback(queue = appState.queue, { generatedOnly
 }
 
 async function playQueuedItem(lms, playerId, item) {
+  await lms.playTrack(playerId, item, "play-now");
   rememberPreviousTrack(appState.nowPlaying);
   rememberShuffleTrack(item);
   markPendingPlayback(item);
-  await lms.playTrack(playerId, item, "play-now");
   removeQueueItem(item.id);
   logEvent("queue.play-item", { item: trackSummary(item), queueAfterRemove: queueSummary(), playback: appState.playback });
   return item;

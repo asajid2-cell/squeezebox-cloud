@@ -725,6 +725,20 @@ describe("Cloud Squeeze API", () => {
 
   it("keeps queued tracks visible when next playback fails", async () => {
     appState.queue.splice(0, appState.queue.length);
+    appState.nowPlaying = {
+      id: "current",
+      title: "Current Failure Track",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 12,
+      canSeek: true,
+      art: null,
+      path: "/music/test/current-failure.mp3"
+    };
+    appState.playback = { ...appState.playback, history: ["existing-history"], previousTracks: [] };
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true };
     const lms = {
       ...mockLms,
       async playTrack() {
@@ -742,6 +756,8 @@ describe("Cloud Squeeze API", () => {
 
     expect(response.body.error).toContain("LMS refused playback");
     expect(appState.queue).toEqual([expect.objectContaining({ title: "Retry Queue Song" })]);
+    expect(appState.playback.history).toEqual(["existing-history"]);
+    expect(appState.playback.previousTracks).toEqual([]);
   });
 
   it("uses the hot player id for visible queue next without waiting on a fresh status call", async () => {
