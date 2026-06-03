@@ -2351,6 +2351,21 @@ describe("Cloud Squeeze API", () => {
     expect(played).toHaveLength(0);
   });
 
+  it("rejects malformed smart shuffle requests before queue generation", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "mixed" };
+    const app = createApp({ lms: mockLms });
+
+    await request(app).post("/api/player/smart-shuffle").send({ source: "bad", count: 1 }).expect(400);
+    await request(app).post("/api/player/smart-shuffle").send({ source: "local", count: [] }).expect(400);
+    await request(app).post("/api/player/smart-shuffle").send({ source: "local", count: "1" }).expect(400);
+    await request(app).post("/api/player/smart-shuffle").send({ source: "local", count: 9 }).expect(400);
+    await request(app).post("/api/player/smart-shuffle").send({ source: "local", extra: true }).expect(400);
+
+    expect(appState.queue).toHaveLength(0);
+    expect(appState.playback.smartQueue).toBe(false);
+  });
+
   it("does not add broad unrelated local rows to mixed smart shuffle when the seed only matches Spotify", async () => {
     const previousMusicDir = config.musicSourceDir;
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-mixed-smart-"));

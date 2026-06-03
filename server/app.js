@@ -69,6 +69,12 @@ const playbackSchema = z.object({
   { message: "At least one playback setting is required" }
 );
 
+const smartShuffleSchema = z.object({
+  source: z.enum(["mixed", "spotify", "local"]).optional(),
+  count: z.number().int().min(1).max(8).optional(),
+  seed: optionalText
+}).strict();
+
 const loginSchema = z.object({
   password: z.string().min(1)
 });
@@ -959,18 +965,24 @@ export function createApp({ lms = new LmsClient() } = {}) {
 
   app.post("/api/player/smart-shuffle", async (req, res) => withQueueMutationLock(async () => {
     try {
+      const parsed = smartShuffleSchema.safeParse(req.body || {});
+      if (!parsed.success) {
+        res.status(400).json({ error: "Invalid smart shuffle request", issues: parsed.error.issues, queued: [], playback: appState.playback });
+        return;
+      }
       if (!publicRequestsOpen()) {
         res.status(403).json({ error: publicRequestsClosedMessage(), queued: [], playback: appState.playback });
         return;
       }
       const status = await refreshLms(lms);
-      const mode = ["mixed", "spotify", "local"].includes(req.body?.source) ? req.body.source : appState.playback.smartShuffleSource;
+      const body = parsed.data;
+      const mode = body.source || appState.playback.smartShuffleSource;
       if (mode === "spotify" && !spotifyBrowsingAvailable()) {
         res.status(503).json({ error: spotifyUnavailableMessage(), queued: [], playback: appState.playback });
         return;
       }
-      const count = Math.max(1, Math.min(8, Number(req.body?.count) || 5));
-      const seed = String(req.body?.seed || appState.nowPlaying.artist || appState.nowPlaying.title || "").trim();
+      const count = body.count || 5;
+      const seed = String(body.seed || appState.nowPlaying.artist || appState.nowPlaying.title || "").trim();
       logEvent("smart-shuffle.request", { mode, count, seed, queue: queueSummary() });
       const queued = await activateGeneratedQueue(lms, status.id, { smart: true, mode, count, seed });
       await refreshLms(lms);
