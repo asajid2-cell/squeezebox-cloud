@@ -1820,6 +1820,51 @@ describe("Cloud Squeeze API", () => {
     expect(played).toHaveLength(0);
   });
 
+  it("does not use idle placeholder text as smart-shuffle search terms", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.nowPlaying = {
+      id: "idle",
+      title: "No track playing",
+      artist: "Connect a player or request a song",
+      album: "",
+      source: "LMS",
+      duration: 0,
+      elapsed: 0,
+      canSeek: false,
+      art: null
+    };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "spotify", lastShuffleSeed: "", history: [] };
+    const searched: string[] = [];
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async nowPlaying() {
+          return {
+            id: "idle",
+            title: "No track playing",
+            artist: "Connect a player or request a song",
+            album: "",
+            source: "LMS",
+            duration: 0,
+            elapsed: 0,
+            canSeek: false,
+            art: null
+          };
+        },
+        async spotifySearch(_playerId: string, term: string) {
+          searched.push(term);
+          return [{ id: `spotify:${term}`, title: `${term} Track`, artist: term, source: "Spotify", uri: `spotify:track:${term}`, kind: "track" }];
+        }
+      }
+    }))
+      .post("/api/player/smart-shuffle")
+      .send({ source: "spotify", count: 2, seed: "Aimer" })
+      .expect(200);
+
+    expect(searched).toEqual(["Aimer"]);
+    expect(response.body.queued.map((item: { artist: string }) => item.artist)).toEqual(["Aimer"]);
+  });
+
   it("does not mutate smart-shuffle state when LMS repeat-off control fails", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, repeat: "one", smartShuffleSource: "mixed" };

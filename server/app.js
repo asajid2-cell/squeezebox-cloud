@@ -1283,6 +1283,7 @@ function refreshTrackInfoInBackground(track, key) {
 
 function prewarmShuffleCandidates(lms, playerId, track) {
   if (!playerId || !spotifyBrowsingAvailable() || !track) return;
+  if (!isTrackInfoCandidate(track)) return;
   const seed = String(track.artist || track.title || "").trim();
   const key = `${playerId}:${seed.toLowerCase()}`;
   if (!seed || (prewarmState.key === key && Date.now() - prewarmState.at < 45000)) return;
@@ -1384,11 +1385,15 @@ async function buildGeneratedQueue(lms, playerId, seed, mode, count, requestedBy
 }
 
 async function spotifyShuffleCandidates(lms, playerId, seed, count = 5) {
-  const terms = [
+  const currentTrackTerms = isTrackInfoCandidate(appState.nowPlaying)
+    ? [appState.nowPlaying.artist, appState.nowPlaying.title]
+    : [];
+  const primaryTerms = [
     seed,
-    appState.nowPlaying.artist,
-    appState.nowPlaying.title,
-    appState.playback.lastShuffleSeed,
+    ...currentTrackTerms,
+    appState.playback.lastShuffleSeed
+  ];
+  const fallbackTerms = [
     "daily mix",
     "discover weekly",
     "radio",
@@ -1397,7 +1402,11 @@ async function spotifyShuffleCandidates(lms, playerId, seed, count = 5) {
     "the weeknd",
     "travis scott",
     "phoebe bridgers"
-  ]
+  ];
+  const primary = primaryTerms
+    .map((term) => String(term || "").trim())
+    .filter(Boolean);
+  const terms = (primary.length > 0 ? primary : fallbackTerms)
     .map((term) => String(term || "").trim())
     .filter(Boolean);
   const selected = [...new Set(terms)].slice(0, 2);
