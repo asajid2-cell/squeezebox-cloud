@@ -317,6 +317,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(409).json({ error: "That song is already in the queue" });
       return;
     }
+    await turnRepeatOffForVisibleQueue(lms);
     const queued = addQueueItem({ ...canonicalTrack, requestedBy: "guest" });
     markQueueManagedPlayback();
     res.status(201).json(queued);

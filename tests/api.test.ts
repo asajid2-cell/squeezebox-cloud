@@ -3527,6 +3527,31 @@ describe("Cloud Squeeze API", () => {
     expect(controls).toContainEqual({ action: "repeat", value: "off" });
   });
 
+  it("turns repeat off before direct queue posts", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = { id: "current", title: "Current", artist: "Tester", album: "", source: "Spotify", duration: 100, elapsed: 12, canSeek: true, art: null, uri: "spotify:track:current" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, repeat: "one", appManagedPlayback: true };
+    const controls: Array<{ action: string; value?: string }> = [];
+
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string, value?: string) {
+          controls.push({ action, value });
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/queue")
+      .send({ title: "Direct Queue", artist: "Tester", path: "/music/test/direct-queue.mp3" })
+      .expect(201);
+
+    expect(response.body.title).toBe("Direct Queue");
+    expect(appState.playback.repeat).toBe("off");
+    expect(controls).toContainEqual({ action: "repeat", value: "off" });
+  });
+
   it("keeps repeat off when repeat is requested with a visible queue", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "mixed" };
