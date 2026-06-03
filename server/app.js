@@ -599,8 +599,12 @@ export function createApp({ lms = new LmsClient() } = {}) {
 
   for (const action of ["play", "pause"]) {
     app.post(`/api/player/${action}`, async (_req, res) => {
-      await control(lms, action);
-      res.json({ ok: true, mode: appState.player.mode, player: appState.player });
+      try {
+        await control(lms, action);
+        res.json({ ok: true, mode: appState.player.mode, player: appState.player });
+      } catch (error) {
+        res.status(502).json({ error: error.message, mode: appState.player.mode, player: appState.player });
+      }
     });
   }
 
@@ -647,9 +651,15 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(400).json({ error: "Invalid volume", issues: parsed.error.issues });
       return;
     }
+    const previousVolume = appState.player.volume;
     const volume = setVolume(parsed.data.volume);
-    await control(lms, "volume", volume);
-    res.json({ ok: true, volume });
+    try {
+      await control(lms, "volume", volume);
+      res.json({ ok: true, volume });
+    } catch (error) {
+      setVolume(previousVolume);
+      res.status(502).json({ error: error.message, volume: previousVolume });
+    }
   });
 
   app.post("/api/player/seek", async (req, res) => {
@@ -660,12 +670,16 @@ export function createApp({ lms = new LmsClient() } = {}) {
     }
     const seconds = Math.max(0, parsed.data.seconds);
     const wasPlaying = appState.player.mode === "play";
-    await control(lms, "seek", seconds);
-    if (wasPlaying && appState.player.id) await lms.control(appState.player.id, "play").catch(() => null);
-    updateNowPlaying({ elapsed: seconds });
-    if (wasPlaying) setMode("play");
+    try {
+      await control(lms, "seek", seconds);
+      if (wasPlaying && appState.player.id) await control(lms, "play");
+      updateNowPlaying({ elapsed: seconds });
+      if (wasPlaying) setMode("play");
       refreshLms(lms, { force: true }).catch(() => null);
       res.json({ ok: true, seconds, player: appState.player, nowPlaying: appState.nowPlaying });
+    } catch (error) {
+      res.status(502).json({ error: error.message, player: appState.player, nowPlaying: appState.nowPlaying });
+    }
   });
 
   app.post("/api/player/playback", async (req, res) => {
@@ -1173,12 +1187,8 @@ function updateStablePlayerStatus(status) {
 
 async function control(lms, action, value) {
   const modeMap = { play: "play", pause: "pause", next: "play", previous: "play" };
+  await lms.control(appState.player.id, action, value);
   if (modeMap[action]) setMode(modeMap[action]);
-  try {
-    await lms.control(appState.player.id, action, value);
-  } catch {
-    // Local UI development keeps working when LMS is not reachable.
-  }
 }
 
 async function activateGeneratedQueue(lms, playerId, { smart = false, shuffle: shuffleOn = false, mode = appState.playback.smartShuffleSource, count = 5, seed } = {}) {

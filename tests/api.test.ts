@@ -215,8 +215,40 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.volume).toBe(33);
   });
 
+  it("does not mutate volume when LMS volume control fails", async () => {
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, volume: 44 };
+    const lms = {
+      ...mockLms,
+      async control() {
+        throw new Error("LMS volume failed");
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/volume").send({ volume: 33 }).expect(502);
+
+    expect(response.body.error).toContain("LMS volume failed");
+    expect(appState.player.volume).toBe(44);
+  });
+
   it("rejects invalid volume values", async () => {
     await request(createApp({ lms: mockLms })).post("/api/player/volume").send({ volume: "loud" }).expect(400);
+  });
+
+  it("does not mutate player mode when play or pause control fails", async () => {
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
+    const lms = {
+      ...mockLms,
+      async control() {
+        throw new Error("LMS control failed");
+      }
+    };
+
+    await request(createApp({ lms })).post("/api/player/play").expect(502);
+    expect(appState.player.mode).toBe("stop");
+
+    appState.player = { ...appState.player, mode: "play" };
+    await request(createApp({ lms })).post("/api/player/pause").expect(502);
+    expect(appState.player.mode).toBe("play");
   });
 
   it("seeks the current player position", async () => {
@@ -246,6 +278,22 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.action).toBe("previous");
     expect(controls).toContainEqual({ action: "previous", value: undefined });
     expect(controls.some((item) => item.action === "seek")).toBe(false);
+  });
+
+  it("does not mutate mode when LMS previous fallback fails", async () => {
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "pause" };
+    appState.playback = { ...appState.playback, previousTracks: [] };
+    const lms = {
+      ...mockLms,
+      async control() {
+        throw new Error("LMS previous failed");
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/previous").expect(502);
+
+    expect(response.body.error).toContain("LMS previous failed");
+    expect(appState.player.mode).toBe("pause");
   });
 
   it("plays the previous app track before falling back to LMS previous", async () => {
