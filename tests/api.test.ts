@@ -990,7 +990,33 @@ describe("Cloud Squeeze API", () => {
 
     expect(response.body.queued).toHaveLength(1);
     expect(response.body.queued[0].title).toBe("New Track");
+    expect(response.body.accepted).toBe(1);
+    expect(response.body.rejected).toBe(2);
     expect(appState.queue.filter((item) => item.path === "/music/test/new-track.mp3")).toHaveLength(1);
+  });
+
+  it("reports all skipped duplicate playable rows in batch responses", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const app = createApp({ lms: mockLms });
+    const first = { title: "Duplicate Batch One", path: "/music/test/duplicate-batch-one.mp3", source: "Local library" };
+    const second = { title: "Duplicate Batch Two", path: "/music/test/duplicate-batch-two.mp3", source: "Local library" };
+
+    const partial = await request(app)
+      .post("/api/player/tracks")
+      .send({ action: "add-queue", tracks: [first, first, second] })
+      .expect(200);
+
+    expect(partial.body.accepted).toBe(2);
+    expect(partial.body.rejected).toBe(1);
+    expect(partial.body.queued.map((item: { title: string }) => item.title)).toEqual(["Duplicate Batch One", "Duplicate Batch Two"]);
+
+    const allDuplicate = await request(app)
+      .post("/api/player/tracks")
+      .send({ action: "add-queue", tracks: [first, first] })
+      .expect(409);
+
+    expect(allDuplicate.body.accepted).toBe(0);
+    expect(allDuplicate.body.rejected).toBe(2);
   });
 
   it("enforces the public guest queue limit for single and batch requests", async () => {

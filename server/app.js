@@ -433,12 +433,12 @@ export function createApp({ lms = new LmsClient() } = {}) {
 
     const uniquePlayable = uniquePlayableInputs(playable);
     if (uniquePlayable.length === 0) {
-      res.status(409).json({ error: "Those songs are already in the queue", queue: appState.queue });
+      res.status(409).json({ error: "Those songs are already in the queue", queue: appState.queue, accepted: 0, rejected: playable.length });
       return;
     }
     const availableSlots = Math.max(0, guestQueueLimit() - guestQueueCount());
     if (availableSlots <= 0) {
-      res.status(429).json({ error: queueLimitMessage(), queue: appState.queue, accepted: 0, rejected: uniquePlayable.length });
+      res.status(429).json({ error: queueLimitMessage(), queue: appState.queue, accepted: 0, rejected: playable.length });
       return;
     }
     const acceptedPlayable = uniquePlayable.slice(0, availableSlots);
@@ -456,8 +456,9 @@ export function createApp({ lms = new LmsClient() } = {}) {
       queued.push(item);
     }
     if (action === "play-next") queued.reverse();
-    logEvent("queue.batch", { action, count: queued.length, requested: uniquePlayable.length, queued: queued.map(trackSummary), queue: queueSummary() });
-    res.json({ ok: true, action, queued, queue: appState.queue, accepted: queued.length, rejected: Math.max(0, uniquePlayable.length - queued.length) });
+    const rejected = Math.max(0, playable.length - queued.length);
+    logEvent("queue.batch", { action, count: queued.length, requested: playable.length, deduped: uniquePlayable.length, rejected, queued: queued.map(trackSummary), queue: queueSummary() });
+    res.json({ ok: true, action, queued, queue: appState.queue, accepted: queued.length, rejected });
   }));
 
   app.get("/api/library/search", async (req, res) => {
