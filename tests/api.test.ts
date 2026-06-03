@@ -1310,6 +1310,37 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Next One", "Next Two", "Existing Tail"]);
   });
 
+  it("serializes concurrent batch queue requests to preserve duplicate and limit checks", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.admin = { ...appState.admin, maxQueuePerUser: 3 };
+    const app = createApp({ lms: mockLms });
+    const payload = {
+      action: "add-queue",
+      tracks: [
+        { title: "Concurrent Batch One", path: "/music/test/concurrent-batch-one.mp3", source: "Local library" },
+        { title: "Concurrent Batch Two", path: "/music/test/concurrent-batch-two.mp3", source: "Local library" },
+        { title: "Concurrent Batch Three", path: "/music/test/concurrent-batch-three.mp3", source: "Local library" }
+      ]
+    };
+
+    const responses = await Promise.all([
+      request(app).post("/api/player/tracks").send(payload),
+      request(app).post("/api/player/tracks").send(payload),
+      request(app).post("/api/player/tracks").send(payload)
+    ]);
+
+    const accepted = responses.filter((response) => response.status === 200);
+    const rejected = responses.filter((response) => response.status !== 200);
+    expect(accepted).toHaveLength(1);
+    expect(accepted[0].body.accepted).toBe(3);
+    expect(rejected.map((response) => response.status).sort()).toEqual([409, 409]);
+    expect(appState.queue.map((item: { title: string }) => item.title)).toEqual([
+      "Concurrent Batch One",
+      "Concurrent Batch Two",
+      "Concurrent Batch Three"
+    ]);
+  });
+
   it("does not advance playback while refreshing public state", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = { ...appState.playback, shuffle: true, smartShuffleSource: "spotify", history: [] };

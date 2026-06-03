@@ -100,6 +100,7 @@ const prewarmState = { key: "", at: 0 };
 const spotifyLibraryPrewarmState = { playerId: "", at: 0 };
 const libraryRescanState = { promise: null };
 const transportLockState = { tail: Promise.resolve() };
+const queueMutationLockState = { tail: Promise.resolve() };
 const knownSpotifyTracks = new Map();
 const knownSpotifyTrackTtlMs = 30 * 60 * 1000;
 const knownSpotifyTrackLimit = 1500;
@@ -358,7 +359,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
     }
   });
 
-  app.post("/api/player/tracks", async (req, res) => {
+  app.post("/api/player/tracks", async (req, res) => withQueueMutationLock(async () => {
     const action = String(req.body?.action || "add-queue");
     const tracks = Array.isArray(req.body?.tracks) ? req.body.tracks.filter(Boolean).slice(0, 300) : [];
     if (!["add-queue", "play-next"].includes(action)) {
@@ -411,7 +412,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
     if (action === "play-next") queued.reverse();
     logEvent("queue.batch", { action, count: queued.length, requested: uniquePlayable.length, queued: queued.map(trackSummary), queue: queueSummary() });
     res.json({ ok: true, action, queued, queue: appState.queue, accepted: queued.length, rejected: Math.max(0, uniquePlayable.length - queued.length) });
-  });
+  }));
 
   app.get("/api/library/search", async (req, res) => {
     const source = parseLibrarySource(req.query.source);
@@ -966,6 +967,20 @@ async function withTransportLock(res, handler) {
   try {
     await previous;
     if (!res.headersSent) await handler();
+  } finally {
+    release();
+  }
+}
+
+async function withQueueMutationLock(handler) {
+  const previous = queueMutationLockState.tail.catch(() => null);
+  let release;
+  queueMutationLockState.tail = new Promise((resolve) => {
+    release = resolve;
+  });
+  try {
+    await previous;
+    return await handler();
   } finally {
     release();
   }
