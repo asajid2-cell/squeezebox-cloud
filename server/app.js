@@ -51,6 +51,24 @@ const queueUpdateSchema = z.object({
   album: optionalText
 }).strict();
 
+const queueMoveSchema = z.object({
+  direction: z.union([z.enum(["up", "down"]), z.number().int().min(0)]).optional(),
+  index: z.number().int().min(0).optional()
+}).strict().refine(
+  (value) => value.direction !== undefined || value.index !== undefined,
+  { message: "Queue move direction or index is required" }
+);
+
+const playbackTrackSchema = z.object({
+  action: z.enum(["add-queue", "play-next", "play-now"]).optional().default("add-queue"),
+  track: z.object({}).passthrough().optional().default({})
+}).strict();
+
+const playbackTracksSchema = z.object({
+  action: z.enum(["add-queue", "play-next"]).optional().default("add-queue"),
+  tracks: z.array(z.object({}).passthrough()).min(1).max(300)
+}).strict();
+
 const volumeSchema = z.object({
   volume: z.number().finite()
 });
@@ -294,11 +312,16 @@ export function createApp({ lms = new LmsClient() } = {}) {
   }));
 
   app.post("/api/queue/:id/move", (req, res) => withQueueMutationLock(async () => {
+    const parsed = queueMoveSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid queue move", issues: parsed.error.issues, queue: appState.queue });
+      return;
+    }
     if (!publicRequestsOpen()) {
       res.status(403).json({ error: publicRequestsClosedMessage(), queue: appState.queue });
       return;
     }
-    const direction = req.body?.direction ?? req.body?.index;
+    const direction = parsed.data.direction ?? parsed.data.index;
     const item = moveQueueItem(req.params.id, direction);
     if (item === null) {
       res.status(404).json({ error: "Queue item not found" });
@@ -312,12 +335,12 @@ export function createApp({ lms = new LmsClient() } = {}) {
   }));
 
   app.post("/api/player/track", async (req, res) => withQueueMutationLock(async () => {
-    const action = String(req.body?.action || "add-queue");
-    const track = req.body?.track || {};
-    if (!["add-queue", "play-next", "play-now"].includes(action)) {
-      res.status(400).json({ error: "Track playback supports add-queue, play-next, or play-now" });
+    const parsed = playbackTrackSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      res.status(400).json({ error: "Track playback supports add-queue, play-next, or play-now", issues: parsed.error.issues, queue: appState.queue, playback: appState.playback });
       return;
     }
+    const { action, track } = parsed.data;
     if (!isPlayableTrackInput(track)) {
       res.status(400).json({ error: "Playable local path, LMS track id, or Spotify URI is required" });
       return;
@@ -387,16 +410,12 @@ export function createApp({ lms = new LmsClient() } = {}) {
   }));
 
   app.post("/api/player/tracks", async (req, res) => withQueueMutationLock(async () => {
-    const action = String(req.body?.action || "add-queue");
-    const tracks = Array.isArray(req.body?.tracks) ? req.body.tracks.filter(Boolean).slice(0, 300) : [];
-    if (!["add-queue", "play-next"].includes(action)) {
-      res.status(400).json({ error: "Batch playback supports add-queue or play-next" });
-      return;
-    }
-    if (tracks.length === 0) {
+    const parsed = playbackTracksSchema.safeParse(req.body || {});
+    if (!parsed.success) {
       res.status(400).json({ error: "At least one track is required" });
       return;
     }
+    const { action, tracks } = parsed.data;
     if (!publicRequestsOpen()) {
       res.status(403).json({ error: publicRequestsClosedMessage(), queue: appState.queue });
       return;

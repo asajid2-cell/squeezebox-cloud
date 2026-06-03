@@ -199,8 +199,14 @@ describe("Cloud Squeeze API", () => {
 
     await request(app).post(`/api/queue/${item.body.id}/move`).send({ direction: "up" }).expect(200);
     await request(app).post(`/api/queue/${item.body.id}/move`).send({ direction: "sideways" }).expect(400);
+    await request(app).post(`/api/queue/${item.body.id}/move`).send({ direction: null }).expect(400);
+    await request(app).post(`/api/queue/${item.body.id}/move`).send({ direction: [] }).expect(400);
+    await request(app).post(`/api/queue/${item.body.id}/move`).send({ direction: "0" }).expect(400);
+    await request(app).post(`/api/queue/${item.body.id}/move`).send({ index: "0" }).expect(400);
+    await request(app).post(`/api/queue/${item.body.id}/move`).send({ direction: "down", extra: true }).expect(400);
     await request(app).post(`/api/queue/${item.body.id}/move`).send({ index: 99 }).expect(400);
     await request(app).post("/api/queue/not-real/move").send({ direction: "up" }).expect(404);
+    expect(appState.queue.map((queued) => queued.id)).toEqual([item.body.id]);
   });
 
   it("generates unique queue ids for rapid inserts", () => {
@@ -909,6 +915,32 @@ describe("Cloud Squeeze API", () => {
     expect(appState.queue).toHaveLength(0);
     expect(appState.player.mode).toBe(beforeMode);
     expect(appState.nowPlaying.title).toBe(beforeTitle);
+  });
+
+  it("rejects malformed playback action bodies instead of defaulting to queue actions", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const played: Array<{ action: string; track: { title?: string } }> = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async playTrack(_playerId: string, track: { title?: string }, action: string) {
+          played.push({ action, track });
+          return "ok";
+        }
+      }
+    });
+
+    await request(app).post("/api/player/track").send({ action: null, track: { title: "Null Action", path: "/music/test/null-action.mp3" } }).expect(400);
+    await request(app).post("/api/player/track").send({ action: "", track: { title: "Blank Action", path: "/music/test/blank-action.mp3" } }).expect(400);
+    await request(app).post("/api/player/track").send({ action: "add-queue", track: null }).expect(400);
+    await request(app).post("/api/player/track").send({ action: "add-queue", track: { title: "Extra Body", path: "/music/test/extra-body.mp3" }, extra: true }).expect(400);
+    await request(app).post("/api/player/tracks").send({ action: null, tracks: [{ title: "Batch Null", path: "/music/test/batch-null.mp3" }] }).expect(400);
+    await request(app).post("/api/player/tracks").send({ action: "add-queue", tracks: [] }).expect(400);
+    await request(app).post("/api/player/tracks").send({ action: "add-queue", tracks: [null] }).expect(400);
+    await request(app).post("/api/player/tracks").send({ action: "add-queue", tracks: [{ title: "Extra Batch", path: "/music/test/extra-batch.mp3" }], extra: true }).expect(400);
+
+    expect(played).toHaveLength(0);
+    expect(appState.queue).toHaveLength(0);
   });
 
   it("filters Spotify containers out of batch playback", async () => {
