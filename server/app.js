@@ -433,13 +433,18 @@ export function createApp({ lms = new LmsClient() } = {}) {
         res.json({ results: [], spotify: appState.services.spotify });
         return;
       }
-      const playerId = await hotPlayerId(lms);
       const limit = parseBoundedIntegerParam(req.query.limit, { defaultValue: 20, min: 1, max: 50 });
       if (limit === null) {
         res.status(400).json({ error: "Spotify search limit must be a positive integer up to 50", results: [] });
         return;
       }
-      const results = await lms.spotifySearch(playerId, String(req.query.q || ""), limit);
+      const query = String(req.query.q || "").trim();
+      if (!query) {
+        res.json({ results: [] });
+        return;
+      }
+      const playerId = await hotPlayerId(lms);
+      const results = await lms.spotifySearch(playerId, query, limit);
       rememberKnownSpotifyTracks(results);
       res.json({ results });
     } catch (error) {
@@ -453,7 +458,6 @@ export function createApp({ lms = new LmsClient() } = {}) {
         res.json({ results: [], spotify: appState.services.spotify });
         return;
       }
-      const playerId = await hotPlayerId(lms);
       const type = String(req.query.type || "playlists");
       if (!["playlists", "albums", "artists", "tracks", "home"].includes(type)) {
         res.status(400).json({ error: "Spotify library type must be playlists, albums, artists, tracks, or home", results: [] });
@@ -469,6 +473,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
         res.status(400).json({ error: "Spotify library offset must be a non-negative integer", results: [] });
         return;
       }
+      const playerId = await hotPlayerId(lms);
       const results = await lms.spotifyLibrary(playerId, type, limit, offset);
       rememberKnownSpotifyTracks(results);
       res.json({
@@ -485,7 +490,6 @@ export function createApp({ lms = new LmsClient() } = {}) {
         res.json({ results: [], spotify: appState.services.spotify });
         return;
       }
-      const playerId = await hotPlayerId(lms);
       const kind = String(req.query.kind || "playlist");
       const browseId = String(req.query.browseId || "");
       const uri = String(req.query.uri || "");
@@ -512,6 +516,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
         res.status(400).json({ error: "Spotify child offset must be a non-negative integer", results: [] });
         return;
       }
+      const playerId = await hotPlayerId(lms);
       const results = await lms.spotifyChildren(
         playerId,
         { browseId, uri, kind, title },

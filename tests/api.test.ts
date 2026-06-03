@@ -1450,6 +1450,10 @@ describe("Cloud Squeeze API", () => {
     const calls: string[] = [];
     const lms = {
       ...mockLms,
+      async status() {
+        calls.push("status");
+        throw new Error("status should not run for invalid Spotify params");
+      },
       async spotifySearch() {
         calls.push("search");
         return [];
@@ -1476,6 +1480,26 @@ describe("Cloud Squeeze API", () => {
     await request(app).get("/api/spotify/children?kind=playlist&uri=spotify%3Aplaylist%3A1&limit=0").expect(400);
     await request(app).get("/api/spotify/children?kind=playlist&uri=spotify%3Aplaylist%3A1&offset=-1").expect(400);
 
+    expect(calls).toEqual([]);
+  });
+
+  it("returns empty Spotify search results without touching LMS for blank queries", async () => {
+    const calls: string[] = [];
+    const lms = {
+      ...mockLms,
+      async status() {
+        calls.push("status");
+        throw new Error("status should not run for empty Spotify search");
+      },
+      async spotifySearch() {
+        calls.push("search");
+        return [];
+      }
+    };
+
+    const response = await request(createApp({ lms })).get("/api/spotify/search?q=%20%20&limit=20").expect(200);
+
+    expect(response.body.results).toEqual([]);
     expect(calls).toEqual([]);
   });
 
