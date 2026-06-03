@@ -521,6 +521,38 @@ describe("Cloud Squeeze API", () => {
     expect(controls).toEqual(["pause"]);
   });
 
+  it("rejects non-json transport control bodies", async () => {
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    const controls: string[] = [];
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string) {
+          controls.push(action);
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/play")
+      .set("Content-Type", "text/plain")
+      .send("not-json")
+      .expect(400);
+
+    expect(response.body.error).toBe("Unexpected transport control body");
+    expect(controls).toEqual([]);
+  });
+
+  it("does not parse playback settings as a transport text body", async () => {
+    const app = createApp({ lms: mockLms });
+    const response = await request(app)
+      .post("/api/player/playback")
+      .send({ repeat: "all" })
+      .expect(200);
+
+    expect(response.body.playback.repeat).toBe("all");
+    await request(app).post("/api/player/playback").send({ repeat: "off" }).expect(200);
+  });
+
   it("stops playback and clears stale now playing after LMS accepts stop", async () => {
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
     updateNowPlaying({ id: "stale-track", title: "Stale Track", artist: "Tester", source: "LMS", duration: 100, elapsed: 12 });

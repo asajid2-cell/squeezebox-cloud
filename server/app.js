@@ -147,6 +147,13 @@ const trackInfoBudgetMs = Number(process.env.TRACK_INFO_BUDGET_MS || 1800);
 const localArtworkBudgetMs = Number(process.env.LOCAL_ARTWORK_BUDGET_MS || 700);
 const localArtworkLimit = Number(process.env.LOCAL_ARTWORK_LIMIT || 40);
 const spotifySearchPrewarmTerms = ["drake", "juice wrld", "the weeknd", "travis scott"];
+const transportActionPaths = new Set([
+  "/api/player/play",
+  "/api/player/pause",
+  "/api/player/stop",
+  "/api/player/next",
+  "/api/player/previous"
+]);
 const refreshState = {
   promise: null,
   updatedAt: 0,
@@ -194,6 +201,11 @@ const idleNowPlaying = {
 export function createApp({ lms = new LmsClient() } = {}) {
   const app = express();
   app.use(cors());
+  const transportTextParser = express.text({ type: "*/*", limit: "2kb" });
+  app.use((req, res, next) => {
+    if (transportActionPaths.has(req.path)) return transportTextParser(req, res, next);
+    return next();
+  });
   app.use(express.json());
   app.use((error, _req, res, next) => {
     if (error?.type === "entity.parse.failed") {
@@ -1156,6 +1168,15 @@ function rejectUnexpectedTransportBody(req, res, detail = "Transport controls do
 
 function hasUnexpectedBodyFields(body) {
   if (body === undefined || body === null) return false;
+  if (typeof body === "string") {
+    const trimmed = body.trim();
+    if (!trimmed) return false;
+    try {
+      return hasUnexpectedBodyFields(JSON.parse(trimmed));
+    } catch {
+      return true;
+    }
+  }
   if (typeof body !== "object" || Array.isArray(body)) return true;
   return Object.keys(body).length > 0;
 }
