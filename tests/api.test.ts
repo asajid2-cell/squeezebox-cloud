@@ -1994,6 +1994,30 @@ describe("Cloud Squeeze API", () => {
     expect(calls).toEqual([]);
   });
 
+  it("accepts spotify slash URI forms for matching child browse kinds", async () => {
+    const requests: Array<{ uri?: string; kind?: string }> = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async spotifyChildren(_playerId: string, input: { uri?: string; kind?: string }) {
+          requests.push(input);
+          return [];
+        }
+      }
+    });
+
+    await request(app).get("/api/spotify/children?kind=playlist&uri=spotify%3A%2F%2Fplaylist%3Aabc123").expect(200);
+    await request(app).get("/api/spotify/children?kind=album&uri=spotify%3A%2F%2Falbum%3Aabc123").expect(200);
+    await request(app).get("/api/spotify/children?kind=artist&uri=spotify%3A%2F%2Fartist%3Aabc123").expect(200);
+    await request(app).get("/api/spotify/children?kind=album&uri=spotify%3A%2F%2Fplaylist%3Aabc123").expect(400);
+
+    expect(requests.map((item) => `${item.kind}:${item.uri}`)).toEqual([
+      "playlist:spotify://playlist:abc123",
+      "album:spotify://album:abc123",
+      "artist:spotify://artist:abc123"
+    ]);
+  });
+
   it("returns empty Spotify search results without touching LMS for blank queries", async () => {
     const calls: string[] = [];
     const lms = {

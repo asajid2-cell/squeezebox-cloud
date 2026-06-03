@@ -1223,7 +1223,7 @@ function isSpotifyChildUriForKind(kind, uri) {
   const value = String(uri || "").trim();
   if (requestedKind === "track") return isValidSpotifyTrackUri(value);
   if (!["playlist", "album", "artist"].includes(requestedKind)) return false;
-  return new RegExp(`^spotify(?::|//)${requestedKind}:[A-Za-z0-9]+$`, "i").test(value);
+  return new RegExp(`^spotify(?::|://)${requestedKind}:[A-Za-z0-9]+$`, "i").test(value);
 }
 
 function rememberKnownSpotifyTracks(tracks = []) {
