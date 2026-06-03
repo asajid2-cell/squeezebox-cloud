@@ -116,6 +116,43 @@ describe("Cloud Squeeze API", () => {
     }
   });
 
+  it("enriches uploaded search rows with external artwork when tags have no embedded cover", async () => {
+    const previousUploadDir = config.uploadDir;
+    const previousAllowNetwork = process.env.TRACK_INFO_ALLOW_NETWORK_IN_TESTS;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-upload-art-"));
+    config.uploadDir = root;
+    process.env.TRACK_INFO_ALLOW_NETWORK_IN_TESTS = "1";
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.startsWith("https://itunes.apple.com/search")) {
+        return {
+          ok: true,
+          json: async () => ({
+            results: [{ artworkUrl100: "https://is1-ssl.mzstatic.com/image/thumb/Music/test/100x100bb.jpg" }]
+          })
+        };
+      }
+      return { ok: false, json: async () => ({}) };
+    }));
+    try {
+      await fs.writeFile(path.join(root, "Drake - Shabang.mp3"), "ID3");
+      const response = await request(createApp({ lms: mockLms }))
+        .get("/api/library/search?q=shabang&limit=10&source=uploaded")
+        .expect(200);
+
+      expect(response.body.results[0]).toMatchObject({
+        title: "Shabang",
+        source: "Uploaded",
+        art: "https://is1-ssl.mzstatic.com/image/thumb/Music/test/600x600bb.jpg"
+      });
+    } finally {
+      config.uploadDir = previousUploadDir;
+      if (previousAllowNetwork === undefined) delete process.env.TRACK_INFO_ALLOW_NETWORK_IN_TESTS;
+      else process.env.TRACK_INFO_ALLOW_NETWORK_IN_TESTS = previousAllowNetwork;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("prewarms the Spotify library tabs exposed in the UI during state refresh", async () => {
     resetRefreshStateForTests();
     const calls: string[] = [];

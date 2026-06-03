@@ -146,6 +146,8 @@ const trackInfoRefreshMs = 30000;
 const trackInfoBudgetMs = Number(process.env.TRACK_INFO_BUDGET_MS || 1800);
 const localArtworkBudgetMs = Number(process.env.LOCAL_ARTWORK_BUDGET_MS || 700);
 const localArtworkLimit = Number(process.env.LOCAL_ARTWORK_LIMIT || 40);
+const uploadedArtworkBudgetMs = Number(process.env.UPLOADED_ARTWORK_BUDGET_MS || 900);
+const uploadedArtworkLimit = Number(process.env.UPLOADED_ARTWORK_LIMIT || 8);
 const spotifySearchPrewarmTerms = ["drake", "juice wrld", "the weeknd", "travis scott"];
 const transportActionPaths = new Set([
   "/api/player/play",
@@ -1551,8 +1553,25 @@ function withTimeout(promise, timeoutMs, fallback) {
 }
 
 async function enrichLibraryArtwork(lms, tracks) {
-  if (!Array.isArray(tracks) || tracks.length === 0 || typeof lms.enrichLocalArtwork !== "function") return tracks;
-  return withTimeout(lms.enrichLocalArtwork(tracks, { limit: localArtworkLimit }), localArtworkBudgetMs, tracks);
+  if (!Array.isArray(tracks) || tracks.length === 0) return tracks;
+  const localEnriched = typeof lms.enrichLocalArtwork === "function"
+    ? await withTimeout(lms.enrichLocalArtwork(tracks, { limit: localArtworkLimit }), localArtworkBudgetMs, tracks)
+    : tracks;
+  return enrichUploadedArtwork(localEnriched);
+}
+
+async function enrichUploadedArtwork(tracks) {
+  const results = tracks.slice();
+  const candidates = results
+    .map((track, index) => ({ track, index }))
+    .filter(({ track }) => track?.path && !track?.uri && !track?.art && (track.uploaded || track.source === "Uploaded"))
+    .slice(0, Math.max(0, Number(uploadedArtworkLimit) || 0));
+  if (candidates.length === 0) return results;
+
+  return withTimeout(Promise.all(candidates.map(async ({ track, index }) => {
+    const info = await enrichTrackInfo(track).catch(() => null);
+    if (info?.art) results[index] = { ...track, art: info.art };
+  })).then(() => results), uploadedArtworkBudgetMs, results);
 }
 
 async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force = false, skipTrackInfo = false, waitForFresh = true } = {}) {
