@@ -506,9 +506,9 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(400).json({ error: "Library source must be all, local, or uploaded" });
       return;
     }
-    const limit = parseBoundedIntegerParam(req.query.limit, { defaultValue: 100, min: 1, max: 500 });
+    const limit = parseBoundedIntegerParam(req.query.limit, { defaultValue: 100, min: 1, max: 2000 });
     if (limit === null) {
-      res.status(400).json({ error: "Library search limit must be a positive integer up to 500" });
+      res.status(400).json({ error: "Library search limit must be a positive integer up to 2000" });
       return;
     }
     res.json({ results: await searchLibrary(String(req.query.q || ""), undefined, limit, source) });

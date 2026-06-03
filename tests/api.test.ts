@@ -71,6 +71,26 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.nowPlaying.title).toBe("Test Song");
   });
 
+  it("accepts the full local search limit used by typed library searches", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-full-search-"));
+    config.musicSourceDir = root;
+    try {
+      await fs.writeFile(path.join(root, "Artist - Search Match.mp3"), "ID3");
+      const response = await request(createApp({ lms: mockLms }))
+        .get("/api/library/search?q=match&limit=2000&source=local")
+        .expect(200);
+
+      expect(response.body.results).toEqual([expect.objectContaining({ title: "Search Match" })]);
+      await request(createApp({ lms: mockLms }))
+        .get("/api/library/search?q=match&limit=2001&source=local")
+        .expect(400);
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("prewarms the Spotify library tabs exposed in the UI during state refresh", async () => {
     resetRefreshStateForTests();
     const calls: string[] = [];
