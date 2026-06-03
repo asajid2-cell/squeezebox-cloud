@@ -1009,6 +1009,66 @@ describe("Cloud Squeeze API", () => {
     expect(appState.queue.some((item) => item.title === "Visible Queue Song")).toBe(false);
   });
 
+  it("serializes concurrent play presses so queued rows are not reported twice", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
+    appState.nowPlaying = { id: "idle", title: "No track playing", artist: "Connect a player or request a song", album: "", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false };
+    addQueueItem({ title: "First Concurrent", artist: "Tester", path: "/music/test/first-concurrent.mp3", requestedBy: "guest" });
+    addQueueItem({ title: "Second Concurrent", artist: "Tester", path: "/music/test/second-concurrent.mp3", requestedBy: "guest" });
+    const played: string[] = [];
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string }) {
+        played.push(String(track.title || ""));
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return "ok";
+      },
+      async control() {
+        played.push("control:play");
+        return "ok";
+      }
+    };
+    const app = createApp({ lms });
+
+    const [first, second] = await Promise.all([
+      request(app).post("/api/player/play").expect(200),
+      request(app).post("/api/player/play").expect(200)
+    ]);
+
+    expect([first.body.action, second.body.action]).toEqual(["visible-queue-play", "play"]);
+    expect(played).toEqual(["First Concurrent", "control:play"]);
+    expect(appState.queue.map((item) => item.title)).toEqual(["Second Concurrent"]);
+  });
+
+  it("serializes concurrent next presses through visible queue order", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = { id: "current", title: "Current", artist: "Tester", album: "", source: "Local library", duration: 100, elapsed: 5, canSeek: true, art: null, path: "/music/test/current.mp3" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, previousTracks: [] };
+    addQueueItem({ title: "Next One", artist: "Tester", path: "/music/test/next-one.mp3", requestedBy: "guest" });
+    addQueueItem({ title: "Next Two", artist: "Tester", path: "/music/test/next-two.mp3", requestedBy: "guest" });
+    const played: string[] = [];
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string }) {
+        played.push(String(track.title || ""));
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return "ok";
+      }
+    };
+    const app = createApp({ lms });
+
+    const [first, second] = await Promise.all([
+      request(app).post("/api/player/next").expect(200),
+      request(app).post("/api/player/next").expect(200)
+    ]);
+
+    expect([first.body.nowPlaying.title, second.body.nowPlaying.title]).toEqual(["Next One", "Next Two"]);
+    expect(played).toEqual(["Next One", "Next Two"]);
+    expect(appState.queue).toEqual([]);
+  });
+
   it("uses app history for previous after advancing through visible queued Spotify tracks", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };

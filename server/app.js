@@ -99,6 +99,7 @@ const refreshState = {
 const prewarmState = { key: "", at: 0 };
 const spotifyLibraryPrewarmState = { playerId: "", at: 0 };
 const libraryRescanState = { promise: null };
+const transportLockState = { tail: Promise.resolve() };
 const knownSpotifyTracks = new Map();
 const knownSpotifyTrackTtlMs = 30 * 60 * 1000;
 const knownSpotifyTrackLimit = 1500;
@@ -687,7 +688,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
     res.json({ token: adminToken });
   });
 
-  app.post("/api/player/play", async (_req, res) => {
+  app.post("/api/player/play", async (_req, res) => withTransportLock(res, async () => {
     try {
       const playerId = await hotPlayerId(lms);
       const shouldPlayVisibleQueue =
@@ -700,7 +701,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
     } catch (error) {
       res.status(502).json({ error: error.message, mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying, queue: appState.queue });
     }
-  });
+  }));
 
   app.post("/api/player/pause", async (_req, res) => {
     try {
@@ -723,7 +724,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
     }
   });
 
-  app.post("/api/player/next", async (_req, res) => {
+  app.post("/api/player/next", async (_req, res) => withTransportLock(res, async () => {
     try {
       const playerId = await hotPlayerId(lms);
       logEvent("transport.next.request", { queue: queueSummary(), playback: appState.playback, nowPlaying: trackSummary(appState.nowPlaying) });
@@ -742,9 +743,9 @@ export function createApp({ lms = new LmsClient() } = {}) {
     } catch (error) {
       res.status(502).json({ error: error.message, player: appState.player, nowPlaying: appState.nowPlaying });
     }
-  });
+  }));
 
-  app.post("/api/player/previous", async (_req, res) => {
+  app.post("/api/player/previous", async (_req, res) => withTransportLock(res, async () => {
     try {
       const playerId = await hotPlayerId(lms);
       logEvent("transport.previous.request", { queue: queueSummary(), playback: appState.playback, nowPlaying: trackSummary(appState.nowPlaying) });
@@ -768,7 +769,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
     } catch (error) {
       res.status(502).json({ error: error.message, player: appState.player, nowPlaying: appState.nowPlaying });
     }
-  });
+  }));
 
   app.post("/api/player/volume", async (req, res) => {
     const parsed = volumeSchema.safeParse(req.body);
@@ -939,6 +940,20 @@ async function hotPlayerId(lms) {
   await refreshLms(lms, { force: true, skipTrackInfo: true });
   if (!appState.player.id || appState.player.id === "mock-player") throw new Error("No LMS player connected");
   return appState.player.id;
+}
+
+async function withTransportLock(res, handler) {
+  const previous = transportLockState.tail.catch(() => null);
+  let release;
+  transportLockState.tail = new Promise((resolve) => {
+    release = resolve;
+  });
+  try {
+    await previous;
+    if (!res.headersSent) await handler();
+  } finally {
+    release();
+  }
 }
 
 function runPlaybackCommand(lms, playerId, track, action) {
