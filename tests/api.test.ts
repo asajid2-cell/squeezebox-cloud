@@ -1369,6 +1369,39 @@ describe("Cloud Squeeze API", () => {
     expect(appState.queue).toHaveLength(3);
   });
 
+  it("serializes queue clear and delete with concurrent queue additions", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.admin = { ...appState.admin, maxQueuePerUser: 3 };
+    const app = createApp({ lms: mockLms });
+    addQueueItem({ title: "Clear Existing", path: "/music/test/clear-existing.mp3", requestedBy: "guest" });
+    const tracks = [
+      { title: "Clear Race One", path: "/music/test/clear-race-one.mp3", source: "Local library" },
+      { title: "Clear Race Two", path: "/music/test/clear-race-two.mp3", source: "Local library" }
+    ];
+
+    const [clearResponse, batchResponse] = await Promise.all([
+      request(app).delete("/api/queue"),
+      request(app).post("/api/player/tracks").send({ action: "add-queue", tracks })
+    ]);
+
+    expect([clearResponse.status, batchResponse.status].sort()).toEqual([200, 200]);
+    const afterClearRace = appState.queue.map((item: { title: string }) => item.title);
+    expect([[], ["Clear Race One", "Clear Race Two"]]).toContainEqual(afterClearRace);
+    expect(afterClearRace).not.toContain("Clear Existing");
+
+    appState.queue.splice(0, appState.queue.length);
+    appState.admin = { ...appState.admin, maxQueuePerUser: 3 };
+    const removable = addQueueItem({ title: "Delete Race", path: "/music/test/delete-race.mp3", requestedBy: "guest" });
+    const [deleteResponse, addResponse] = await Promise.all([
+      request(app).delete(`/api/queue/${removable.id}`),
+      request(app).post("/api/player/track").send({ action: "add-queue", track: { title: "Delete Race", path: "/music/test/delete-race.mp3", source: "Local library" } })
+    ]);
+
+    expect(deleteResponse.status).toBe(200);
+    expect([200, 409]).toContain(addResponse.status);
+    expect(appState.queue.filter((item: { path: string }) => item.path === "/music/test/delete-race.mp3")).toHaveLength(addResponse.status === 200 ? 1 : 0);
+  });
+
   it("does not advance playback while refreshing public state", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = { ...appState.playback, shuffle: true, smartShuffleSource: "spotify", history: [] };

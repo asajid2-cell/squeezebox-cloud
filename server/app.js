@@ -231,7 +231,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
     res.status(201).json(addQueueItem({ ...parsed.data, requestedBy: "guest" }));
   }));
 
-  app.patch("/api/queue/:id", (req, res) => {
+  app.patch("/api/queue/:id", (req, res) => withQueueMutationLock(async () => {
     const parsed = queueUpdateSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "Invalid queue update", issues: parsed.error.issues });
@@ -248,18 +248,18 @@ export function createApp({ lms = new LmsClient() } = {}) {
       return;
     }
     res.json({ ok: true, item, queue: appState.queue });
-  });
+  }));
 
-  app.delete("/api/queue/:id", (req, res) => {
+  app.delete("/api/queue/:id", (req, res) => withQueueMutationLock(async () => {
     const item = removeQueueItem(req.params.id);
     if (!item) {
       res.status(404).json({ error: "Queue item not found" });
       return;
     }
     res.json({ ok: true, removed: item, queue: appState.queue });
-  });
+  }));
 
-  app.delete("/api/queue", (_req, res) => {
+  app.delete("/api/queue", (_req, res) => withQueueMutationLock(async () => {
     const removed = [];
     for (const item of [...appState.queue]) {
       const removedItem = removeQueueItem(item.id);
@@ -268,9 +268,9 @@ export function createApp({ lms = new LmsClient() } = {}) {
     stopGeneratedPlayback();
     logEvent("queue.clear", { count: removed.length, playback: appState.playback });
     res.json({ ok: true, removed, queue: appState.queue, playback: appState.playback });
-  });
+  }));
 
-  app.post("/api/queue/:id/move", (req, res) => {
+  app.post("/api/queue/:id/move", (req, res) => withQueueMutationLock(async () => {
     const direction = req.body?.direction ?? req.body?.index;
     const item = moveQueueItem(req.params.id, direction);
     if (item === null) {
@@ -282,7 +282,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       return;
     }
     res.json({ ok: true, item, queue: appState.queue });
-  });
+  }));
 
   app.post("/api/player/track", async (req, res) => withQueueMutationLock(async () => {
     const action = String(req.body?.action || "add-queue");
