@@ -672,13 +672,20 @@ export function createApp({ lms = new LmsClient() } = {}) {
     const wasPlaying = appState.player.mode === "play";
     try {
       await control(lms, "seek", seconds);
-      if (wasPlaying && appState.player.id) await control(lms, "play");
       updateNowPlaying({ elapsed: seconds });
-      if (wasPlaying) setMode("play");
+      if (wasPlaying && appState.player.id) {
+        try {
+          await control(lms, "play");
+        } catch (error) {
+          res.status(502).json({ error: error.message, seconds, seekApplied: true, player: appState.player, nowPlaying: appState.nowPlaying });
+          return;
+        }
+        setMode("play");
+      }
       refreshLms(lms, { force: true }).catch(() => null);
       res.json({ ok: true, seconds, player: appState.player, nowPlaying: appState.nowPlaying });
     } catch (error) {
-      res.status(502).json({ error: error.message, player: appState.player, nowPlaying: appState.nowPlaying });
+      res.status(502).json({ error: error.message, seconds, seekApplied: false, player: appState.player, nowPlaying: appState.nowPlaying });
     }
   });
 

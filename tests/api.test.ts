@@ -1002,6 +1002,38 @@ describe("Cloud Squeeze API", () => {
     expect(controls).toContainEqual({ action: "play", value: undefined });
   });
 
+  it("reports partial seek success when resume after seek fails", async () => {
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = {
+      id: "seek-current",
+      title: "Seek Current",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 5,
+      canSeek: true,
+      art: null,
+      path: "/music/test/seek-current.mp3"
+    };
+    const controls: Array<{ action: string; value?: number }> = [];
+    const lms = {
+      ...mockLms,
+      async control(_playerId: string, action: string, value?: number) {
+        controls.push({ action, value });
+        if (action === "play") throw new Error("resume failed");
+        return "ok";
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/seek").send({ seconds: 42 }).expect(502);
+
+    expect(response.body).toMatchObject({ error: "resume failed", seconds: 42, seekApplied: true });
+    expect(appState.nowPlaying.elapsed).toBe(42);
+    expect(appState.player.mode).toBe("play");
+    expect(controls).toEqual([{ action: "seek", value: 42 }, { action: "play", value: undefined }]);
+  });
+
   it("returns Spotify search results from Spotty", async () => {
     const response = await request(createApp({ lms: mockLms })).get("/api/spotify/search?q=drake").expect(200);
     expect(response.body.results[0].uri).toBe("spotify:track:0000000000000000000101");
