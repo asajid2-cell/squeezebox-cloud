@@ -67,6 +67,7 @@ const navItems = [
 ];
 
 type PublicScreenName = (typeof navItems)[number]["label"];
+type ActionRunner = <T>(action: () => Promise<T>) => Promise<T | undefined>;
 
 export default function App() {
   const [state, setState] = useState<AppState | null>(null);
@@ -74,10 +75,21 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Track[]>([]);
   const [sourceFilter, setSourceFilter] = useState<"local" | "uploaded" | "spotify" | "playlists">("local");
+  const [actionError, setActionError] = useState("");
   const isAdminRoute = window.location.pathname.replace(/\/$/, "").endsWith("/admin");
 
   async function refresh() {
     setState(await fetchState());
+  }
+
+  async function runAction<T>(action: () => Promise<T>) {
+    setActionError("");
+    try {
+      return await action();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Action failed");
+      return undefined;
+    }
   }
 
   useEffect(() => {
@@ -166,6 +178,7 @@ export default function App() {
             </a>
           </div>
         </header>
+        {actionError && <div className="action-error" role="alert">{actionError}</div>}
         {isAdminRoute ? (
           <AdminPage state={state} onSave={refresh} />
         ) : (
@@ -178,6 +191,7 @@ export default function App() {
             sourceFilter={sourceFilter}
             setSourceFilter={setSourceFilter}
             onRefresh={refresh}
+            onAction={runAction}
             onPlayerAction={playerAction}
           />
         )}
@@ -195,6 +209,7 @@ function PublicScreen({
   sourceFilter,
   setSourceFilter,
   onRefresh,
+  onAction,
   onPlayerAction
 }: {
   state: AppState;
@@ -205,7 +220,8 @@ function PublicScreen({
   sourceFilter: "local" | "uploaded" | "spotify" | "playlists";
   setSourceFilter: (value: "local" | "uploaded" | "spotify" | "playlists") => void;
   onRefresh: () => void;
-  onPlayerAction: (action: "play" | "pause" | "next" | "previous") => Promise<void>;
+  onAction: ActionRunner;
+  onPlayerAction: (action: "play" | "pause" | "next" | "previous") => Promise<unknown>;
 }) {
   const commonSearch = (
     <SearchPanel
@@ -216,13 +232,14 @@ function PublicScreen({
       sourceFilter={sourceFilter}
       setSourceFilter={setSourceFilter}
       onRefresh={onRefresh}
+      onAction={onAction}
     />
   );
 
   if (activeScreen === "Queue") {
     return (
       <div className="content-grid focus-grid">
-        <QueuePanel queue={state.queue} onRefresh={onRefresh} />
+        <QueuePanel queue={state.queue} onRefresh={onRefresh} onAction={onAction} />
         <RightRail state={state} />
       </div>
     );
@@ -240,7 +257,7 @@ function PublicScreen({
   if (activeScreen === "Playlists") {
     return (
       <div className="content-grid focus-grid">
-        <PlaylistsPanel onRefresh={onRefresh} />
+        <PlaylistsPanel onRefresh={onRefresh} onAction={onAction} />
         <RightRail state={state} />
       </div>
     );
@@ -250,9 +267,9 @@ function PublicScreen({
   const controlsDisabled = !state.player.connected;
   return (
     <div className="content-grid">
-      <NowPlayingPanel state={state} hasTrack={hasTrack} controlsDisabled={controlsDisabled} onRefresh={onRefresh} onPlayerAction={onPlayerAction} />
+      <NowPlayingPanel state={state} hasTrack={hasTrack} controlsDisabled={controlsDisabled} onRefresh={onRefresh} onAction={onAction} onPlayerAction={onPlayerAction} />
 
-      <QueuePanel queue={state.queue} onRefresh={onRefresh} />
+      <QueuePanel queue={state.queue} onRefresh={onRefresh} onAction={onAction} />
 
       <RightRail state={state} />
     </div>
@@ -264,13 +281,15 @@ function NowPlayingPanel({
   hasTrack,
   controlsDisabled,
   onRefresh,
+  onAction,
   onPlayerAction
 }: {
   state: AppState;
   hasTrack: boolean;
   controlsDisabled: boolean;
   onRefresh: () => void;
-  onPlayerAction: (action: "play" | "pause" | "next" | "previous") => Promise<void>;
+  onAction: ActionRunner;
+  onPlayerAction: (action: "play" | "pause" | "next" | "previous") => Promise<unknown>;
 }) {
   return (
     <section className="panel now-playing" aria-label="Now playing">
@@ -287,22 +306,22 @@ function NowPlayingPanel({
               duration={state.nowPlaying.duration || 0}
               canSeek={Boolean(state.nowPlaying.canSeek)}
               mode={state.player.mode}
-              onSeek={(seconds) => seekPlayer(seconds).then(onRefresh)}
+              onSeek={(seconds) => onAction(async () => { await seekPlayer(seconds); await onRefresh(); })}
               onEnded={onRefresh}
             />
             <div className="transport">
-              <button aria-label="Previous" disabled={controlsDisabled} onClick={() => onPlayerAction("previous").then(onRefresh)}>
+              <button aria-label="Previous" disabled={controlsDisabled} onClick={() => onAction(async () => { await onPlayerAction("previous"); await onRefresh(); })}>
                 <SkipBack size={20} />
               </button>
-              <button className="play-button" aria-label={state.player.mode === "play" ? "Pause" : "Play"} disabled={controlsDisabled} onClick={() => onPlayerAction(state.player.mode === "play" ? "pause" : "play").then(onRefresh)}>
+              <button className="play-button" aria-label={state.player.mode === "play" ? "Pause" : "Play"} disabled={controlsDisabled} onClick={() => onAction(async () => { await onPlayerAction(state.player.mode === "play" ? "pause" : "play"); await onRefresh(); })}>
                 {state.player.mode === "play" ? <Pause size={22} fill="currentColor" /> : <Play size={22} fill="currentColor" />}
               </button>
-              <button aria-label="Next" disabled={controlsDisabled} onClick={() => onPlayerAction("next").then(onRefresh)}>
+              <button aria-label="Next" disabled={controlsDisabled} onClick={() => onAction(async () => { await onPlayerAction("next"); await onRefresh(); })}>
                 <SkipForward size={20} />
               </button>
             </div>
-            <PlaybackOptions state={state} disabled={controlsDisabled} onRefresh={onRefresh} />
-            <VolumeControl volume={state.player.volume} onChange={(volume) => setPlayerVolume(volume).then(onRefresh)} />
+            <PlaybackOptions state={state} disabled={controlsDisabled} onRefresh={onRefresh} onAction={onAction} />
+            <VolumeControl volume={state.player.volume} onChange={(volume) => onAction(async () => { await setPlayerVolume(volume); await onRefresh(); })} />
             {!hasTrack && <p className="empty-copy">No live track yet. Connect the Squeezebox or add a local-library song.</p>}
           </div>
         </div>
@@ -310,15 +329,17 @@ function NowPlayingPanel({
   );
 }
 
-function PlaybackOptions({ state, disabled, onRefresh }: { state: AppState; disabled: boolean; onRefresh: () => void }) {
+function PlaybackOptions({ state, disabled, onRefresh, onAction }: { state: AppState; disabled: boolean; onRefresh: () => void; onAction: ActionRunner }) {
   const playback = state.playback || { shuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "mixed" as const };
   const repeatIcon = playback.repeat === "one" ? <Repeat1 size={17} /> : <Repeat size={17} />;
   const shuffleLabel = playback.smartQueue ? "Smart shuffle" : playback.shuffle ? "Shuffle on" : "Shuffle";
 
   async function setRepeat() {
     const next = playback.repeat === "off" ? "all" : playback.repeat === "all" ? "one" : "off";
-    await savePlayback({ repeat: next });
-    await onRefresh();
+    await onAction(async () => {
+      await savePlayback({ repeat: next });
+      await onRefresh();
+    });
   }
 
   async function cycleShuffle() {
@@ -328,13 +349,17 @@ function PlaybackOptions({ state, disabled, onRefresh }: { state: AppState; disa
         : playback.shuffle
           ? { shuffle: false, smartQueue: true }
           : { shuffle: true, smartQueue: false };
-    await savePlayback(next);
-    await onRefresh();
+    await onAction(async () => {
+      await savePlayback(next);
+      await onRefresh();
+    });
   }
 
   async function setSource(source: AppState["playback"]["smartShuffleSource"]) {
-    await savePlayback({ smartShuffleSource: source });
-    await onRefresh();
+    await onAction(async () => {
+      await savePlayback({ smartShuffleSource: source });
+      await onRefresh();
+    });
   }
 
   return (
@@ -484,7 +509,7 @@ function VolumeControl({ volume, onChange }: { volume: number; onChange: (volume
   );
 }
 
-function QueuePanel({ queue, onRefresh }: { queue: AppState["queue"]; onRefresh: () => void }) {
+function QueuePanel({ queue, onRefresh, onAction }: { queue: AppState["queue"]; onRefresh: () => void; onAction: ActionRunner }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState({ title: "", artist: "", requestedBy: "" });
 
@@ -494,9 +519,11 @@ function QueuePanel({ queue, onRefresh }: { queue: AppState["queue"]; onRefresh:
   }
 
   async function saveEdit(id: string) {
-    await updateQueueItem(id, draft);
-    setEditingId(null);
-    await onRefresh();
+    await onAction(async () => {
+      await updateQueueItem(id, draft);
+      setEditingId(null);
+      await onRefresh();
+    });
   }
 
   return (
@@ -529,10 +556,10 @@ function QueuePanel({ queue, onRefresh }: { queue: AppState["queue"]; onRefresh:
             <span>{item.requestedBy}</span>
             <span>~{item.etaMinutes} min</span>
             <div className="queue-actions">
-              <button aria-label={`Move ${item.title} up`} title="Move earlier in queue" data-tooltip="Move earlier" className="icon-button" disabled={index === 0} onClick={() => moveQueueItem(item.id, "up").then(onRefresh)}>
+              <button aria-label={`Move ${item.title} up`} title="Move earlier in queue" data-tooltip="Move earlier" className="icon-button" disabled={index === 0} onClick={() => onAction(async () => { await moveQueueItem(item.id, "up"); await onRefresh(); })}>
                 <ChevronUp size={16} />
               </button>
-              <button aria-label={`Move ${item.title} down`} title="Move later in queue" data-tooltip="Move later" className="icon-button" disabled={index === queue.length - 1} onClick={() => moveQueueItem(item.id, "down").then(onRefresh)}>
+              <button aria-label={`Move ${item.title} down`} title="Move later in queue" data-tooltip="Move later" className="icon-button" disabled={index === queue.length - 1} onClick={() => onAction(async () => { await moveQueueItem(item.id, "down"); await onRefresh(); })}>
                 <ChevronDown size={16} />
               </button>
               {editingId === item.id ? (
@@ -549,7 +576,7 @@ function QueuePanel({ queue, onRefresh }: { queue: AppState["queue"]; onRefresh:
                   <XCircle size={16} />
                 </button>
               )}
-              <button aria-label={`Remove ${item.title}`} title="Remove from queue" data-tooltip="Remove" className="icon-button danger" onClick={() => removeQueueItem(item.id).then(onRefresh)}>
+              <button aria-label={`Remove ${item.title}`} title="Remove from queue" data-tooltip="Remove" className="icon-button danger" onClick={() => onAction(async () => { await removeQueueItem(item.id); await onRefresh(); })}>
                 <XCircle size={16} />
               </button>
             </div>
@@ -568,7 +595,8 @@ function SearchPanel({
   state,
   sourceFilter,
   setSourceFilter,
-  onRefresh
+  onRefresh,
+  onAction
 }: {
   query: string;
   setQuery: (value: string) => void;
@@ -577,6 +605,7 @@ function SearchPanel({
   sourceFilter: "local" | "uploaded" | "spotify" | "playlists";
   setSourceFilter: (value: "local" | "uploaded" | "spotify" | "playlists") => void;
   onRefresh: () => void;
+  onAction: ActionRunner;
 }) {
   const [showAllResults, setShowAllResults] = useState(false);
   const [collections, setCollections] = useState<LibraryCollection[]>([]);
@@ -688,7 +717,7 @@ function SearchPanel({
           />
         )}
         {visibleResults.map((track) => (
-          <SearchResultRow key={track.id} track={track} onRefresh={onRefresh} />
+          <SearchResultRow key={track.id} track={track} onRefresh={onRefresh} onAction={onAction} />
         ))}
       </div>
       {(sourceFilter === "local" || sourceFilter === "uploaded" || sourceFilter === "spotify") && results.length > 3 && (
@@ -700,7 +729,7 @@ function SearchPanel({
   );
 }
 
-function SearchResultRow({ track, onRefresh }: { track: Track; onRefresh: () => void }) {
+function SearchResultRow({ track, onRefresh, onAction }: { track: Track; onRefresh: () => void; onAction: ActionRunner }) {
   const playable = !track.kind || track.kind === "track" || Boolean(track.path || track.lmsTrackId);
   return (
     <div className="result-row">
@@ -714,15 +743,15 @@ function SearchResultRow({ track, onRefresh }: { track: Track; onRefresh: () => 
       </div>
       <span>{track.kind && track.kind !== "track" ? track.kind : track.duration ? formatTime(track.duration) : "--:--"}</span>
       <div className="track-actions">
-        {playable && <button className="ghost-add" onClick={() => playTrack("play-now", track).then(onRefresh)}>Play now</button>}
-        {playable && <button className="ghost-add" onClick={() => playTrack("play-next", track).then(onRefresh)}>Play next</button>}
-        {playable && <button className="ghost-add" onClick={() => playTrack("add-queue", track).then(onRefresh)}>Queue</button>}
+        {playable && <button className="ghost-add" onClick={() => onAction(async () => { await playTrack("play-now", track); await onRefresh(); })}>Play now</button>}
+        {playable && <button className="ghost-add" onClick={() => onAction(async () => { await playTrack("play-next", track); await onRefresh(); })}>Play next</button>}
+        {playable && <button className="ghost-add" onClick={() => onAction(async () => { await playTrack("add-queue", track); await onRefresh(); })}>Queue</button>}
       </div>
     </div>
   );
 }
 
-function PlaylistsPanel({ onRefresh }: { onRefresh: () => void }) {
+function PlaylistsPanel({ onRefresh, onAction }: { onRefresh: () => void; onAction: ActionRunner }) {
   const [collections, setCollections] = useState<LibraryCollection[]>([]);
   const [source, setSource] = useState<"local" | "spotify">("local");
   const [spotifyType, setSpotifyType] = useState<"playlists" | "albums" | "artists" | "tracks" | "home">("playlists");
@@ -753,8 +782,10 @@ function PlaylistsPanel({ onRefresh }: { onRefresh: () => void }) {
 
   async function openSpotify(track: Track) {
     if (track.kind === "track") {
-      await playTrack("add-queue", track);
-      await onRefresh();
+      await onAction(async () => {
+        await playTrack("add-queue", track);
+        await onRefresh();
+      });
       return;
     }
     setSelectedLocal(null);
@@ -813,6 +844,7 @@ function PlaylistsPanel({ onRefresh }: { onRefresh: () => void }) {
           tracks={detailTracks}
           loading={loadingDetail}
           onRefresh={onRefresh}
+          onAction={onAction}
         />
       )}
       {!selectedTitle && source === "local" && collections.length === 0 && (
@@ -855,16 +887,20 @@ function PlaylistTracks({
   title,
   tracks,
   loading,
-  onRefresh
+  onRefresh,
+  onAction
 }: {
   title: string;
   tracks: Track[];
   loading: boolean;
   onRefresh: () => void;
+  onAction: ActionRunner;
 }) {
   async function queueAll(action: "add-queue" | "play-next") {
-    await playTracks(action, tracks.filter((item) => !item.kind || item.kind === "track").slice(0, 200));
-    await onRefresh();
+    await onAction(async () => {
+      await playTracks(action, tracks.filter((item) => !item.kind || item.kind === "track").slice(0, 200));
+      await onRefresh();
+    });
   }
 
   return (
@@ -889,9 +925,9 @@ function PlaylistTracks({
             </div>
             <span>{track.duration ? formatTime(track.duration) : "--:--"}</span>
             <div className="track-actions">
-              <button className="ghost-add" onClick={() => playTrack("play-now", track).then(onRefresh)}>Play now</button>
-              <button className="ghost-add" onClick={() => playTrack("play-next", track).then(onRefresh)}>Play next</button>
-              <button className="ghost-add" onClick={() => playTrack("add-queue", track).then(onRefresh)}>Queue</button>
+              <button className="ghost-add" onClick={() => onAction(async () => { await playTrack("play-now", track); await onRefresh(); })}>Play now</button>
+              <button className="ghost-add" onClick={() => onAction(async () => { await playTrack("play-next", track); await onRefresh(); })}>Play next</button>
+              <button className="ghost-add" onClick={() => onAction(async () => { await playTrack("add-queue", track); await onRefresh(); })}>Queue</button>
             </div>
           </div>
         ))}

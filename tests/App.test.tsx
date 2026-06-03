@@ -128,6 +128,31 @@ describe("Cloud Squeeze UI", () => {
     });
   });
 
+  it("surfaces failed transport controls", async () => {
+    const fetchMock = vi.mocked(fetch);
+    render(<App />);
+    await screen.findByRole("button", { name: "Pause" });
+    fetchMock.mockImplementationOnce(async () => jsonResponse({ error: "LMS control failed" }, 502));
+
+    await userEvent.click(screen.getByRole("button", { name: "Pause" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("LMS control failed");
+  });
+
+  it("surfaces failed queue actions", async () => {
+    const fetchMock = vi.mocked(fetch);
+    render(<App />);
+    await userEvent.type(await screen.findByLabelText("Search music"), "local");
+    await waitFor(() => expect(screen.getByText("Local Test")).toBeInTheDocument());
+    fetchMock.mockImplementationOnce(async () => jsonResponse({ error: "That song is already in the queue" }, 409));
+
+    const row = screen.getByText("Local Test").closest(".result-row");
+    expect(row).toBeTruthy();
+    await userEvent.click(within(row as HTMLElement).getByRole("button", { name: "Queue" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("That song is already in the queue");
+  });
+
   it("navigates public sections from the sidebar", async () => {
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Queue" }));
@@ -196,10 +221,10 @@ describe("Cloud Squeeze UI", () => {
   });
 });
 
-function jsonResponse(body: unknown) {
+function jsonResponse(body: unknown, status = 200) {
   return Promise.resolve({
-    ok: true,
-    status: 200,
+    ok: status >= 200 && status < 300,
+    status,
     json: () => Promise.resolve(body)
   } as Response);
 }

@@ -239,6 +239,16 @@ nav button.active {
   border-radius: 10px;
   background: #07080d;
 }
+.action-error {
+  margin: -4px 0 18px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 95, 131, .45);
+  border-radius: 8px;
+  background: rgba(255, 95, 131, .08);
+  color: var(--rose);
+  font-size: 13px;
+  font-weight: 800;
+}
 .primary, .primary-small {
   border-color: transparent;
   background: linear-gradient(180deg, #ff6b8d, #ff4772);
