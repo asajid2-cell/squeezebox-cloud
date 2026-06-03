@@ -923,6 +923,55 @@ describe("Cloud Squeeze API", () => {
     expect(appState.playback.previousTracks[0]).toMatchObject({ title: "Current Track", path: "/music/current.mp3" });
   });
 
+  it("restores the forward track after app previous so next can return to it", async () => {
+    const played: Array<{ action: string; track: { title?: string; uri?: string } }> = [];
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = {
+      id: "spotify://track:current",
+      title: "Current Forward",
+      artist: "Tester",
+      album: "",
+      source: "Spotify",
+      duration: 100,
+      elapsed: 10,
+      canSeek: true,
+      art: null,
+      uri: "spotify:track:current"
+    };
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      manualShuffle: true,
+      smartQueue: false,
+      appManagedPlayback: true,
+      previousTracks: [{ title: "Previous Track", artist: "Tester", uri: "spotify:track:previous", source: "Spotify", kind: "track" }]
+    };
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string; uri?: string }, action: string) {
+        played.push({ action, track });
+        return "ok";
+      },
+      async nowPlaying() {
+        return appState.nowPlaying;
+      }
+    };
+    const app = createApp({ lms });
+
+    const previous = await request(app).post("/api/player/previous").expect(200);
+    const next = await request(app).post("/api/player/next").expect(200);
+
+    expect(previous.body.action).toBe("app-previous");
+    expect(previous.body.queue).toEqual([expect.objectContaining({ title: "Current Forward", uri: "spotify:track:current" })]);
+    expect(next.body.action).toBe("visible-queue-next");
+    expect(next.body.nowPlaying.title).toBe("Current Forward");
+    expect(played).toEqual([
+      { action: "play-now", track: expect.objectContaining({ title: "Previous Track", uri: "spotify:track:previous" }) },
+      { action: "play-now", track: expect.objectContaining({ title: "Current Forward", uri: "spotify:track:current" }) }
+    ]);
+  });
+
   it("remembers the pre-command current track when next playback updates LMS immediately", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
@@ -1173,6 +1222,8 @@ describe("Cloud Squeeze API", () => {
   });
 
   it("keeps single-track queue requests out of the hidden LMS playlist", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.admin = { ...appState.admin, maxQueuePerUser: 3 };
     const played: Array<{ action: string; track: { title?: string } }> = [];
     const lms = {
       ...mockLms,

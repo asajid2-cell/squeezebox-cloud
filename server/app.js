@@ -923,6 +923,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
         const currentBeforePrevious = appState.nowPlaying;
         await lms.playTrack(playerId, previous, "play-now");
         popPreviousTrack();
+        restoreCurrentTrackAfterPrevious(currentBeforePrevious);
         rememberPreviousTrack(currentBeforePrevious);
         updatePlayback({ appManagedPlayback: true });
         setMode("play");
@@ -1456,6 +1457,14 @@ function markQueueManagedPlayback() {
   if (appState.player.mode !== "play") return;
   if (!isTrackInfoCandidate(appState.nowPlaying)) return;
   updatePlayback({ appManagedPlayback: true });
+}
+
+function restoreCurrentTrackAfterPrevious(track) {
+  if (!appState.playback.appManagedPlayback) return null;
+  if (!isRestorablePreviousTrack(track)) return null;
+  const item = restorableTrack(track);
+  if (queuedTrackInputExists(item)) return null;
+  return addQueueItemNext({ ...item, requestedBy: "guest" });
 }
 
 function guestQueueLimit() {
