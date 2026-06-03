@@ -110,14 +110,18 @@ export default function App() {
     let cancelled = false;
     setResults([]);
     const timer = window.setTimeout(async () => {
-      let nextResults: Track[] = [];
-      if (sourceFilter === "spotify") {
-        nextResults = await searchSpotify(query.trim() || spotifyRecommendationQuery, 50);
-      } else {
-        const localLimit = query.trim() ? fullLibrarySearchLimit : starterLibraryLimit;
-        nextResults = sourceFilter === "local" || sourceFilter === "uploaded" ? await searchLibrary(query, localLimit, sourceFilter) : [];
+      try {
+        let nextResults: Track[] = [];
+        if (sourceFilter === "spotify") {
+          nextResults = await searchSpotify(query.trim() || spotifyRecommendationQuery, 50);
+        } else {
+          const localLimit = query.trim() ? fullLibrarySearchLimit : starterLibraryLimit;
+          nextResults = sourceFilter === "local" || sourceFilter === "uploaded" ? await searchLibrary(query, localLimit, sourceFilter) : [];
+        }
+        if (!cancelled) setResults(nextResults);
+      } catch (error) {
+        if (!cancelled) setActionError(error instanceof Error ? error.message : "Search failed");
       }
-      if (!cancelled) setResults(nextResults);
     }, 250);
     return () => {
       cancelled = true;
@@ -769,19 +773,26 @@ function PlaylistsPanel({ onRefresh, onAction }: { onRefresh: () => void; onActi
   const [loadingDetail, setLoadingDetail] = useState(false);
 
   useEffect(() => {
-    fetchCollections().then(setCollections);
-  }, []);
+    onAction(async () => {
+      setCollections(await fetchCollections());
+    });
+  }, [onAction]);
 
   useEffect(() => {
-    if (source === "spotify") fetchSpotifyLibrary(spotifyType, 80).then(setSpotifyItems);
-  }, [source, spotifyType]);
+    if (source === "spotify") {
+      onAction(async () => {
+        setSpotifyItems(await fetchSpotifyLibrary(spotifyType, 80));
+      });
+    }
+  }, [source, spotifyType, onAction]);
 
   async function openLocal(collection: LibraryCollection) {
     setSelectedSpotify(null);
     setSelectedLocal(collection);
     setLoadingDetail(true);
     try {
-      setDetailTracks(await fetchCollectionTracks(collection.collection, collection.folder, "all", 1500));
+      const tracks = await onAction(() => fetchCollectionTracks(collection.collection, collection.folder, "all", 1500));
+      if (tracks) setDetailTracks(tracks);
     } finally {
       setLoadingDetail(false);
     }
@@ -799,7 +810,8 @@ function PlaylistsPanel({ onRefresh, onAction }: { onRefresh: () => void; onActi
     setSelectedSpotify(track);
     setLoadingDetail(true);
     try {
-      setDetailTracks(await fetchSpotifyChildren(track, 250));
+      const tracks = await onAction(() => fetchSpotifyChildren(track, 250));
+      if (tracks) setDetailTracks(tracks);
     } finally {
       setLoadingDetail(false);
     }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchState, playTrack, playTracks, playerAction, postQueue, rescanLibrary, resetApiClientStateForTests, savePlayback, searchSpotify, seekPlayer, setPlayerVolume } from "../src/lib/api";
+import { fetchCollectionTracks, fetchCollections, fetchSpotifyChildren, fetchSpotifyLibrary, fetchState, playTrack, playTracks, playerAction, postQueue, rescanLibrary, resetApiClientStateForTests, savePlayback, searchLibrary, searchSpotify, seekPlayer, setPlayerVolume } from "../src/lib/api";
 
 function mockJsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -77,6 +77,17 @@ describe("API client mutating requests", () => {
     await expect(searchSpotify("   ")).resolves.toEqual([]);
 
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("throws backend errors for failed browse and search requests", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => mockJsonResponse(502, { error: "Provider failed" })));
+
+    await expect(searchLibrary("bad")).rejects.toThrow("Provider failed");
+    await expect(searchSpotify("drake")).rejects.toThrow("Provider failed");
+    await expect(fetchSpotifyLibrary("playlists")).rejects.toThrow("Provider failed");
+    await expect(fetchSpotifyChildren({ title: "Mix", uri: "spotify:playlist:1", kind: "playlist" })).rejects.toThrow("Provider failed");
+    await expect(fetchCollections()).rejects.toThrow("Provider failed");
+    await expect(fetchCollectionTracks("Collection", "Folder")).rejects.toThrow("Provider failed");
   });
 
   it("throws backend errors for failed volume and seek controls", async () => {

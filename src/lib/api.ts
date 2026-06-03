@@ -72,28 +72,21 @@ export function resetApiClientStateForTests() {
 
 export async function searchLibrary(query: string, limit = 100, source = "all"): Promise<Track[]> {
   const response = await fetch(`${apiBase}/library/search?q=${encodeURIComponent(query)}&limit=${limit}&source=${encodeURIComponent(source)}`);
-  if (!response.ok) return [];
-  const data = await response.json();
+  const data = await responseJson<{ results?: Track[] }>(response, "Library search failed");
   return data.results || [];
 }
 
 export async function searchSpotify(query: string, limit = 50): Promise<Track[]> {
   const trimmed = query.trim();
   if (!trimmed) return [];
-  try {
-    const response = await fetch(`${apiBase}/spotify/search?q=${encodeURIComponent(trimmed)}&limit=${limit}`);
-    if (!response.ok) return [];
-    const data = await response.json();
-    return data.results || [];
-  } catch {
-    return [];
-  }
+  const response = await fetch(`${apiBase}/spotify/search?q=${encodeURIComponent(trimmed)}&limit=${limit}`);
+  const data = await responseJson<{ results?: Track[] }>(response, "Spotify search failed");
+  return data.results || [];
 }
 
 export async function fetchSpotifyLibrary(type: "playlists" | "albums" | "artists" | "tracks" | "home", limit = 50): Promise<Track[]> {
   const response = await fetch(`${apiBase}/spotify/library?type=${encodeURIComponent(type)}&limit=${limit}`);
-  if (!response.ok) return [];
-  const data = await response.json();
+  const data = await responseJson<{ results?: Track[] }>(response, "Spotify library failed");
   return data.results || [];
 }
 
@@ -105,23 +98,20 @@ export async function fetchSpotifyChildren(track: Partial<Track>, limit = 200): 
   if (track.title) params.set("title", String(track.title));
   params.set("limit", String(limit));
   const response = await fetch(`${apiBase}/spotify/children?${params.toString()}`);
-  if (!response.ok) return [];
-  const data = await response.json();
+  const data = await responseJson<{ results?: Track[] }>(response, "Spotify playlist failed");
   return data.results || [];
 }
 
 export async function fetchCollections(source = "all"): Promise<LibraryCollection[]> {
   const response = await fetch(`${apiBase}/library/collections?source=${encodeURIComponent(source)}`);
-  if (!response.ok) return [];
-  const data = await response.json();
+  const data = await responseJson<{ collections?: LibraryCollection[] }>(response, "Library collections failed");
   return data.collections || [];
 }
 
 export async function fetchCollectionTracks(collection: string, folder: string, source = "all", limit = 1000): Promise<Track[]> {
   const params = new URLSearchParams({ collection, folder, source, limit: String(limit) });
   const response = await fetch(`${apiBase}/library/collection?${params.toString()}`);
-  if (!response.ok) return [];
-  const data = await response.json();
+  const data = await responseJson<{ results?: Track[] }>(response, "Library collection failed");
   return data.results || [];
 }
 

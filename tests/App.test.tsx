@@ -205,6 +205,20 @@ describe("Cloud Squeeze UI", () => {
     expect(screen.getByRole("button", { name: "Play next" })).toBeInTheDocument();
   });
 
+  it("surfaces failed library searches instead of rendering empty results", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const defaultFetch = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (url.includes("/api/library/search")) return jsonResponse({ error: "Library search failed hard" }, 502);
+      return defaultFetch?.(url, options) ?? jsonResponse({ ok: true });
+    });
+
+    render(<App />);
+    await userEvent.type(await screen.findByLabelText("Search music"), "local");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Library search failed hard");
+  });
+
   it("uses a compact default local search and full limit for typed searches", async () => {
     const fetchMock = vi.mocked(fetch);
     render(<App />);
