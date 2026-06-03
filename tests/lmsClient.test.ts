@@ -79,6 +79,74 @@ describe("LMS client parsing", () => {
     expect(track.art).toBe("api/artwork/-104339503453992");
   });
 
+  it("normalizes Spotty now-playing ids into playable Spotify metadata", async () => {
+    const client = new LmsClient();
+    client.jsonRequest = async () => ({
+      result: {
+        time: 70,
+        duration: 193.234,
+        can_seek: 1,
+        playlist_loop: [
+          {
+            id: "spotify://track:29TPjc8wxfz4XMn21O7VsZ",
+            title: "Sky",
+            artist: "Playboi Carti",
+            album: "Whole Lotta Red",
+            artwork_url: "https://i.scdn.co/image/test-cover"
+          }
+        ]
+      }
+    });
+
+    const track = await client.nowPlaying("player-1");
+
+    expect(track).toMatchObject({
+      id: "spotify://track:29TPjc8wxfz4XMn21O7VsZ",
+      title: "Sky",
+      artist: "Playboi Carti",
+      album: "Whole Lotta Red",
+      source: "Spotify",
+      uri: "spotify:track:29TPjc8wxfz4XMn21O7VsZ",
+      kind: "track",
+      canSeek: true,
+      art: "api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Ftest-cover"
+    });
+  });
+
+  it("normalizes Spotty ids when now-playing falls back to CLI metadata", async () => {
+    const client = new LmsClient();
+    client.command = async (command: string) => {
+      if (command.endsWith("title ?")) return "p title Sky";
+      if (command.endsWith("artist ?")) return "p artist Playboi%20Carti";
+      if (command.endsWith("album ?")) return "p album Whole%20Lotta%20Red";
+      if (command.endsWith("duration ?")) return "p duration 193.234";
+      if (command.endsWith("time ?")) return "p time 70";
+      return "ok";
+    };
+    client.jsonRequest = async () => ({
+      result: {
+        time: 70,
+        duration: 193.234,
+        can_seek: 1,
+        playlist_loop: [
+          {
+            id: "spotify://track:29TPjc8wxfz4XMn21O7VsZ",
+            title: "Sky"
+          }
+        ]
+      }
+    });
+
+    const track = await client.nowPlaying("player-1");
+
+    expect(track).toMatchObject({
+      source: "Spotify",
+      uri: "spotify:track:29TPjc8wxfz4XMn21O7VsZ",
+      kind: "track",
+      artist: "Playboi Carti"
+    });
+  });
+
   it("enriches local library rows with LMS cover ids", async () => {
     const client = new LmsClient();
     const requests: unknown[] = [];

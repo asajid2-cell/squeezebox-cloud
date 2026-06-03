@@ -111,8 +111,9 @@ export class LmsClient {
     const safeCoverId = coverId && coverId !== "0" ? String(coverId) : "";
     const decodedTitle = firstSafeDisplayValue([statusTrack?.title, status.current_title], "Unknown title");
     const streamTrack = trackFromStreamUrl(statusTrack?.url || statusTrack?.id || decodedTitle);
+    const spotifyTrack = spotifyTrackFromStatusValue(statusTrack?.url || statusTrack?.id);
     return {
-      id: streamTrack?.id || statusTrack?.url || statusTrack?.id || `lms:${decodedTitle}`,
+      id: streamTrack?.id || spotifyTrack?.id || statusTrack?.url || statusTrack?.id || `lms:${decodedTitle}`,
       title: streamTrack?.title || decodedTitle,
       artist: streamTrack?.artist || firstSafeDisplayValue([statusTrack?.artist, status.remoteMeta?.artist], "Unknown artist"),
       album: streamTrack?.album || firstSafeDisplayValue([statusTrack?.album, status.remoteMeta?.album], ""),
@@ -120,7 +121,9 @@ export class LmsClient {
       elapsed: Number(status.time) || 0,
       canSeek: Boolean(status.can_seek),
       art: streamTrack?.art || (artworkUrl ? proxiedArtworkUrl(artworkUrl) : safeCoverId ? `api/artwork/${encodeURIComponent(safeCoverId)}` : null),
-      source: streamTrack?.source || "LMS"
+      source: streamTrack?.source || spotifyTrack?.source || "LMS",
+      uri: spotifyTrack?.uri,
+      kind: spotifyTrack?.kind
     };
   }
 
@@ -141,8 +144,9 @@ export class LmsClient {
     const safeCoverId = coverId && coverId !== "0" ? String(coverId) : "";
     const decodedTitle = firstSafeDisplayValue([decodeCliToken(title), statusTrack?.title, status.current_title], "Unknown title");
     const streamTrack = trackFromStreamUrl(statusTrack?.url || statusTrack?.id || decodedTitle);
+    const spotifyTrack = spotifyTrackFromStatusValue(statusTrack?.url || statusTrack?.id);
     return {
-      id: streamTrack?.id || statusTrack?.url || statusTrack?.id || `lms:${decodedTitle}`,
+      id: streamTrack?.id || spotifyTrack?.id || statusTrack?.url || statusTrack?.id || `lms:${decodedTitle}`,
       title: streamTrack?.title || decodedTitle,
       artist: streamTrack?.artist || firstSafeDisplayValue([decodeCliToken(artist), statusTrack?.artist], "Unknown artist"),
       album: streamTrack?.album || firstSafeDisplayValue([decodeCliToken(album), statusTrack?.album], ""),
@@ -150,7 +154,9 @@ export class LmsClient {
       elapsed: Number(decodeURIComponent(lastToken(elapsed))) || Number(status.time) || 0,
       canSeek: Boolean(status.can_seek),
       art: streamTrack?.art || (artworkUrl ? proxiedArtworkUrl(artworkUrl) : safeCoverId ? `api/artwork/${encodeURIComponent(safeCoverId)}` : null),
-      source: streamTrack?.source || "LMS"
+      source: streamTrack?.source || spotifyTrack?.source || "LMS",
+      uri: spotifyTrack?.uri,
+      kind: spotifyTrack?.kind
     };
   }
 
@@ -720,6 +726,17 @@ function spottyPlaybackUri(value) {
 
 function isSpotifyTrackUri(value) {
   return /^(spotify:track:|spotify:\/\/track:)[A-Za-z0-9]{22}$/i.test(String(value || ""));
+}
+
+function spotifyTrackFromStatusValue(value) {
+  const raw = String(value || "");
+  if (!isSpotifyTrackUri(raw)) return null;
+  return {
+    id: raw,
+    uri: raw.replace(/^spotify:\/\/track:/i, "spotify:track:"),
+    source: "Spotify",
+    kind: "track"
+  };
 }
 
 function normalizedSpotifyUri(value) {
