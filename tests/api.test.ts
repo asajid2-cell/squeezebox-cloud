@@ -1015,6 +1015,37 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.queued[0].uri).toBe("spotify:track:0000000000000000000101");
   });
 
+  it("does not reject skipped Spotify rows beyond the public queue limit", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const previousMaxQueuePerUser = appState.admin.maxQueuePerUser;
+    appState.admin = { ...appState.admin, maxQueuePerUser: 2 };
+    try {
+      addQueueItem({ title: "Existing Guest", artist: "Tester", path: "/music/test/existing-guest.mp3", requestedBy: "guest" });
+      const app = createApp({ lms: mockLms });
+      const search = await request(app).get("/api/spotify/search?q=drake").expect(200);
+      const knownTrack = search.body.results[0];
+      const unknownTrack = {
+        title: "Skipped Unknown Spotify",
+        uri: "spotify:track:0000000000000000000999",
+        kind: "track",
+        source: "Spotify"
+      };
+
+      const response = await request(app)
+        .post("/api/player/tracks")
+        .send({ action: "add-queue", tracks: [knownTrack, unknownTrack] })
+        .expect(200);
+
+      expect(response.body.accepted).toBe(1);
+      expect(response.body.rejected).toBe(1);
+      expect(response.body.queued).toEqual([expect.objectContaining({ uri: "spotify:track:0000000000000000000101" })]);
+      expect(appState.queue).toEqual(expect.arrayContaining([expect.objectContaining({ uri: "spotify:track:0000000000000000000101" })]));
+      expect(appState.queue).not.toEqual(expect.arrayContaining([expect.objectContaining({ uri: "spotify:track:0000000000000000000999" })]));
+    } finally {
+      appState.admin = { ...appState.admin, maxQueuePerUser: previousMaxQueuePerUser };
+    }
+  });
+
   it("keeps a cleared Spotify playlist batch isolated when shuffle is enabled", async () => {
     appState.queue.splice(0, appState.queue.length);
     updateSpotifyStatus({ configured: true, reachable: true, detail: "Spotty detected" });

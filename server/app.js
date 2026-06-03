@@ -466,11 +466,6 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(400).json({ error: "No playable tracks were provided" });
       return;
     }
-    if (!spotifyTracksAreKnown(playable)) {
-      res.status(400).json({ error: "Spotify tracks must come from Cloud Squeeze search, playlist, or library results" });
-      return;
-    }
-
     const uniquePlayable = uniquePlayableInputs(playable);
     if (uniquePlayable.length === 0) {
       res.status(409).json({ error: "Those songs are already in the queue", queue: appState.queue, accepted: 0, rejected: playable.length });
@@ -482,6 +477,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
       return;
     }
     const acceptedPlayable = uniquePlayable.slice(0, availableSlots);
+    if (!spotifyTracksAreKnown(acceptedPlayable)) {
+      res.status(400).json({ error: "Spotify tracks must come from Cloud Squeeze search, playlist, or library results" });
+      return;
+    }
     if (!(await trackInputsExistOnDisk(acceptedPlayable))) {
       res.status(400).json({ error: "Local tracks must come from the Cloud Squeeze library or uploads" });
       return;
