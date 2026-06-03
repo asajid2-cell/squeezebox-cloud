@@ -1054,6 +1054,15 @@ export function createApp({ lms = new LmsClient() } = {}) {
         res.status(403).json({ error: publicRequestsClosedMessage(), queued: [], playback: appState.playback });
         return;
       }
+      if (manualQueueCount() > 0) {
+        res.status(409).json({
+          error: "Smart shuffle is disabled while requested songs are queued. Clear the queue before starting generated smart shuffle.",
+          queued: [],
+          playback: appState.playback,
+          queue: appState.queue
+        });
+        return;
+      }
       const status = await refreshLms(lms);
       const body = parsed.data;
       const mode = body.source || appState.playback.smartShuffleSource;

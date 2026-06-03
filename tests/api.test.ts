@@ -2694,6 +2694,33 @@ describe("Cloud Squeeze API", () => {
     expect(played).toHaveLength(0);
   });
 
+  it("rejects explicit smart shuffle while requested songs are queued", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "spotify", history: [] };
+    addQueueItem({ title: "Manual Playlist One", artist: "Tester", uri: "spotify:track:manual-one", source: "Spotify", requestedBy: "guest" });
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async status() {
+          throw new Error("status should not run for rejected smart shuffle");
+        },
+        async spotifySearch() {
+          return [{ id: "spotify:random", title: "Unrelated Random", artist: "Tester", source: "Spotify", uri: "spotify:track:random", kind: "track" }];
+        }
+      }
+    }))
+      .post("/api/player/smart-shuffle")
+      .send({ source: "spotify", count: 3 })
+      .expect(409);
+
+    expect(response.body.error).toContain("Clear the queue");
+    expect(response.body.queued).toEqual([]);
+    expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Manual Playlist One"]);
+    expect(response.body.playback).toMatchObject({ shuffle: false, smartQueue: false, smartShuffleSource: "spotify" });
+    expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Manual Playlist One"]);
+    expect(appState.playback).toMatchObject({ shuffle: false, smartQueue: false, smartShuffleSource: "spotify" });
+  });
+
   it("rejects malformed smart shuffle requests before queue generation", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "mixed" };
