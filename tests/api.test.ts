@@ -1269,6 +1269,7 @@ describe("Cloud Squeeze API", () => {
 
     expect(response.body.queued).toHaveLength(1);
     expect(response.body.queued[0].uri).toBe("spotify:track:0000000000000000000101");
+    expect(response.body.playback).toMatchObject(appState.playback);
   });
 
   it("canonicalizes known Spotify metadata before queueing or playback", async () => {
