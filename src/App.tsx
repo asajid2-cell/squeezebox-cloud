@@ -905,8 +905,14 @@ function PlaylistTracks({
 }) {
   async function queueAll(action: "add-queue" | "play-next") {
     await onAction(async () => {
-      await playTracks(action, tracks.filter((item) => !item.kind || item.kind === "track").slice(0, 200));
+      const playableTracks = tracks.filter((item) => !item.kind || item.kind === "track").slice(0, 200);
+      const result = await playTracks(action, playableTracks);
       await onRefresh();
+      if (result?.rejected > 0) {
+        const skipped = result.rejected;
+        const total = Number(result.accepted || 0) + skipped || playableTracks.length;
+        throw new Error(`Queued ${result.accepted} of ${total} tracks; ${skipped} skipped because of the queue limit or duplicates.`);
+      }
     });
   }
 

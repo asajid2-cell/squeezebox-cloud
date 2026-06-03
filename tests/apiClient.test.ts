@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchState, playTrack, playerAction, postQueue, resetApiClientStateForTests, savePlayback, seekPlayer, setPlayerVolume } from "../src/lib/api";
+import { fetchState, playTrack, playTracks, playerAction, postQueue, resetApiClientStateForTests, savePlayback, seekPlayer, setPlayerVolume } from "../src/lib/api";
 
 function mockJsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -58,6 +58,15 @@ describe("API client mutating requests", () => {
     await expect(postQueue({ title: "Duplicate", path: "/music/duplicate.mp3" })).rejects.toThrow("That song is already in the queue");
     await expect(playTrack("add-queue", { title: "Duplicate", path: "/music/duplicate.mp3" })).rejects.toThrow("That song is already in the queue");
     await expect(savePlayback({ repeat: "all" })).rejects.toThrow("That song is already in the queue");
+  });
+
+  it("returns partial batch queue acceptance details", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => mockJsonResponse(200, { ok: true, accepted: 3, rejected: 9, queued: [], queue: [] })));
+
+    await expect(playTracks("add-queue", [{ title: "One", uri: "spotify:track:one" }])).resolves.toMatchObject({
+      accepted: 3,
+      rejected: 9
+    });
   });
 
   it("throws backend errors for failed volume and seek controls", async () => {

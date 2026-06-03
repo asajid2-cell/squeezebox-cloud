@@ -74,6 +74,9 @@ beforeEach(() => {
           results: [{ id: "spotify:track:child", title: "Playlist Child", artist: "Drake", source: "Spotify", uri: "spotify:track:child", kind: "track" }]
         });
       }
+      if (url.includes("/api/player/tracks") && options?.method === "POST") {
+        return jsonResponse({ ok: true, accepted: 1, rejected: 1, queued: [], queue: [] });
+      }
       if (url.includes("/api/player/track") && options?.method === "POST") {
         return jsonResponse({ ok: true });
       }
@@ -245,6 +248,15 @@ describe("Cloud Squeeze UI", () => {
     await userEvent.click(screen.getByRole("button", { name: "Spotify" }));
     await userEvent.click(await screen.findByText("Drake Mix"));
     expect(await screen.findByText("Playlist Child")).toBeInTheDocument();
+  });
+
+  it("surfaces partial playlist batch queue acceptance", async () => {
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Playlists" }));
+    await userEvent.click(await screen.findByText("Goodbye ERA"));
+    await userEvent.click(await screen.findByRole("button", { name: "Queue all" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Queued 1 of 2 tracks; 1 skipped because of the queue limit or duplicates.");
   });
 });
 
