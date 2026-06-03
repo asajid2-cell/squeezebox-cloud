@@ -870,6 +870,27 @@ describe("LMS client parsing", () => {
     ]);
   });
 
+  it("waits for cold Spotify playlist children instead of returning a false empty page", async () => {
+    const client = new LmsClient();
+    client.jsonRequest = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 2300));
+      return {
+        result: {
+          item_loop: [{
+            text: "Slow Playlist Track\nTester - Album",
+            presetParams: { favorites_url: "spotify:track:slow-playlist-track", favorites_title: "Slow Playlist Track" }
+          }]
+        }
+      };
+    };
+
+    const started = Date.now();
+    const results = await client.spotifyChildren("player-1", { uri: "spotify:playlist:slow", kind: "playlist" }, 10, 0);
+
+    expect(Date.now() - started).toBeGreaterThanOrEqual(2200);
+    expect(results).toEqual([expect.objectContaining({ title: "Slow Playlist Track", uri: "spotify:track:slow-playlist-track" })]);
+  });
+
   it("uses cached Spotify container browse ids when children are requested by URI only", async () => {
     const requests: unknown[] = [];
     const client = new LmsClient();

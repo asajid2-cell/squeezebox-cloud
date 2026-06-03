@@ -9,7 +9,7 @@ const spotifyBrowseCacheMs = 5 * 60 * 1000;
 const spotifyStatusCacheMs = Number(process.env.SPOTIFY_STATUS_CACHE_MS || 30000);
 const spotifyBrowseDeadlineMs = Number(process.env.SPOTIFY_BROWSE_DEADLINE_MS || 1800);
 const spotifyColdBrowseDeadlineMs = Number(process.env.SPOTIFY_COLD_BROWSE_DEADLINE_MS || 6500);
-const spotifyChildrenColdBrowseDeadlineMs = Number(process.env.SPOTIFY_CHILDREN_COLD_BROWSE_DEADLINE_MS || 2200);
+const spotifyChildrenColdBrowseDeadlineMs = Number(process.env.SPOTIFY_CHILDREN_COLD_BROWSE_DEADLINE_MS || 4000);
 
 export class LmsClient {
   constructor(options = {}) {
