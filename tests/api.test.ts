@@ -858,9 +858,10 @@ describe("Cloud Squeeze API", () => {
         .set("content-type", "application/octet-stream")
         .send(Buffer.concat([Buffer.from("ID3"), Buffer.alloc(32)]))
         .expect(403);
-      await request(app).post("/api/player/playback").send({ repeat: "off" }).expect(200);
+      await request(app).post("/api/player/playback").send({ repeat: "all" }).expect(403);
 
       expect(appState.queue).toHaveLength(0);
+      expect(appState.playback.repeat).toBe("off");
     } finally {
       appState.admin = previousAdmin;
       appState.schedule = previousSchedule;

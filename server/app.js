@@ -778,6 +778,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
         res.status(400).json({ error: "Invalid playback settings", issues: parsed.error.issues });
         return;
       }
+      if (!publicRequestsOpen()) {
+        res.status(403).json({ error: publicRequestsClosedMessage(), playback: appState.playback, queue: appState.queue });
+        return;
+      }
       const body = parsed.data;
       const playerId = await hotPlayerId(lms);
       logEvent("playback.request", { body, before: appState.playback, queue: queueSummary() });
