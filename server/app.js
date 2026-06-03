@@ -1664,7 +1664,7 @@ async function buildGeneratedQueue(lms, playerId, seed, mode, count, requestedBy
     const pool = wantLocal ? localPool : spotifyPool;
     const fallbackPool = wantLocal ? spotifyPool : localPool;
     const pick = pool.shift() || fallbackPool.shift();
-    if (pick && !picks.some((item) => trackKey(item) === trackKey(pick))) picks.push(pick);
+    if (pick && !picks.some((item) => trackKey(item) === trackKey(pick) || sameTitleArtist(item, pick))) picks.push(pick);
   }
   const queued = [];
   for (const track of picks) {

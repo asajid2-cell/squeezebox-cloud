@@ -2599,6 +2599,7 @@ describe("Cloud Squeeze API", () => {
         async spotifySearch() {
           return [
             { id: "spotify:shuffle-one", title: "Shuffle One", artist: "Tester", source: "Spotify", uri: "spotify:track:0000000000000000000101", kind: "track" },
+            { id: "spotify:shuffle-one-alt", title: "Shuffle One", artist: "Tester", source: "Spotify", uri: "spotify:track:0000000000000000000103", kind: "track" },
             { id: "spotify:shuffle-two", title: "Shuffle Two", artist: "Tester", source: "Spotify", uri: "spotify:track:0000000000000000000102", kind: "track" }
           ];
         }
@@ -2610,6 +2611,7 @@ describe("Cloud Squeeze API", () => {
 
     expect(response.body.playback).toMatchObject({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" });
     expect(response.body.queued).toHaveLength(2);
+    expect(response.body.queued.map((item: { title: string }) => item.title).sort()).toEqual(["Shuffle One", "Shuffle Two"]);
     expect(response.body.queue.map((item: { requestedBy: string }) => item.requestedBy)).toEqual(["shuffle", "shuffle"]);
   });
 
