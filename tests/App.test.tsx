@@ -112,6 +112,7 @@ describe("Cloud Squeeze UI", () => {
     expect(screen.getByLabelText("Track information")).toBeInTheDocument();
     expect(screen.getByAltText("Hurry Up cover")).toBeInTheDocument();
     expect(screen.getByLabelText("Seek position")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
   });
 
   it("sends seek requests from the progress slider", async () => {
@@ -137,6 +138,18 @@ describe("Cloud Squeeze UI", () => {
     await userEvent.click(screen.getByRole("button", { name: "Pause" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("LMS control failed");
+  });
+
+  it("sends stop requests from the transport controls", async () => {
+    const fetchMock = vi.mocked(fetch);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Stop" }));
+
+    await waitFor(() => {
+      const stopCall = fetchMock.mock.calls.find(([url]) => String(url).includes("/api/player/stop"));
+      expect(stopCall).toBeTruthy();
+      expect(stopCall?.[1]).toEqual(expect.objectContaining({ method: "POST" }));
+    });
   });
 
   it("surfaces failed queue actions", async () => {

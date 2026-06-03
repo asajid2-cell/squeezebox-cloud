@@ -21,6 +21,7 @@ import {
   SkipForward,
   SlidersHorizontal,
   Speaker,
+  Square,
   Volume2,
   XCircle
 } from "lucide-react";
@@ -221,7 +222,7 @@ function PublicScreen({
   setSourceFilter: (value: "local" | "uploaded" | "spotify" | "playlists") => void;
   onRefresh: () => void;
   onAction: ActionRunner;
-  onPlayerAction: (action: "play" | "pause" | "next" | "previous") => Promise<unknown>;
+  onPlayerAction: (action: "play" | "pause" | "stop" | "next" | "previous") => Promise<unknown>;
 }) {
   const commonSearch = (
     <SearchPanel
@@ -289,7 +290,7 @@ function NowPlayingPanel({
   controlsDisabled: boolean;
   onRefresh: () => void;
   onAction: ActionRunner;
-  onPlayerAction: (action: "play" | "pause" | "next" | "previous") => Promise<unknown>;
+  onPlayerAction: (action: "play" | "pause" | "stop" | "next" | "previous") => Promise<unknown>;
 }) {
   return (
     <section className="panel now-playing" aria-label="Now playing">
@@ -315,6 +316,9 @@ function NowPlayingPanel({
               </button>
               <button className="play-button" aria-label={state.player.mode === "play" ? "Pause" : "Play"} disabled={controlsDisabled} onClick={() => onAction(async () => { await onPlayerAction(state.player.mode === "play" ? "pause" : "play"); await onRefresh(); })}>
                 {state.player.mode === "play" ? <Pause size={22} fill="currentColor" /> : <Play size={22} fill="currentColor" />}
+              </button>
+              <button aria-label="Stop" disabled={controlsDisabled || state.player.mode === "stop"} onClick={() => onAction(async () => { await onPlayerAction("stop"); await onRefresh(); })}>
+                <Square size={18} fill="currentColor" />
               </button>
               <button aria-label="Next" disabled={controlsDisabled} onClick={() => onAction(async () => { await onPlayerAction("next"); await onRefresh(); })}>
                 <SkipForward size={20} />
