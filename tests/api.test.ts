@@ -190,6 +190,94 @@ describe("Cloud Squeeze API", () => {
     }
   });
 
+  it("preserves uploaded artwork and tags when LMS now playing metadata is weaker", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "player-1", connected: true, online: true, mode: "stop" };
+    const uploaded = {
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      album: "Uploaded",
+      source: "Uploaded",
+      path: "/music/uploads/Sleep Paralysis-Jackson Ivy.mp3",
+      art: "https://covers.example/sleep.jpg"
+    };
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async nowPlaying() {
+          return {
+            id: "local-uploaded",
+            title: "Sleep Paralysis Jackson Ivy",
+            artist: "",
+            album: "",
+            source: "LMS",
+            path: uploaded.path,
+            duration: 158,
+            elapsed: 0,
+            canSeek: true,
+            art: null
+          };
+        }
+      }
+    }))
+      .post("/api/player/track")
+      .send({ action: "play-now", track: uploaded })
+      .expect(200);
+
+    expect(response.body.nowPlaying).toMatchObject({
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      album: "Uploaded",
+      source: "Uploaded",
+      art: "https://covers.example/sleep.jpg",
+      duration: 158
+    });
+  });
+
+  it("keeps uploaded artwork and tags during LMS polling refreshes", async () => {
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    appState.nowPlaying = {
+      id: "local-uploaded",
+      title: "Shabang",
+      artist: "Drake",
+      album: "uploads",
+      source: "Uploaded",
+      path: "/music/uploads/Drake - Shabang.mp3",
+      duration: 188,
+      elapsed: 0,
+      canSeek: true,
+      art: "https://covers.example/shabang.jpg"
+    };
+
+    await refreshLmsForTests({
+      ...mockLms,
+      async nowPlaying() {
+        return {
+          id: "local-uploaded",
+          title: "Drake - Shabang",
+          artist: "",
+          album: "",
+          source: "LMS",
+          path: "/music/uploads/Drake - Shabang.mp3",
+          duration: 188,
+          elapsed: 42,
+          canSeek: true,
+          art: null
+        };
+      }
+    }, { force: true });
+
+    expect(appState.nowPlaying).toMatchObject({
+      title: "Shabang",
+      artist: "Drake",
+      album: "uploads",
+      source: "Uploaded",
+      art: "https://covers.example/shabang.jpg",
+      elapsed: 42
+    });
+  });
+
   it("prewarms the Spotify library tabs exposed in the UI during state refresh", async () => {
     resetRefreshStateForTests();
     const calls: string[] = [];

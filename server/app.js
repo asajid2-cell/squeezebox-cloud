@@ -1638,7 +1638,7 @@ async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force =
           trackInfoCandidate &&
           (key !== refreshState.trackKey || Date.now() - refreshState.trackInfoAt > trackInfoRefreshMs);
         const observedTrackChanged = rememberObservedTrackTransition(track);
-        updateNowPlaying(track);
+        updateNowPlaying(preserveKnownNowPlayingMetadata(track));
         if (shouldRefreshTrackInfo) {
           refreshTrackInfoInBackground(track, key);
         }
@@ -2100,10 +2100,30 @@ async function refreshPlayedTrackMetadata(lms, playerId, requestedTrack) {
     const fresh = await lms.nowPlaying(playerId);
     if (!fresh || !isTrackInfoCandidate(fresh)) return;
     if (trackKey(fresh) !== trackKey(requestedTrack) && !sameTitleArtist(fresh, requestedTrack)) return;
-    updateNowPlaying(fresh);
+    updateNowPlaying(preserveKnownNowPlayingMetadata(fresh, requestedTrack));
   } catch {
     // Keep the optimistic selected track; the normal background refresh will try again.
   }
+}
+
+function preserveKnownNowPlayingMetadata(fresh, requestedTrack = null) {
+  if (!fresh) return fresh;
+  const known = requestedTrack || appState.nowPlaying;
+  if (!known || trackKey(fresh) !== trackKey(known)) return fresh;
+  const art = fresh.art || known.art || null;
+  if (!isUploadedTrackPath(fresh.path || known.path)) return { ...fresh, art };
+  return {
+    ...fresh,
+    title: known.title || fresh.title,
+    artist: known.artist || fresh.artist,
+    album: known.album || fresh.album,
+    source: known.source || fresh.source,
+    art
+  };
+}
+
+function isUploadedTrackPath(value) {
+  return normalizeTrackKey(value).includes("/music/uploads/");
 }
 
 function removeGeneratedQueueItems() {
