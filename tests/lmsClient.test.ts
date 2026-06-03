@@ -681,6 +681,63 @@ describe("LMS client parsing", () => {
     expect(results).toEqual([expect.objectContaining({ title: "Track One", uri: "spotify:track:one", kind: "track" })]);
   });
 
+  it("serves smaller Spotify children requests through a wider cached page", async () => {
+    const requests: unknown[] = [];
+    const client = new LmsClient();
+    client.jsonRequest = async (params: unknown) => {
+      requests.push(params);
+      return {
+        result: {
+          item_loop: Array.from({ length: 200 }, (_, index) => ({
+            text: `Track ${index + 1}\nArtist ${index + 1} - Album`,
+            presetParams: { favorites_url: `spotify:track:${index + 1}`, favorites_title: `Track ${index + 1}` }
+          }))
+        }
+      };
+    };
+
+    const firstNarrow = await client.spotifyChildren("player-1", { uri: "spotify:playlist:test", kind: "playlist" }, 10, 0);
+    const wide = await client.spotifyChildren("player-1", { uri: "spotify:playlist:test", kind: "playlist" }, 200, 0);
+    const secondNarrow = await client.spotifyChildren("player-1", { uri: "spotify:playlist:test", kind: "playlist" }, 5, 0);
+
+    expect(firstNarrow).toHaveLength(10);
+    expect(wide).toHaveLength(200);
+    expect(secondNarrow).toHaveLength(5);
+    expect(requests).toEqual([
+      ["player-1", ["spotty", "items", 0, 200, "menu:spotty", "item_id:spotify:playlist:test"]]
+    ]);
+  });
+
+  it("serves narrow Spotify children requests from an in-flight wider browse", async () => {
+    let requests = 0;
+    let release: (value: unknown) => void = () => {};
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const client = new LmsClient();
+    client.jsonRequest = async () => {
+      requests += 1;
+      await gate;
+      return {
+        result: {
+          item_loop: Array.from({ length: 200 }, (_, index) => ({
+            text: `Track ${index + 1}\nArtist ${index + 1} - Album`,
+            presetParams: { favorites_url: `spotify:track:${index + 1}`, favorites_title: `Track ${index + 1}` }
+          }))
+        }
+      };
+    };
+
+    const wide = client.spotifyChildren("player-1", { uri: "spotify:playlist:test", kind: "playlist" }, 200, 0);
+    const narrow = client.spotifyChildren("player-1", { uri: "spotify:playlist:test", kind: "playlist" }, 8, 0);
+    release(null);
+    const [wideResult, narrowResult] = await Promise.all([wide, narrow]);
+
+    expect(wideResult).toHaveLength(200);
+    expect(narrowResult).toHaveLength(8);
+    expect(requests).toBe(1);
+  });
+
   it("briefly caches empty Spotify children pages", async () => {
     let requests = 0;
     const client = new LmsClient();

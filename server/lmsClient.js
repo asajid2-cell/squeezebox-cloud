@@ -363,30 +363,49 @@ export class LmsClient {
     if (!playerId) return [];
     const count = Math.max(1, Math.min(300, Number(limit) || 100));
     const start = Math.max(0, Number(offset) || 0);
-    const cacheKey = `spotifyChildren:${playerId}:${browseId}:${uri}:${kind}:${count}:${start}`;
+    const shouldWiden = start === 0 && count < 200 && kind !== "track";
+    const requestCount = shouldWiden ? 200 : count;
+    const cacheBase = `spotifyChildren:${playerId}:${browseId}:${uri}:${kind}`;
+    const cacheKey = `${cacheBase}:${count}:${start}`;
     const cached = this.getCached(cacheKey);
     if (cached) return cached;
-    const stale = this.getCached(cacheKey, { allowExpired: true }) || [];
+    const requestKey = `${cacheBase}:${requestCount}:${start}`;
+    const widerKeys = [...new Set([requestKey, `${cacheBase}:200:${start}`, `${cacheBase}:300:${start}`])];
+    const widerCached = widerKeys
+      .map((key) => this.getCached(key))
+      .find((results) => results && (results.length === 0 || results.length >= count));
+    if (widerCached) return widerCached.slice(0, count);
+    const stale =
+      this.getCached(cacheKey, { allowExpired: true }) ||
+      widerKeys
+        .map((key) => this.getCached(key, { allowExpired: true }))
+        .find((results) => results && (results.length === 0 || results.length >= count))?.slice(0, count) ||
+      [];
+    const widerInflight = widerKeys.map((key) => this.inflight.get(key)).find(Boolean);
+    if (widerInflight) {
+      const deadline = stale.length > 0 ? spotifyBrowseDeadlineMs : spotifyChildrenColdBrowseDeadlineMs;
+      return (await withDeadline(widerInflight.then((results) => results.slice(0, count)), deadline, stale)) || [];
+    }
     const candidates = [browseId, uri].filter(Boolean);
     if (uri && !candidates.includes(uri.replace(/^spotify:/, "spotify://"))) candidates.push(uri.replace(/^spotify:/, "spotify://"));
-    const request = this.once(cacheKey, async () => {
+    const request = this.once(requestKey, async () => {
       for (const id of candidates) {
-        const response = await this.jsonRequest([playerId, ["spotty", "items", start, count, "menu:spotty", `item_id:${id}`]]).catch(() => null);
+        const response = await this.jsonRequest([playerId, ["spotty", "items", start, requestCount, "menu:spotty", `item_id:${id}`]]).catch(() => null);
         const items = response?.result?.item_loop || response?.result?.loop_loop || [];
         const tracks = spotifyPlayableItems(items, "track")
           .map((item) => spotifyItemToTrack(item))
           .filter((track) => track.kind === "track" && String(track.uri || "").includes(":track:"));
         if (tracks.length > 0) {
-          this.setCached(cacheKey, tracks, spotifyBrowseCacheMs);
+          this.setCached(requestKey, tracks, spotifyBrowseCacheMs);
           return tracks;
         }
       }
-      this.setCached(cacheKey, [], 30000);
+      this.setCached(requestKey, [], 30000);
       return [];
     });
     const deadline = stale.length > 0 ? spotifyBrowseDeadlineMs : spotifyChildrenColdBrowseDeadlineMs;
     const results = await withDeadline(request, deadline, stale);
-    if (results?.length) return results;
+    if (results?.length) return results.slice(0, count);
     if (uri && kind === "track") return [{ id: uri, uri, title: "Spotify track", artist: "Spotify", source: "Spotify", kind: "track" }];
     return results || [];
   }
