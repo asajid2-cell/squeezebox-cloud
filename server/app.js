@@ -1365,7 +1365,10 @@ async function control(lms, action, value) {
 
 async function activateGeneratedQueue(lms, playerId, { smart = false, shuffle: shuffleOn = false, mode = appState.playback.smartShuffleSource, count = 5, seed, controlsReady = false } = {}) {
   if (!playerId || (!smart && !shuffleOn)) return [];
-  const queueSeed = String(seed || appState.nowPlaying.artist || appState.nowPlaying.title || appState.playback.lastShuffleSeed || "drake").trim();
+  const currentSeed = isTrackInfoCandidate(appState.nowPlaying)
+    ? (appState.nowPlaying.artist || appState.nowPlaying.title)
+    : "";
+  const queueSeed = String(seed || currentSeed || appState.playback.lastShuffleSeed || "drake").trim();
   const requestType = smart ? "smart shuffle" : "shuffle";
   const previousRequestType = appState.playback.smartQueue ? "smart shuffle" : appState.playback.shuffle ? "shuffle" : "";
   const history = previousRequestType === requestType && appState.playback.smartShuffleSource === mode && appState.playback.lastShuffleSeed === queueSeed
