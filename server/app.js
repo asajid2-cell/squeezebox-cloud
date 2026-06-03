@@ -1511,22 +1511,28 @@ async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force =
       if (status.connected) {
         const track = applyPendingSeek(await lms.nowPlaying(status.id));
         const key = trackKey(track);
+        const trackInfoCandidate = isTrackInfoCandidate(track);
         const shouldRefreshTrackInfo =
           !skipTrackInfo &&
-          isTrackInfoCandidate(track) &&
+          trackInfoCandidate &&
           (key !== refreshState.trackKey || Date.now() - refreshState.trackInfoAt > trackInfoRefreshMs);
-        rememberObservedTrackTransition(track);
+        const observedTrackChanged = rememberObservedTrackTransition(track);
         updateNowPlaying(track);
-        if (!isTrackInfoCandidate(track)) {
-          updatePlayback({ previousTracks: [], appManagedPlayback: false });
-          updateTrackInfo(idleTrackInfo);
-        }
         if (shouldRefreshTrackInfo) {
           refreshTrackInfoInBackground(track, key);
         }
-        prewarmShuffleCandidates(lms, status.id, track);
-        prewarmSpotifyLibrary(lms, status.id);
-        if (maintainPlayback) await maintainVisiblePlaybackQueue(lms, status, track);
+        if (trackInfoCandidate) {
+          prewarmShuffleCandidates(lms, status.id, track);
+          prewarmSpotifyLibrary(lms, status.id);
+        }
+        if (maintainPlayback) await maintainVisiblePlaybackQueue(lms, status, track, { observedTrackChanged });
+        const waitingForVisibleQueueAdvance =
+          appState.playback.appManagedPlayback &&
+          appState.queue.length > 0;
+        if (!trackInfoCandidate && appState.nowPlaying?.id === "idle" && !waitingForVisibleQueueAdvance) {
+          updatePlayback({ previousTracks: [], appManagedPlayback: false });
+          updateTrackInfo(idleTrackInfo);
+        }
       }
       refreshState.updatedAt = Date.now();
       return appState.player;
@@ -1538,6 +1544,10 @@ async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force =
     }
   })();
   return waitForFresh ? refreshState.promise : appState.player;
+}
+
+export async function refreshLmsForTests(lms, options) {
+  return refreshLms(lms, options);
 }
 
 function refreshTrackInfoInBackground(track, key) {
@@ -1739,9 +1749,9 @@ async function spotifyShuffleCandidates(lms, playerId, seed, count = 5) {
   return batches.flat();
 }
 
-async function maintainSmartShuffle(lms, status, track) {
+async function maintainSmartShuffle(lms, status, track, { observedTrackChanged = false } = {}) {
   if (!appState.playback.shuffle || !status?.id) return;
-  syncVisibleQueueWithCurrentTrack(track);
+  syncVisibleQueueWithCurrentTrack(track, { includeManual: observedTrackChanged });
   const needsPlaybackNudge = shouldNudgePlayback(status, track);
   const queued = await ensureSmartShuffleQueue(lms, status.id, { force: needsPlaybackNudge });
   if (needsPlaybackNudge && queued.length > 0) {
@@ -1749,9 +1759,9 @@ async function maintainSmartShuffle(lms, status, track) {
   }
 }
 
-async function maintainVisiblePlaybackQueue(lms, status, track) {
+async function maintainVisiblePlaybackQueue(lms, status, track, { observedTrackChanged = false } = {}) {
   if (!status?.id) return;
-  syncVisibleQueueWithCurrentTrack(track);
+  syncVisibleQueueWithCurrentTrack(track, { includeManual: observedTrackChanged });
   if (appState.playback.smartQueue || appState.playback.shuffle) {
     try {
       await lms.control(status.id, "shuffle", false);
@@ -1775,8 +1785,8 @@ async function maintainVisiblePlaybackQueue(lms, status, track) {
   }
 }
 
-export async function maintainVisiblePlaybackQueueForTests(lms, status, track) {
-  return maintainVisiblePlaybackQueue(lms, status, track);
+export async function maintainVisiblePlaybackQueueForTests(lms, status, track, options) {
+  return maintainVisiblePlaybackQueue(lms, status, track, options);
 }
 
 async function ensureSmartShuffleQueue(lms, playerId, { force = false } = {}) {
@@ -1858,19 +1868,31 @@ function isTrackInfoCandidate(track) {
 }
 
 function rememberObservedTrackTransition(track) {
-  if (!isTrackInfoCandidate(track)) return;
-  const previousKey = trackKey(appState.nowPlaying);
+  if (!isTrackInfoCandidate(track)) return false;
+  const previousTrack = appState.nowPlaying;
+  const previousKey = trackKey(previousTrack);
   const nextKey = trackKey(track);
-  if (!previousKey || !nextKey || previousKey === nextKey) return;
+  if (!previousKey || !nextKey || previousKey === nextKey) return false;
+  if (sameContinuingPlayback(previousTrack, track)) return false;
   const pendingKey = refreshState.pendingPlaybackKey;
   if (pendingKey && Date.now() - refreshState.pendingPlaybackAt > 8000) {
     clearPendingPlayback();
   } else if (pendingKey && nextKey === pendingKey) {
     clearPendingPlayback();
   } else if (pendingKey && previousKey === pendingKey) {
-    return;
+    return false;
   }
   rememberPreviousTrack(appState.nowPlaying);
+  return true;
+}
+
+export function sameContinuingPlayback(previousTrack, nextTrack) {
+  if (!isTrackInfoCandidate(previousTrack) || !isTrackInfoCandidate(nextTrack)) return false;
+  if (!sameTitleArtist(previousTrack, nextTrack)) return false;
+  const previousElapsed = Number(previousTrack.elapsed);
+  const nextElapsed = Number(nextTrack.elapsed);
+  if (!Number.isFinite(previousElapsed) || !Number.isFinite(nextElapsed)) return true;
+  return nextElapsed >= previousElapsed - 2;
 }
 
 function markPendingPlayback(track) {
@@ -1986,10 +2008,11 @@ function queuedTrackExists(track) {
   return appState.queue.some((item) => trackKey(item) === key);
 }
 
-export function syncVisibleQueueWithCurrentTrack(track) {
+export function syncVisibleQueueWithCurrentTrack(track, { includeManual = true } = {}) {
   if (!track) return;
   rememberShuffleTrack(track);
   for (const item of [...appState.queue]) {
+    if (!includeManual && !isGeneratedQueueItem(item)) continue;
     if (trackKey(item) === trackKey(track) || sameTitleArtist(item, track)) {
       removeQueueItem(item.id);
       return;

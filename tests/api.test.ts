@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createApp, maintainVisiblePlaybackQueueForTests, nextQueueItemForPlayback, resetRefreshStateForTests, shouldNudgePlayback, syncVisibleQueueWithCurrentTrack } from "../server/app.js";
+import { createApp, maintainVisiblePlaybackQueueForTests, nextQueueItemForPlayback, refreshLmsForTests, resetRefreshStateForTests, sameContinuingPlayback, shouldNudgePlayback, syncVisibleQueueWithCurrentTrack } from "../server/app.js";
 import { addQueueItem, appState, config, removeQueueItem, updateNowPlaying, updateSpotifyStatus } from "../server/state.js";
 
 const mockLms = {
@@ -2167,6 +2167,84 @@ describe("Cloud Squeeze API", () => {
     expect(appState.playback.appManagedPlayback).toBe(true);
   });
 
+  it("refresh auto-advances a visible queue before clearing idle app-managed state", async () => {
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, history: [], previousTracks: [], appManagedPlayback: true };
+    appState.nowPlaying = {
+      id: "current",
+      title: "Ending Track",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 99,
+      canSeek: true,
+      art: null,
+      path: "/music/ending-track.mp3"
+    };
+    addQueueItem({ title: "Queued After End", artist: "Tester", requestedBy: "guest", path: "/music/queued-after-end.mp3" });
+    const played: string[] = [];
+
+    await refreshLmsForTests(
+      {
+        ...mockLms,
+        async status() {
+          return { id: "player-1", name: "Test Speaker", connected: true, online: true, mode: "stop", volume: 44, detail: "stopped" };
+        },
+        async nowPlaying() {
+          return { id: "idle", title: "No track playing", artist: "Connect a player or request a song", album: "", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null };
+        },
+        async playTrack(_playerId: string, track: { title?: string }) {
+          played.push(String(track.title || ""));
+          return "ok";
+        }
+      },
+      { force: true, maintainPlayback: true }
+    );
+
+    expect(played).toEqual(["Queued After End"]);
+    expect(appState.nowPlaying.title).toBe("Queued After End");
+    expect(appState.playback.appManagedPlayback).toBe(true);
+    expect(appState.queue).toEqual([]);
+  });
+
+  it("keeps app-managed state during idle polling while a visible queue is waiting", async () => {
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, history: [], previousTracks: [], appManagedPlayback: true };
+    appState.nowPlaying = {
+      id: "current",
+      title: "Ending Track",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 99,
+      canSeek: true,
+      art: null,
+      path: "/music/ending-track.mp3"
+    };
+    addQueueItem({ title: "Queued After End", artist: "Tester", requestedBy: "guest", path: "/music/queued-after-end.mp3" });
+
+    await refreshLmsForTests(
+      {
+        ...mockLms,
+        async status() {
+          return { id: "player-1", name: "Test Speaker", connected: true, online: true, mode: "stop", volume: 44, detail: "stopped" };
+        },
+        async nowPlaying() {
+          return { id: "idle", title: "No track playing", artist: "Connect a player or request a song", album: "", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null };
+        }
+      },
+      { force: true, maintainPlayback: false }
+    );
+
+    expect(appState.nowPlaying.id).toBe("idle");
+    expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Queued After End"]);
+    expect(appState.playback.appManagedPlayback).toBe(true);
+  });
+
   it("does not record idle metadata in shuffle history", () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = { ...appState.playback, history: [] };
@@ -2174,6 +2252,92 @@ describe("Cloud Squeeze API", () => {
     syncVisibleQueueWithCurrentTrack({ id: "idle", title: "No track playing", artist: "Connect a player or request a song", source: "LMS", duration: 0, elapsed: 0 });
 
     expect(appState.playback.history).toEqual([]);
+  });
+
+  it("does not consume a user-queued duplicate of the current track during stable shuffle refresh", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.nowPlaying = {
+      id: "current",
+      title: "Current Repeat",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 5,
+      canSeek: true,
+      art: null,
+      path: "/music/test/current-repeat.mp3"
+    };
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      smartQueue: false,
+      repeat: "off",
+      appManagedPlayback: true,
+      history: []
+    };
+    addQueueItem({ title: "Current Repeat", artist: "Tester", requestedBy: "guest", path: "/music/test/current-repeat.mp3" });
+    addQueueItem({ title: "Queued After", artist: "Tester", requestedBy: "guest", path: "/music/test/queued-after.mp3" });
+
+    await maintainVisiblePlaybackQueueForTests(
+      mockLms,
+      { id: "player-1", mode: "play" },
+      { title: "Current Repeat", artist: "Tester", duration: 100, elapsed: 6, path: "/music/test/current-repeat.mp3" }
+    );
+
+    expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Current Repeat", "Queued After"]);
+    appState.queue.splice(0, appState.queue.length);
+  });
+
+  it("treats LMS metadata for the same advancing song as continuing playback", () => {
+    expect(sameContinuingPlayback(
+      { title: "Current Repeat", artist: "Tester", elapsed: 12, path: "/music/test/current-repeat.mp3" },
+      { title: "Current Repeat", artist: "Tester", elapsed: 16, lmsTrackId: "123" }
+    )).toBe(true);
+    expect(sameContinuingPlayback(
+      { title: "Current Repeat", artist: "Tester", elapsed: 12, path: "/music/test/current-repeat.mp3" },
+      { title: "Current Repeat", artist: "Tester", elapsed: 0, lmsTrackId: "123" }
+    )).toBe(false);
+    expect(sameContinuingPlayback(
+      { title: "Current Repeat", artist: "Tester", elapsed: 12, path: "/music/test/current-repeat.mp3" },
+      { title: "Different Song", artist: "Tester", elapsed: 16, lmsTrackId: "456" }
+    )).toBe(false);
+  });
+
+  it("still removes a queued row when playback is observed moving to that row", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.nowPlaying = {
+      id: "current",
+      title: "Old Current",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 98,
+      canSeek: true,
+      art: null,
+      path: "/music/test/old-current.mp3"
+    };
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      smartQueue: false,
+      repeat: "off",
+      appManagedPlayback: true,
+      history: []
+    };
+    addQueueItem({ title: "Observed Next", artist: "Tester", requestedBy: "guest", path: "/music/test/observed-next.mp3" });
+    addQueueItem({ title: "Queued After", artist: "Tester", requestedBy: "guest", path: "/music/test/queued-after.mp3" });
+
+    await maintainVisiblePlaybackQueueForTests(
+      mockLms,
+      { id: "player-1", mode: "play" },
+      { title: "Observed Next", artist: "Tester", duration: 100, elapsed: 1, path: "/music/test/observed-next.mp3" },
+      { observedTrackChanged: true }
+    );
+
+    expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Queued After"]);
+    appState.queue.splice(0, appState.queue.length);
   });
 
   it("replaces stale now playing fields when LMS is idle", () => {
