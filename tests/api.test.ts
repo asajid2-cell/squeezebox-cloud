@@ -1046,6 +1046,55 @@ describe("Cloud Squeeze API", () => {
     }
   });
 
+  it("does not reject skipped local rows beyond the public queue limit", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const previousMaxQueuePerUser = appState.admin.maxQueuePerUser;
+    const previousStrict = process.env.STRICT_PUBLIC_TRACK_VALIDATION;
+    const previousMusicDir = config.musicSourceDir;
+    const previousUploadDir = config.uploadDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-partial-local-"));
+    appState.admin = { ...appState.admin, maxQueuePerUser: 2 };
+    process.env.STRICT_PUBLIC_TRACK_VALIDATION = "1";
+    config.musicSourceDir = root;
+    config.uploadDir = path.join(root, "uploads");
+    try {
+      await fs.mkdir(config.uploadDir, { recursive: true });
+      const existingPath = path.join(root, "Existing Guest.mp3");
+      const acceptedPath = path.join(root, "Accepted Local.mp3");
+      await fs.writeFile(existingPath, "ID3");
+      await fs.writeFile(acceptedPath, "ID3");
+      addQueueItem({ title: "Existing Guest", artist: "Tester", path: existingPath, requestedBy: "guest" });
+      const missingPath = path.join(root, "Missing Local.mp3");
+
+      const response = await request(createApp({ lms: mockLms }))
+        .post("/api/player/tracks")
+        .send({
+          action: "add-queue",
+          tracks: [
+            { title: "Accepted Local", artist: "Tester", path: acceptedPath, source: "Local library" },
+            { title: "Missing Local", artist: "Tester", path: missingPath, source: "Local library" }
+          ]
+        })
+        .expect(200);
+
+      expect(response.body.accepted).toBe(1);
+      expect(response.body.rejected).toBe(1);
+      expect(response.body.queued).toEqual([expect.objectContaining({ title: "Accepted Local", path: acceptedPath })]);
+      expect(appState.queue).toEqual(expect.arrayContaining([expect.objectContaining({ title: "Accepted Local", path: acceptedPath })]));
+      expect(appState.queue).not.toEqual(expect.arrayContaining([expect.objectContaining({ title: "Missing Local" })]));
+    } finally {
+      appState.admin = { ...appState.admin, maxQueuePerUser: previousMaxQueuePerUser };
+      if (previousStrict === undefined) {
+        delete process.env.STRICT_PUBLIC_TRACK_VALIDATION;
+      } else {
+        process.env.STRICT_PUBLIC_TRACK_VALIDATION = previousStrict;
+      }
+      config.musicSourceDir = previousMusicDir;
+      config.uploadDir = previousUploadDir;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps a cleared Spotify playlist batch isolated when shuffle is enabled", async () => {
     appState.queue.splice(0, appState.queue.length);
     updateSpotifyStatus({ configured: true, reachable: true, detail: "Spotty detected" });
