@@ -786,6 +786,7 @@ describe("Cloud Squeeze API", () => {
     appState.playback = {
       ...appState.playback,
       appManagedPlayback: true,
+      history: ["spotify:track:stale-history"],
       previousTracks: [{ title: "Previous Track", artist: "Tester", path: "/music/previous.mp3", source: "Local library" }]
     };
     updateNowPlaying({ id: "stale-track", title: "Stale Track", artist: "Tester", source: "LMS", duration: 100, elapsed: 12 });
@@ -806,8 +807,8 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.mode).toBe("stop");
     expect(appState.player.mode).toBe("stop");
     expect(appState.nowPlaying).toMatchObject({ id: "idle", title: "No track playing", elapsed: 0, canSeek: false });
-    expect(appState.playback).toMatchObject({ appManagedPlayback: false, previousTracks: [] });
-    expect(response.body.playback).toMatchObject({ appManagedPlayback: false, previousTracks: [] });
+    expect(appState.playback).toMatchObject({ appManagedPlayback: false, history: [], previousTracks: [] });
+    expect(response.body.playback).toMatchObject({ appManagedPlayback: false, history: [], previousTracks: [] });
   });
 
   it("seeks the current player position", async () => {
@@ -4202,6 +4203,40 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.action).toBe("visible-queue-next");
     expect(response.body.nowPlaying.title).toBe("Visible Generated");
     expect(played).toEqual(["Visible Generated"]);
+  });
+
+  it("does not block visible queue next on slow post-play metadata refresh", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = { id: "current", title: "Current", artist: "Tester", album: "", source: "Spotify", duration: 100, elapsed: 5, canSeek: true, art: null, uri: "spotify:track:current" };
+    appState.playback = {
+      ...appState.playback,
+      shuffle: false,
+      manualShuffle: false,
+      smartQueue: false,
+      appManagedPlayback: true,
+      history: []
+    };
+    addQueueItem({ title: "Fast Visible", artist: "Tester", requestedBy: "guest", uri: "spotify:track:fast-visible", kind: "track" });
+    const played: string[] = [];
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string }) {
+        played.push(String(track.title || ""));
+        return "ok";
+      },
+      async nowPlaying() {
+        return new Promise(() => {});
+      }
+    };
+
+    const started = Date.now();
+    const response = await request(createApp({ lms })).post("/api/player/next").expect(200);
+
+    expect(Date.now() - started).toBeLessThan(800);
+    expect(response.body.action).toBe("visible-queue-next");
+    expect(response.body.nowPlaying.title).toBe("Fast Visible");
+    expect(played).toEqual(["Fast Visible"]);
   });
 
   it("refills normal shuffle instead of falling through to LMS next when the visible queue is empty", async () => {

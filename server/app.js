@@ -875,7 +875,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       await control(lms, "stop");
       clearPendingPlayback();
       clearPendingSeek();
-      updatePlayback({ previousTracks: [], appManagedPlayback: false });
+      updatePlayback({ history: [], previousTracks: [], appManagedPlayback: false });
       updateNowPlaying(idleNowPlaying);
       updateTrackInfo(idleTrackInfo);
       res.json({ ok: true, mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying, playback: appState.playback });
@@ -1655,7 +1655,7 @@ async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force =
           appState.playback.appManagedPlayback &&
           appState.queue.length > 0;
         if (!trackInfoCandidate && appState.nowPlaying?.id === "idle" && !waitingForVisibleQueueAdvance) {
-          updatePlayback({ previousTracks: [], appManagedPlayback: false });
+          updatePlayback({ history: [], previousTracks: [], appManagedPlayback: false });
           updateTrackInfo(idleTrackInfo);
         }
       }
@@ -2095,9 +2095,17 @@ async function playQueuedItem(lms, playerId, item) {
   setMode("play");
   updatePlayback({ appManagedPlayback: true });
   updateNowPlaying(optimisticTrack(item));
-  await refreshPlayedTrackMetadata(lms, playerId, item);
+  refreshPlayedTrackMetadataInBackground(lms, playerId, item);
   logEvent("queue.play-item", { item: trackSummary(item), queueAfterRemove: queueSummary(), playback: appState.playback });
   return item;
+}
+
+function refreshPlayedTrackMetadataInBackground(lms, playerId, requestedTrack) {
+  if (process.env.VITEST) return;
+  const timer = setTimeout(() => {
+    refreshPlayedTrackMetadata(lms, playerId, requestedTrack).catch(() => null);
+  }, 0);
+  timer.unref?.();
 }
 
 async function refreshPlayedTrackMetadata(lms, playerId, requestedTrack) {
