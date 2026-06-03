@@ -2347,7 +2347,7 @@ describe("Cloud Squeeze API", () => {
     expect(appState.queue).toEqual([]);
   });
 
-  it("does not generate unrelated tracks when next is pressed with normal shuffle and an empty queue", async () => {
+  it("does not fall through to LMS next when normal shuffle has an empty visible queue", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
     appState.playback = {
@@ -2373,8 +2373,9 @@ describe("Cloud Squeeze API", () => {
 
     const response = await request(createApp({ lms })).post("/api/player/next").expect(200);
 
-    expect(response.body.action).toBe("next");
-    expect(controls).toContain("next");
+    expect(response.body.action).toBe("noop");
+    expect(controls).toContain("shuffle");
+    expect(controls).not.toContain("next");
     expect(appState.queue).toEqual([]);
   });
 
