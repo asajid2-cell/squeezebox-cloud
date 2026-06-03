@@ -2705,6 +2705,7 @@ describe("Cloud Squeeze API", () => {
   });
 
   it("does not treat stopped manual queues as auto-advance-ready", () => {
+    appState.queue.splice(0, appState.queue.length);
     const idleTrack = { id: "idle", title: "No track playing", artist: "Connect a player or request a song", source: "LMS", duration: 0, elapsed: 0 };
 
     expect(shouldNudgePlayback({ mode: "stop" }, idleTrack, { repeat: "off", smartQueue: false, shuffle: false })).toBe(false);
@@ -2712,6 +2713,8 @@ describe("Cloud Squeeze API", () => {
     expect(shouldNudgePlayback({ mode: "pause" }, { duration: 100, elapsed: 99 }, { repeat: "off", smartQueue: false, shuffle: false })).toBe(false);
     expect(shouldNudgePlayback({ mode: "play" }, { duration: 100, elapsed: 99 }, { repeat: "off", smartQueue: false, shuffle: false })).toBe(true);
     expect(shouldNudgePlayback({ mode: "play" }, { duration: 100, elapsed: 99 }, { repeat: "one", smartQueue: true, shuffle: false })).toBe(false);
+    addQueueItem({ title: "Queued Repeat", artist: "Tester", requestedBy: "guest", path: "/music/test/queued-repeat.mp3" });
+    expect(shouldNudgePlayback({ mode: "play" }, { duration: 100, elapsed: 99 }, { repeat: "one", smartQueue: false, shuffle: false })).toBe(true);
   });
 
   it("does not auto-play generated queue rows while stopped", async () => {
@@ -3452,6 +3455,55 @@ describe("Cloud Squeeze API", () => {
     expect(controls).toContainEqual({ action: "repeat", value: "off" });
   });
 
+  it("turns repeat off before adding visible queue rows", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = { id: "current", title: "Current", artist: "Tester", album: "", source: "Spotify", duration: 100, elapsed: 12, canSeek: true, art: null, uri: "spotify:track:current" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, repeat: "one", appManagedPlayback: true };
+    const controls: Array<{ action: string; value?: string }> = [];
+
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string, value?: string) {
+          controls.push({ action, value });
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/track")
+      .send({ action: "add-queue", track: { title: "Manual Next", artist: "Tester", path: "/music/test/manual-next.mp3" } })
+      .expect(200);
+
+    expect(response.body.playback.repeat).toBe("off");
+    expect(response.body.queue).toEqual([expect.objectContaining({ title: "Manual Next" })]);
+    expect(controls).toContainEqual({ action: "repeat", value: "off" });
+  });
+
+  it("keeps repeat off when repeat is requested with a visible queue", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "mixed" };
+    addQueueItem({ title: "Manual A", artist: "Tester", requestedBy: "guest", path: "/music/manual-a.mp3" });
+    const controls: Array<{ action: string; value?: string }> = [];
+
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string, value?: string) {
+          controls.push({ action, value });
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/playback")
+      .send({ repeat: "one" })
+      .expect(200);
+
+    expect(response.body.playback.repeat).toBe("off");
+    expect(controls).toContainEqual({ action: "repeat", value: "off" });
+    expect(controls).not.toContainEqual({ action: "repeat", value: "one" });
+  });
+
   it("does not mutate repeat when LMS repeat control fails", async () => {
     appState.playback = { ...appState.playback, repeat: "off", shuffle: false, smartQueue: false };
     const response = await request(createApp({
@@ -3727,7 +3779,7 @@ describe("Cloud Squeeze API", () => {
     expect(played).toHaveLength(0);
   });
 
-  it("manual next does not disable repeat one", async () => {
+  it("manual next disables repeat one before visible queue advance", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = { ...appState.playback, shuffle: true, smartQueue: false, smartShuffleSource: "spotify", repeat: "one", history: [] };
     addQueueItem({ title: "Generated A", artist: "Tester", requestedBy: "shuffle", uri: "spotify:track:generated-a" });
@@ -3744,8 +3796,8 @@ describe("Cloud Squeeze API", () => {
 
     await request(app).post("/api/player/next").expect(200);
 
-    expect(appState.playback.repeat).toBe("one");
-    expect(controls).not.toContainEqual({ action: "repeat", value: "off" });
+    expect(appState.playback.repeat).toBe("off");
+    expect(controls).toContainEqual({ action: "repeat", value: "off" });
   });
 
   it("does not advance generated next when LMS shuffle disable fails", async () => {

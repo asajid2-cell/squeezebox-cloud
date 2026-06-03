@@ -437,6 +437,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
           res.status(400).json({ error: "Local tracks must come from the Cloud Squeeze library or uploads" });
           return;
         }
+        await turnRepeatOffForVisibleQueue(lms);
         queued = addQueueItem({ ...track, requestedBy: "guest" });
         markQueueManagedPlayback();
         logEvent("queue.add", { action, queued: trackSummary(queued), queue: queueSummary() });
@@ -453,6 +454,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
           res.status(400).json({ error: "Local tracks must come from the Cloud Squeeze library or uploads" });
           return;
         }
+        await turnRepeatOffForVisibleQueue(lms);
         queued = addQueueItemNext({ ...track, requestedBy: "guest" });
         markQueueManagedPlayback();
         logEvent("queue.add-next", { action, queued: trackSummary(queued), queue: queueSummary() });
@@ -520,6 +522,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       return;
     }
 
+    await turnRepeatOffForVisibleQueue(lms);
     const queued = [];
     const ordered = action === "play-next" ? [...canonicalAccepted].reverse() : canonicalAccepted;
     for (const track of ordered) {
@@ -1052,7 +1055,8 @@ export function createApp({ lms = new LmsClient() } = {}) {
       const finalShuffle = typeof next.shuffle === "boolean" ? next.shuffle : appState.playback.shuffle;
       const finalSmartQueue = typeof next.smartQueue === "boolean" ? next.smartQueue : appState.playback.smartQueue;
       const queueModeChanged = sourceChanged || shuffleChanged || smartQueueChanged;
-      const queueModeForcesRepeatOff = (finalShuffle || finalSmartQueue) && (queueModeChanged || Boolean(body.repeat));
+      const visibleQueueForcesRepeatOff = Boolean(body.repeat && body.repeat !== "off" && appState.queue.length > 0);
+      const queueModeForcesRepeatOff = ((finalShuffle || finalSmartQueue) && (queueModeChanged || Boolean(body.repeat))) || visibleQueueForcesRepeatOff;
       if (queueModeForcesRepeatOff) {
         next.repeat = "off";
       }
@@ -1462,6 +1466,13 @@ function markQueueManagedPlayback() {
   if (appState.player.mode !== "play") return;
   if (!isTrackInfoCandidate(appState.nowPlaying)) return;
   updatePlayback({ appManagedPlayback: true });
+}
+
+async function turnRepeatOffForVisibleQueue(lms, playerId = "") {
+  if (appState.playback.repeat === "off") return;
+  const targetPlayerId = playerId || await hotPlayerId(lms);
+  await lms.control(targetPlayerId, "repeat", "off");
+  updatePlayback({ repeat: "off" });
 }
 
 function restoreCurrentTrackAfterPrevious(track) {
@@ -1981,6 +1992,7 @@ async function playNextVisibleQueueItem(lms, playerId, { generatedOnly = false }
   }
   const next = nextQueueItemForPlayback(appState.queue, { generatedOnly });
   if (next) {
+    await turnRepeatOffForVisibleQueue(lms, playerId);
     const played = await playQueuedItem(lms, playerId, next);
     scheduleGeneratedTopOff(lms, playerId, played);
     return played;
@@ -1988,6 +2000,7 @@ async function playNextVisibleQueueItem(lms, playerId, { generatedOnly = false }
   await topOffGeneratedQueue(lms, playerId);
   const refilled = nextQueueItemForPlayback(appState.queue, { generatedOnly });
   if (refilled) {
+    await turnRepeatOffForVisibleQueue(lms, playerId);
     return playQueuedItem(lms, playerId, refilled);
   }
   await ensureSmartShuffleQueue(lms, playerId, { force: true });
@@ -1996,6 +2009,7 @@ async function playNextVisibleQueueItem(lms, playerId, { generatedOnly = false }
     logEvent("queue.next-empty", { playback: appState.playback, queue: queueSummary() });
     return null;
   }
+  await turnRepeatOffForVisibleQueue(lms, playerId);
   return playQueuedItem(lms, playerId, ensured);
 }
 
@@ -2265,7 +2279,7 @@ export function syncVisibleQueueWithCurrentTrack(track, { includeManual = true }
 }
 
 export function shouldNudgePlayback(status, track, playback = appState.playback) {
-  if (playback.repeat === "one") return false;
+  if (playback.repeat === "one" && appState.queue.length === 0) return false;
   if (status.mode === "stop" || status.mode === "stopped") return false;
   if (status.mode === "pause") return false;
   const duration = Number(track?.duration || 0);
