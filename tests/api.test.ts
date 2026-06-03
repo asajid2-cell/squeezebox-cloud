@@ -75,9 +75,14 @@ describe("Cloud Squeeze API", () => {
     resetRefreshStateForTests();
     const calls: string[] = [];
     const childCalls: Array<{ title?: string; uri?: string }> = [];
+    const searchCalls: string[] = [];
     const app = createApp({
       lms: {
         ...mockLms,
+        async spotifySearch(_playerId: string, query: string) {
+          searchCalls.push(query);
+          return [];
+        },
         async spotifyLibrary(_playerId: string, type: string) {
           calls.push(type);
           if (type === "playlists") {
@@ -110,6 +115,7 @@ describe("Cloud Squeeze API", () => {
 
     await request(app).get("/api/state").expect(200);
     await vi.waitFor(() => expect(childCalls).toHaveLength(5));
+    await vi.waitFor(() => expect(searchCalls).toEqual(expect.arrayContaining(["drake", "juice wrld", "the weeknd", "travis scott"])));
 
     expect(calls).toEqual(expect.arrayContaining(["playlists", "home", "artists", "tracks"]));
     expect(childCalls.map((item) => item.uri)).toEqual(expect.arrayContaining([

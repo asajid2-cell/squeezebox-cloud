@@ -141,6 +141,7 @@ const imageProxyMaxBytes = Number(process.env.IMAGE_PROXY_MAX_BYTES || 8 * 1024 
 const serviceRefreshMs = 60000;
 const trackInfoRefreshMs = 30000;
 const trackInfoBudgetMs = Number(process.env.TRACK_INFO_BUDGET_MS || 1800);
+const spotifySearchPrewarmTerms = ["drake", "juice wrld", "the weeknd", "travis scott"];
 const refreshState = {
   promise: null,
   updatedAt: 0,
@@ -1564,7 +1565,8 @@ function prewarmSpotifyLibrary(lms, playerId) {
         { browseId: item.browseId, uri: item.uri, kind: "artist", title: item.title },
         20,
         0
-      ).catch(() => []))
+      ).catch(() => [])),
+      ...spotifySearchPrewarmTerms.map((term) => lms.spotifySearch(playerId, term, 20).catch(() => []))
     ]);
   })();
 }
