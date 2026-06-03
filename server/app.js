@@ -1035,6 +1035,11 @@ export function createApp({ lms = new LmsClient() } = {}) {
       }
       const finalShuffle = typeof next.shuffle === "boolean" ? next.shuffle : appState.playback.shuffle;
       const finalSmartQueue = typeof next.smartQueue === "boolean" ? next.smartQueue : appState.playback.smartQueue;
+      const queueModeChanged = sourceChanged || shuffleChanged || smartQueueChanged;
+      const queueModeForcesRepeatOff = (finalShuffle || finalSmartQueue) && (queueModeChanged || Boolean(body.repeat));
+      if (queueModeForcesRepeatOff) {
+        next.repeat = "off";
+      }
       if ((shuffleChanged || smartQueueChanged) && !finalShuffle && !finalSmartQueue) {
         next.lastShuffleRefillAt = 0;
         next.lastShuffleSeed = "";
@@ -1050,14 +1055,13 @@ export function createApp({ lms = new LmsClient() } = {}) {
         res.status(503).json({ error: spotifyUnavailableMessage(), playback: appState.playback, queue: appState.queue });
         return;
       }
-      const queueModeChanged = sourceChanged || shuffleChanged || smartQueueChanged;
-      if (body.repeat) {
+      if (body.repeat && !queueModeForcesRepeatOff) {
         await lms.control(playerId, "repeat", body.repeat);
       }
       if (queueModeChanged) {
         await lms.control(playerId, "shuffle", false);
       }
-      if (queueModeChanged && finalSmartQueue) {
+      if (queueModeForcesRepeatOff) {
         await lms.control(playerId, "repeat", "off");
       }
       if (queueModeChanged && (next.smartQueue === false || next.shuffle === false || next.shuffle === true || sourceChanged)) {

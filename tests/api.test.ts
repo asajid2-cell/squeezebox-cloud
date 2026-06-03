@@ -2928,15 +2928,51 @@ describe("Cloud Squeeze API", () => {
     const previousMusicDir = config.musicSourceDir;
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-empty-library-"));
     config.musicSourceDir = root;
+    const controls: Array<{ action: string; value?: string }> = [];
     try {
-      const response = await request(createApp({ lms: mockLms }))
+      const response = await request(createApp({
+        lms: {
+          ...mockLms,
+          async control(_playerId: string, action: string, value?: string) {
+            controls.push({ action, value });
+            return "ok";
+          }
+        }
+      }))
         .post("/api/player/playback")
         .send({ shuffle: true, repeat: "all", smartShuffleSource: "mixed" })
         .expect(200);
-      expect(response.body.playback).toMatchObject({ shuffle: true, repeat: "all", smartShuffleSource: "mixed" });
+      expect(response.body.playback).toMatchObject({ shuffle: true, repeat: "off", smartShuffleSource: "mixed" });
+      expect(controls).toContainEqual({ action: "repeat", value: "off" });
+      expect(controls).not.toContainEqual({ action: "repeat", value: "all" });
     } finally {
       config.musicSourceDir = previousMusicDir;
     }
+  });
+
+  it("turns repeat off when enabling visible-queue shuffle", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, repeat: "one", smartShuffleSource: "mixed" };
+    addQueueItem({ title: "Manual A", artist: "Tester", requestedBy: "guest", path: "/music/manual-a.mp3" });
+    addQueueItem({ title: "Manual B", artist: "Tester", requestedBy: "guest", path: "/music/manual-b.mp3" });
+    const controls: Array<{ action: string; value?: string }> = [];
+
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string, value?: string) {
+          controls.push({ action, value });
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/playback")
+      .send({ shuffle: true, smartQueue: false })
+      .expect(200);
+
+    expect(response.body.playback).toMatchObject({ shuffle: true, smartQueue: false, repeat: "off" });
+    expect(response.body.queue.map((item: { requestedBy: string }) => item.requestedBy)).toEqual(["guest", "guest"]);
+    expect(controls).toContainEqual({ action: "repeat", value: "off" });
   });
 
   it("does not mutate repeat when LMS repeat control fails", async () => {
@@ -3161,7 +3197,7 @@ describe("Cloud Squeeze API", () => {
     );
   });
 
-  it("repeat changes do not regenerate or remove generated queue rows", async () => {
+  it("repeat changes do not regenerate or remove generated queue rows while smart queue keeps repeat off", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = { ...appState.playback, shuffle: false, smartQueue: true, smartShuffleSource: "spotify", history: [] };
     addQueueItem({ title: "Smart Existing", artist: "Tester", requestedBy: "smart shuffle", uri: "spotify:track:existing" });
@@ -3181,10 +3217,10 @@ describe("Cloud Squeeze API", () => {
       .send({ repeat: "one" })
       .expect(200);
 
-    expect(response.body.playback.repeat).toBe("one");
+    expect(response.body.playback.repeat).toBe("off");
     expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Smart Existing", "Manual Existing"]);
-    expect(controls).toContainEqual({ action: "repeat", value: "one" });
-    expect(controls).not.toContainEqual({ action: "repeat", value: "off" });
+    expect(controls).toContainEqual({ action: "repeat", value: "off" });
+    expect(controls).not.toContainEqual({ action: "repeat", value: "one" });
   });
 
   it("manual queueing is non destructive while generated shuffle is active", async () => {
