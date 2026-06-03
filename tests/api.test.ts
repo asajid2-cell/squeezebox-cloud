@@ -153,6 +153,43 @@ describe("Cloud Squeeze API", () => {
     }
   });
 
+  it("uses exact Spotify artwork matches for uploaded search rows", async () => {
+    const previousUploadDir = config.uploadDir;
+    const previousPlayer = { ...appState.player };
+    const previousSpotify = { ...appState.services.spotify };
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-upload-spotify-art-"));
+    config.uploadDir = root;
+    appState.player = { ...appState.player, id: "player-1", connected: true, online: true };
+    updateSpotifyStatus({ configured: true, reachable: true, detail: "Spotty detected" });
+    try {
+      await fs.writeFile(path.join(root, "Drake - Shabang.mp3"), "ID3");
+      const response = await request(createApp({
+        lms: {
+          ...mockLms,
+          async spotifySearch() {
+            return [
+              { title: "Wrong Song", artist: "Drake", art: "https://i.scdn.co/image/wrong", uri: "spotify:track:wrong", kind: "track" },
+              { title: "Shabang", artist: "Drake", art: "https://i.scdn.co/image/right", uri: "spotify:track:right", kind: "track" }
+            ];
+          }
+        }
+      }))
+        .get("/api/library/search?q=shabang&limit=10&source=uploaded")
+        .expect(200);
+
+      expect(response.body.results[0]).toMatchObject({
+        title: "Shabang",
+        source: "Uploaded",
+        art: "https://i.scdn.co/image/right"
+      });
+    } finally {
+      config.uploadDir = previousUploadDir;
+      appState.player = previousPlayer;
+      updateSpotifyStatus(previousSpotify);
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("prewarms the Spotify library tabs exposed in the UI during state refresh", async () => {
     resetRefreshStateForTests();
     const calls: string[] = [];

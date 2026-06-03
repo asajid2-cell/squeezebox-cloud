@@ -1557,10 +1557,10 @@ async function enrichLibraryArtwork(lms, tracks) {
   const localEnriched = typeof lms.enrichLocalArtwork === "function"
     ? await withTimeout(lms.enrichLocalArtwork(tracks, { limit: localArtworkLimit }), localArtworkBudgetMs, tracks)
     : tracks;
-  return enrichUploadedArtwork(localEnriched);
+  return enrichUploadedArtwork(lms, localEnriched);
 }
 
-async function enrichUploadedArtwork(tracks) {
+async function enrichUploadedArtwork(lms, tracks) {
   const results = tracks.slice();
   const candidates = results
     .map((track, index) => ({ track, index }))
@@ -1569,9 +1569,25 @@ async function enrichUploadedArtwork(tracks) {
   if (candidates.length === 0) return results;
 
   return withTimeout(Promise.all(candidates.map(async ({ track, index }) => {
+    const spotifyArt = await spotifyArtworkForUploadedTrack(lms, track).catch(() => null);
+    if (spotifyArt) {
+      results[index] = { ...track, art: spotifyArt };
+      return;
+    }
     const info = await enrichTrackInfo(track).catch(() => null);
     if (info?.art) results[index] = { ...track, art: info.art };
   })).then(() => results), uploadedArtworkBudgetMs, results);
+}
+
+async function spotifyArtworkForUploadedTrack(lms, track) {
+  if (!spotifyBrowsingAvailable() || typeof lms.spotifySearch !== "function") return null;
+  const playerId = appState.player.id;
+  if (!playerId || playerId === "mock-player") return null;
+  const query = [track.artist, track.title].filter(Boolean).join(" ").trim();
+  if (!query) return null;
+  const matches = await lms.spotifySearch(playerId, query, 8);
+  const exact = (matches || []).find((candidate) => candidate?.art && sameTitleArtist(candidate, track));
+  return exact?.art || null;
 }
 
 async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force = false, skipTrackInfo = false, waitForFresh = true } = {}) {
