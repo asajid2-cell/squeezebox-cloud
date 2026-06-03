@@ -819,7 +819,11 @@ function isPlayableTrackInput(track) {
   if (!track.uri) return false;
   const kind = String(track.kind || "").toLowerCase();
   if (kind && kind !== "track") return false;
-  return String(track.uri).includes(":track:");
+  return isValidSpotifyTrackUri(track.uri);
+}
+
+function isValidSpotifyTrackUri(uri) {
+  return /^(spotify:track:|spotify:\/\/track:)[A-Za-z0-9]{22}$/i.test(String(uri || ""));
 }
 
 function queuedTrackInputExists(track) {
