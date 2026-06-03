@@ -2111,7 +2111,7 @@ async function playQueuedItem(lms, playerId, item) {
   rememberPlaybackMetadata(item);
   await lms.playTrack(playerId, item, "play-now");
   rememberPreviousTrack(previousTrack);
-  rememberShuffleTrack(item);
+  if (isGeneratedQueueItem(item)) rememberShuffleTrack(item);
   markPendingPlayback(item);
   removeQueueItem(item.id);
   setMode("play");
@@ -2246,6 +2246,10 @@ function stopGeneratedPlayback() {
   updatePlayback({ shuffle: false, manualShuffle: false, smartQueue: false, lastShuffleRefillAt: 0, lastShuffleSeed: "", lastSmartQueueBase: "", history: [] });
 }
 
+function generatedShufflePlaybackActive() {
+  return Boolean(appState.playback.smartQueue || (appState.playback.shuffle && !appState.playback.manualShuffle));
+}
+
 function shuffleVisibleQueue() {
   const manual = appState.queue.filter((item) => item.requestedBy !== "smart shuffle" && item.requestedBy !== "shuffle");
   const shuffled = shuffle(manual);
@@ -2269,7 +2273,7 @@ function queuedTrackExists(track) {
 
 export function syncVisibleQueueWithCurrentTrack(track, { includeManual = true } = {}) {
   if (!track) return;
-  rememberShuffleTrack(track);
+  if (generatedShufflePlaybackActive()) rememberShuffleTrack(track);
   for (const item of [...appState.queue]) {
     if (!includeManual && !isGeneratedQueueItem(item)) continue;
     if (trackKey(item) === trackKey(track) || sameTitleArtist(item, track)) {

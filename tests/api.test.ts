@@ -1197,6 +1197,64 @@ describe("Cloud Squeeze API", () => {
     expect(appState.playback.previousTracks[0]).toMatchObject({ title: "Track B", path: "/music/b.mp3" });
   });
 
+  it("keeps manual queue previous and next out of generated shuffle history", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.nowPlaying = {
+      id: "track-a",
+      title: "Track A",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      path: "/music/a.mp3",
+      duration: 120,
+      elapsed: 10,
+      canSeek: true,
+      art: null
+    };
+    appState.playback = {
+      ...appState.playback,
+      shuffle: false,
+      manualShuffle: false,
+      smartQueue: false,
+      history: [],
+      previousTracks: [],
+      appManagedPlayback: true
+    };
+    addQueueItem({ title: "Track B", artist: "Tester", source: "Local library", path: "/music/b.mp3", requestedBy: "guest" });
+    addQueueItem({ title: "Track C", artist: "Tester", source: "Local library", path: "/music/c.mp3", requestedBy: "guest" });
+
+    let observed = appState.nowPlaying;
+    const lms = {
+      ...mockLms,
+      async nowPlaying() {
+        return observed;
+      },
+      async playTrack(_playerId: string, track: typeof observed) {
+        observed = { ...observed, ...track, elapsed: 0, canSeek: true };
+        return "ok";
+      }
+    };
+    const app = createApp({ lms });
+
+    const next = await request(app).post("/api/player/next").expect(200);
+    expect(next.body.action).toBe("visible-queue-next");
+    expect(next.body.nowPlaying.title).toBe("Track B");
+    expect(next.body.queue.map((item: { title: string }) => item.title)).toEqual(["Track C"]);
+    expect(next.body.playback.history).toEqual([]);
+
+    const previous = await request(app).post("/api/player/previous").expect(200);
+    expect(previous.body.action).toBe("app-previous");
+    expect(previous.body.nowPlaying.title).toBe("Track A");
+    expect(previous.body.queue.map((item: { title: string }) => item.title)).toEqual(["Track B", "Track C"]);
+    expect(previous.body.playback.history).toEqual([]);
+
+    resetRefreshStateForTests();
+    const state = await request(app).get("/api/state").expect(200);
+    expect(state.body.nowPlaying.title).toBe("Track A");
+    expect(state.body.queue.map((item: { title: string }) => item.title)).toEqual(["Track B", "Track C"]);
+    expect(state.body.playback.history).toEqual([]);
+  });
+
   it("remembers LMS-observed Spotify id-only tracks for the previous button", async () => {
     appState.playback = { ...appState.playback, previousTracks: [] };
     appState.nowPlaying = {
