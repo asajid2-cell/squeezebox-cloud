@@ -622,12 +622,14 @@ export function createApp({ lms = new LmsClient() } = {}) {
     try {
       const playerId = await hotPlayerId(lms);
       logEvent("transport.previous.request", { queue: queueSummary(), playback: appState.playback, nowPlaying: trackSummary(appState.nowPlaying) });
-      const previous = popPreviousTrack();
+      const previous = peekPreviousTrack();
       if (previous) {
+        await lms.playTrack(playerId, previous, "play-now");
+        popPreviousTrack();
         rememberPreviousTrack(appState.nowPlaying);
         setMode("play");
+        markPendingPlayback(previous);
         updateNowPlaying(optimisticTrack(previous));
-        runPlaybackCommand(lms, playerId, previous, "play-now");
       } else {
         await control(lms, "previous");
       }
@@ -1506,6 +1508,10 @@ function popPreviousTrack() {
   const [track, ...rest] = previousTracks;
   updatePlayback({ previousTracks: rest });
   return track || null;
+}
+
+function peekPreviousTrack() {
+  return (appState.playback.previousTracks || [])[0] || null;
 }
 
 function isRestorablePreviousTrack(track) {

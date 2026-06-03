@@ -288,6 +288,37 @@ describe("Cloud Squeeze API", () => {
     expect(appState.playback.previousTracks[0]).toMatchObject({ title: "Current Track", path: "/music/current.mp3" });
   });
 
+  it("does not mutate previous history when app previous playback fails", async () => {
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = {
+      id: "current",
+      title: "Current Track",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 10,
+      canSeek: true,
+      art: null,
+      path: "/music/current.mp3"
+    };
+    const previousTrack = { title: "Previous Track", artist: "Tester", path: "/music/previous.mp3", source: "Local library" };
+    appState.playback = { ...appState.playback, previousTracks: [previousTrack] };
+    const lms = {
+      ...mockLms,
+      async playTrack() {
+        throw new Error("LMS refused previous playback");
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/previous").expect(502);
+
+    expect(response.body.error).toContain("LMS refused previous playback");
+    expect(appState.nowPlaying.title).toBe("Current Track");
+    expect(appState.player.mode).toBe("play");
+    expect(appState.playback.previousTracks).toEqual([expect.objectContaining(previousTrack)]);
+  });
+
   it("remembers LMS-observed track changes for the previous button", async () => {
     appState.playback = { ...appState.playback, previousTracks: [] };
     appState.nowPlaying = {
