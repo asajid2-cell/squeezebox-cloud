@@ -934,10 +934,18 @@ describe("Cloud Squeeze API", () => {
     await request(app).post("/api/player/track").send({ action: "", track: { title: "Blank Action", path: "/music/test/blank-action.mp3" } }).expect(400);
     await request(app).post("/api/player/track").send({ action: "add-queue", track: null }).expect(400);
     await request(app).post("/api/player/track").send({ action: "add-queue", track: { title: "Extra Body", path: "/music/test/extra-body.mp3" }, extra: true }).expect(400);
+    await request(app).post("/api/player/track").send({ action: "add-queue", track: { title: "Array Path", path: [], source: "Local library" } }).expect(400);
+    await request(app).post("/api/player/track").send({ action: "add-queue", track: { title: "Object Path", path: { x: 1 }, source: "Local library" } }).expect(400);
+    await request(app).post("/api/player/track").send({ action: "add-queue", track: { title: "Array Id", lmsTrackId: [], source: "LMS" } }).expect(400);
+    await request(app).post("/api/player/track").send({ action: "add-queue", track: { title: "Object Id", lmsTrackId: { x: 1 }, source: "LMS" } }).expect(400);
+    await request(app).post("/api/player/track").send({ action: "add-queue", track: { title: "Array Uri", uri: ["spotify:track:0000000000000000000101"], kind: "track", source: "Spotify" } }).expect(400);
+    await request(app).post("/api/player/track").send({ action: "add-queue", track: { title: "Extra Track Field", path: "/music/test/extra-track-field.mp3", extra: true } }).expect(400);
     await request(app).post("/api/player/tracks").send({ action: null, tracks: [{ title: "Batch Null", path: "/music/test/batch-null.mp3" }] }).expect(400);
     await request(app).post("/api/player/tracks").send({ action: "add-queue", tracks: [] }).expect(400);
     await request(app).post("/api/player/tracks").send({ action: "add-queue", tracks: [null] }).expect(400);
     await request(app).post("/api/player/tracks").send({ action: "add-queue", tracks: [{ title: "Extra Batch", path: "/music/test/extra-batch.mp3" }], extra: true }).expect(400);
+    await request(app).post("/api/player/tracks").send({ action: "add-queue", tracks: [{ title: "Bad Batch Id", lmsTrackId: [] }] }).expect(400);
+    await request(app).post("/api/player/tracks").send({ action: "add-queue", tracks: [{ title: "Extra Batch Track Field", path: "/music/test/extra-batch-track-field.mp3", extra: true }] }).expect(400);
 
     expect(played).toHaveLength(0);
     expect(appState.queue).toHaveLength(0);

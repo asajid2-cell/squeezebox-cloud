@@ -45,6 +45,29 @@ const queueSchema = z.object({
   requestedBy: optionalText
 });
 
+const playbackTrackInputSchema = z.object({
+  id: z.union([z.string().trim().min(1), z.number()]).optional(),
+  title: requiredText.optional(),
+  artist: optionalText,
+  album: optionalText,
+  source: optionalText,
+  path: optionalText,
+  uri: optionalText,
+  kind: optionalText,
+  lmsTrackId: z.union([z.string().trim().min(1), z.number()]).optional(),
+  art: optionalText.nullable(),
+  uploaded: z.boolean().optional(),
+  duration: z.number().finite().nonnegative().nullable().optional(),
+  elapsed: z.number().finite().nonnegative().optional(),
+  canSeek: z.boolean().optional(),
+  browseId: optionalText,
+  collection: optionalText,
+  folder: optionalText
+}).strict().refine(
+  (value) => Boolean(value.path || value.lmsTrackId || value.uri),
+  { message: "Playable local path, LMS track id, or Spotify URI is required" }
+);
+
 const queueUpdateSchema = z.object({
   title: requiredText.optional(),
   artist: requiredText.optional(),
@@ -61,12 +84,12 @@ const queueMoveSchema = z.object({
 
 const playbackTrackSchema = z.object({
   action: z.enum(["add-queue", "play-next", "play-now"]).optional().default("add-queue"),
-  track: z.object({}).passthrough().optional().default({})
+  track: playbackTrackInputSchema
 }).strict();
 
 const playbackTracksSchema = z.object({
   action: z.enum(["add-queue", "play-next"]).optional().default("add-queue"),
-  tracks: z.array(z.object({}).passthrough()).min(1).max(300)
+  tracks: z.array(playbackTrackInputSchema).min(1).max(300)
 }).strict();
 
 const volumeSchema = z.object({
