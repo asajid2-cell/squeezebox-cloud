@@ -113,7 +113,7 @@ export async function getCollectionTracks({ collection = "", folder = "", source
 export function fileToTrack(filePath) {
   const parsed = path.parse(filePath);
   const meta = pathMeta(filePath);
-  const parts = parsed.name.split(/\s+-\s+| - |_/).filter(Boolean);
+  const parts = parsed.name.split(/\s+-\s+| - /).filter(Boolean);
   const artist = parts.length > 1 ? cleanName(parts[0]) : meta.artist || inferArtist(filePath);
   const title = cleanName(parts.length > 1 ? parts.slice(1).join(" ") : parsed.name);
   return {

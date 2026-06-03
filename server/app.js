@@ -440,6 +440,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
         markPendingPlayback(track);
         const optimistic = optimisticTrack(track);
         updateNowPlaying(optimistic);
+        await refreshPlayedTrackMetadata(lms, playerId, track);
         logEvent("track.play-now", { track: trackSummary(track), queue: queueSummary() });
         refreshLms(lms, { force: true }).catch(() => null);
       }
@@ -1730,8 +1731,15 @@ async function maintainVisiblePlaybackQueue(lms, status, track) {
   }
   await topOffGeneratedQueue(lms, status.id);
   const needsPlaybackNudge = shouldNudgePlayback(status, track);
+  const missedEndedTrack =
+    (status.mode === "stop" || status.mode === "stopped") &&
+    appState.playback.appManagedPlayback &&
+    appState.queue.length > 0;
   if (needsPlaybackNudge && appState.queue.length > 0) {
     logEvent("queue.auto-advance", { reason: "near-track-end", queue: queueSummary(), nowPlaying: trackSummary(track) });
+    await playNextVisibleQueueItem(lms, status.id, { generatedOnly: appState.playback.smartQueue });
+  } else if (missedEndedTrack) {
+    logEvent("queue.auto-advance", { reason: "stopped-with-visible-queue", queue: queueSummary(), nowPlaying: trackSummary(track) });
     await playNextVisibleQueueItem(lms, status.id, { generatedOnly: appState.playback.smartQueue });
   }
 }
@@ -1879,8 +1887,20 @@ async function playQueuedItem(lms, playerId, item) {
   setMode("play");
   updatePlayback({ appManagedPlayback: true });
   updateNowPlaying(optimisticTrack(item));
+  await refreshPlayedTrackMetadata(lms, playerId, item);
   logEvent("queue.play-item", { item: trackSummary(item), queueAfterRemove: queueSummary(), playback: appState.playback });
   return item;
+}
+
+async function refreshPlayedTrackMetadata(lms, playerId, requestedTrack) {
+  try {
+    const fresh = await lms.nowPlaying(playerId);
+    if (!fresh || !isTrackInfoCandidate(fresh)) return;
+    if (trackKey(fresh) !== trackKey(requestedTrack) && !sameTitleArtist(fresh, requestedTrack)) return;
+    updateNowPlaying(fresh);
+  } catch {
+    // Keep the optimistic selected track; the normal background refresh will try again.
+  }
 }
 
 function removeGeneratedQueueItems() {

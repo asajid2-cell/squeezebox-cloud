@@ -1482,6 +1482,35 @@ describe("Cloud Squeeze API", () => {
     expect(appState.queue.some((item) => item.title === "Visible Queue Song")).toBe(false);
   });
 
+  it("returns matching LMS artwork metadata after direct play now", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.nowPlaying = { id: "idle", title: "No track playing", artist: "Connect a player or request a song", album: "", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null };
+    const lms = {
+      ...mockLms,
+      async nowPlaying() {
+        return {
+          id: "/music/test/art-track.mp3",
+          title: "Art Track",
+          artist: "Tester",
+          album: "Artwork",
+          source: "Local library",
+          duration: 100,
+          elapsed: 0,
+          canSeek: true,
+          art: "api/artwork/test-cover",
+          path: "/music/test/art-track.mp3"
+        };
+      }
+    };
+
+    const response = await request(createApp({ lms }))
+      .post("/api/player/track")
+      .send({ action: "play-now", track: { title: "Art Track", artist: "Tester", path: "/music/test/art-track.mp3", source: "Local library" } })
+      .expect(200);
+
+    expect(response.body.nowPlaying).toMatchObject({ title: "Art Track", art: "api/artwork/test-cover", canSeek: true });
+  });
+
   it("serializes concurrent play presses so queued rows are not reported twice", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
@@ -2024,7 +2053,7 @@ describe("Cloud Squeeze API", () => {
 
   it("does not auto-play generated queue rows while stopped", async () => {
     appState.queue.splice(0, appState.queue.length);
-    appState.playback = { ...appState.playback, shuffle: false, smartQueue: true, smartShuffleSource: "spotify", history: [] };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: true, smartShuffleSource: "spotify", history: [], appManagedPlayback: false };
     const idleTrack = { id: "idle", title: "No track playing", artist: "Connect a player or request a song", source: "LMS", duration: 0, elapsed: 0 };
     addQueueItem({ title: "Generated Keeper", artist: "Tester", requestedBy: "smart shuffle", uri: "spotify:track:keeper", kind: "track" });
     const played: string[] = [];
@@ -2051,6 +2080,32 @@ describe("Cloud Squeeze API", () => {
 
     expect(played).toEqual([]);
     expect(appState.queue.some((item: { title: string }) => item.title === "Generated Keeper")).toBe(true);
+  });
+
+  it("auto-advances an app-managed visible queue after LMS has already stopped", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: true, smartQueue: false, smartShuffleSource: "mixed", history: [], appManagedPlayback: true };
+    addQueueItem({ title: "Queued After End", artist: "Tester", requestedBy: "guest", path: "/music/queued-after-end.mp3" });
+    const played: string[] = [];
+
+    await maintainVisiblePlaybackQueueForTests(
+      {
+        ...mockLms,
+        async control() {
+          return "ok";
+        },
+        async playTrack(_playerId: string, track: { title?: string }) {
+          played.push(String(track.title || ""));
+          return "ok";
+        }
+      },
+      { id: "player-1", mode: "stop" },
+      { id: "idle", title: "No track playing", artist: "Connect a player or request a song", source: "LMS", duration: 0, elapsed: 0 }
+    );
+
+    expect(played).toEqual(["Queued After End"]);
+    expect(appState.queue).toEqual([]);
+    expect(appState.playback.appManagedPlayback).toBe(true);
   });
 
   it("does not record idle metadata in shuffle history", () => {

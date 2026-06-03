@@ -13,6 +13,14 @@ describe("library scanner helpers", () => {
     expect(track.id).toContain("local:");
   });
 
+  it("keeps leading numeric local titles and bracket versions intact", () => {
+    const numbered = fileToTrack("/music/collections/Juice/27 Club.mp3");
+    const versioned = fileToTrack("/music/collections/Juice/734 [v1].mp3");
+
+    expect(numbered.title).toBe("27 Club");
+    expect(versioned.title).toBe("734 [v1]");
+  });
+
   it("caches search results until library caches are cleared", async () => {
     clearLibraryCaches();
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-library-cache-"));
