@@ -3538,6 +3538,47 @@ describe("Cloud Squeeze API", () => {
     expect(appState.queue).toEqual([]);
   });
 
+  it("does not add generated shuffle rows after shuffle is disabled mid-refill", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      smartQueue: false,
+      smartShuffleSource: "spotify",
+      lastShuffleRefillAt: 0,
+      lastShuffleSeed: "Tester",
+      history: []
+    };
+    const resolveSearches: Array<(tracks: Array<{ title: string; artist: string; uri: string; kind: string; source: string }>) => void> = [];
+    const refill = maintainVisiblePlaybackQueueForTests(
+      {
+        ...mockLms,
+        async control() {
+          return "ok";
+        },
+        async spotifySearch() {
+          return new Promise<Array<{ title: string; artist: string; uri: string; kind: string; source: string }>>((resolve) => {
+            resolveSearches.push(resolve);
+          });
+        }
+      },
+      { id: "player-1", mode: "play" },
+      { title: "Current", artist: "Tester", duration: 100, elapsed: 20, uri: "spotify:track:current" }
+    );
+
+    await Promise.resolve();
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false };
+    appState.queue.splice(0, appState.queue.length);
+    expect(resolveSearches.length).toBeGreaterThan(0);
+    for (const resolveSearch of resolveSearches) {
+      resolveSearch([{ title: "Late Generated", artist: "Tester", uri: "spotify:track:late-generated", kind: "track", source: "Spotify" }]);
+    }
+    await refill;
+
+    expect(appState.playback.shuffle).toBe(false);
+    expect(appState.queue).toEqual([]);
+  });
+
   it("plays an existing generated queue row before slow shuffle top-off", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };

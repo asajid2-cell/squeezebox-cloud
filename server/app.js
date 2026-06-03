@@ -1687,6 +1687,7 @@ async function activateGeneratedQueue(lms, playerId, { smart = false, shuffle: s
 }
 
 async function buildGeneratedQueue(lms, playerId, seed, mode, count, requestedBy) {
+  if (!generatedRequestActive(requestedBy)) return [];
   const normalizedSeed = seed || "drake";
   const exclude = shuffleExclusionSet();
   const hardExclude = currentAndQueueExclusionSet();
@@ -1710,6 +1711,7 @@ async function buildGeneratedQueue(lms, playerId, seed, mode, count, requestedBy
   }
   const queued = [];
   for (const track of picks) {
+    if (!generatedRequestActive(requestedBy)) break;
     const item = addGeneratedQueueItem(track, mode, requestedBy);
     if (item) {
       queued.push(item);
@@ -1802,6 +1804,7 @@ async function ensureSmartShuffleQueue(lms, playerId, { force = false } = {}) {
     : "";
   const seed = String(currentSeed || appState.playback.lastShuffleSeed || "drake").trim();
   const queued = await buildGeneratedQueue(lms, playerId, seed, appState.playback.smartShuffleSource, desired, requestType);
+  if (!generatedRequestActive(requestType)) return queued;
   updatePlayback({ lastShuffleRefillAt: now, lastShuffleSeed: seed });
   if (queued.length > 0) logEvent("queue.refill", { requestType, desired, queued: queued.map(trackSummary), queue: queueSummary() });
   return queued;
@@ -1819,15 +1822,23 @@ async function topOffGeneratedQueue(lms, playerId) {
   const desired = Math.max(1, 5 - generatedCount);
   const seed = String(appState.nowPlaying?.artist || appState.nowPlaying?.title || appState.playback.lastShuffleSeed || "drake").trim();
   const queued = await buildGeneratedQueue(lms, playerId, seed, appState.playback.smartShuffleSource, desired, requestType);
+  if (!generatedRequestActive(requestType)) return queued;
   updatePlayback({ lastShuffleRefillAt: Date.now(), lastShuffleSeed: seed });
   if (queued.length > 0) logEvent("queue.refill", { requestType, desired, queued: queued.map(trackSummary), queue: queueSummary() });
   return queued;
 }
 
 function addGeneratedQueueItem(track, mode = appState.playback.smartShuffleSource, requestedBy = "shuffle") {
+  if (!generatedRequestActive(requestedBy)) return null;
   if (!track?.title || queuedTrackExists(track)) return null;
   if (!trackMatchesShuffleSource(track, mode)) return null;
   return addQueueItem({ ...track, requestedBy });
+}
+
+function generatedRequestActive(requestedBy) {
+  if (requestedBy === "smart shuffle") return Boolean(appState.playback.smartQueue);
+  if (requestedBy === "shuffle") return Boolean(appState.playback.shuffle);
+  return true;
 }
 
 async function playNextVisibleQueueItem(lms, playerId, { generatedOnly = false } = {}) {
