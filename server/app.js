@@ -422,6 +422,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
       }
       const playerId = await hotPlayerId(lms);
       const type = String(req.query.type || "playlists");
+      if (!["playlists", "albums", "artists", "tracks", "home"].includes(type)) {
+        res.status(400).json({ error: "Spotify library type must be playlists, albums, artists, tracks, or home", results: [] });
+        return;
+      }
       const limit = req.query.limit || 50;
       const offset = req.query.offset || 0;
       const results = await lms.spotifyLibrary(playerId, type, limit, offset);
@@ -441,9 +445,24 @@ export function createApp({ lms = new LmsClient() } = {}) {
         return;
       }
       const playerId = await hotPlayerId(lms);
+      const kind = String(req.query.kind || "playlist");
+      const browseId = String(req.query.browseId || "");
+      const uri = String(req.query.uri || "");
+      if (!["playlist", "album", "artist", "track"].includes(kind)) {
+        res.status(400).json({ error: "Spotify child kind must be playlist, album, artist, or track", results: [] });
+        return;
+      }
+      if (!browseId && !uri) {
+        res.status(400).json({ error: "Spotify browse id or URI is required", results: [] });
+        return;
+      }
+      if (kind === "track" && !isValidSpotifyTrackUri(uri)) {
+        res.status(400).json({ error: "Spotify track children require a Spotify track URI", results: [] });
+        return;
+      }
       const results = await lms.spotifyChildren(
         playerId,
-        { browseId: String(req.query.browseId || ""), uri: String(req.query.uri || ""), kind: String(req.query.kind || "playlist") },
+        { browseId, uri, kind },
         req.query.limit || 200,
         req.query.offset || 0
       );

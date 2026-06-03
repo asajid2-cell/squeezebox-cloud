@@ -414,7 +414,7 @@ export class LmsClient {
     const deadline = stale.length > 0 ? spotifyBrowseDeadlineMs : spotifyChildrenColdBrowseDeadlineMs;
     const results = await withDeadline(request, deadline, stale);
     if (results?.length) return results.slice(0, count);
-    if (uri && kind === "track") return [{ id: uri, uri, title: "Spotify track", artist: "Spotify", source: "Spotify", kind: "track" }];
+    if (uri && kind === "track" && isSpotifyTrackUri(uri)) return [{ id: uri, uri, title: "Spotify track", artist: "Spotify", source: "Spotify", kind: "track" }];
     return results || [];
   }
 
@@ -597,6 +597,10 @@ function streamUrl(trackPath) {
 
 function spottyPlaybackUri(value) {
   return String(value || "").replace(/^spotify:(track|episode):/i, "spotify://$1:");
+}
+
+function isSpotifyTrackUri(value) {
+  return /^(spotify:track:|spotify:\/\/track:)[A-Za-z0-9]{22}$/i.test(String(value || ""));
 }
 
 function isIdleStatus(status) {

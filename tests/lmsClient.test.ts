@@ -750,6 +750,17 @@ describe("LMS client parsing", () => {
     expect(results).toEqual([expect.objectContaining({ title: "Track One", uri: "spotify:track:one", kind: "track" })]);
   });
 
+  it("does not synthesize a Spotify track from non-track child URIs", async () => {
+    const client = new LmsClient();
+    client.jsonRequest = async () => ({ result: { item_loop: [] } });
+
+    const playlist = await client.spotifyChildren("player-1", { uri: "spotify:playlist:test", kind: "track" }, 10, 0);
+    const malformedTrack = await client.spotifyChildren("player-1", { uri: "spotify:track:not-valid", kind: "track" }, 10, 0);
+
+    expect(playlist).toEqual([]);
+    expect(malformedTrack).toEqual([]);
+  });
+
   it("serves smaller Spotify children requests through a wider cached page", async () => {
     const requests: unknown[] = [];
     const client = new LmsClient();

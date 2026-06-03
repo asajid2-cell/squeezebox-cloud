@@ -1143,6 +1143,29 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.results[0].kind).toBe("playlist");
   });
 
+  it("rejects invalid Spotify browse parameters before calling Spotty", async () => {
+    const calls: string[] = [];
+    const lms = {
+      ...mockLms,
+      async spotifyLibrary() {
+        calls.push("library");
+        return [];
+      },
+      async spotifyChildren() {
+        calls.push("children");
+        return [];
+      }
+    };
+    const app = createApp({ lms });
+
+    await request(app).get("/api/spotify/library?type=bad").expect(400);
+    await request(app).get("/api/spotify/children?kind=bad&uri=spotify%3Aplaylist%3A1").expect(400);
+    await request(app).get("/api/spotify/children?kind=playlist").expect(400);
+    await request(app).get("/api/spotify/children?kind=track&uri=spotify%3Aplaylist%3A1").expect(400);
+
+    expect(calls).toEqual([]);
+  });
+
   it("opens Spotify playlist children instead of queueing playlist containers", async () => {
     const response = await request(createApp({ lms: mockLms }))
       .get("/api/spotify/children?uri=spotify%3Aplaylist%3A1&kind=playlist")
