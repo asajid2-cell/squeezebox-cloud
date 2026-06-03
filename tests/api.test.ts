@@ -1,5 +1,5 @@
 import request from "supertest";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -61,6 +61,10 @@ const mockLms = {
 };
 
 describe("Cloud Squeeze API", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("returns speaker and now playing state", async () => {
     const response = await request(createApp({ lms: mockLms })).get("/api/state").expect(200);
     expect(response.body.player.connected).toBe(true);
@@ -589,6 +593,34 @@ describe("Cloud Squeeze API", () => {
     const response = await request(createApp({ lms: mockLms })).get("/api/artwork/test-cover").expect(200);
     expect(response.headers["content-type"]).toContain("image/jpeg");
     expect(response.text || response.body.toString()).toContain("fake-jpeg");
+  });
+
+  it("limits image proxy responses to real images under the size cap", async () => {
+    const imageBytes = Buffer.from("fake-image");
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("too-large-header")) {
+        return new Response(Buffer.from(""), { status: 200, headers: { "content-type": "image/jpeg", "content-length": String(9 * 1024 * 1024) } });
+      }
+      if (url.includes("too-large-body")) {
+        return new Response(Buffer.alloc(9 * 1024 * 1024), { status: 200, headers: { "content-type": "image/jpeg" } });
+      }
+      if (url.includes("not-image")) {
+        return new Response("<html></html>", { status: 200, headers: { "content-type": "text/html" } });
+      }
+      return new Response(imageBytes, { status: 200, headers: { "content-type": "image/jpeg", "content-length": String(imageBytes.length) } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const app = createApp({ lms: mockLms });
+
+    const ok = await request(app).get("/api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Fok").expect(200);
+    await request(app).get("/api/image-proxy?url=https%3A%2F%2Fevil.example%2Fcover.jpg").expect(400);
+    await request(app).get("/api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Fnot-image").expect(415);
+    await request(app).get("/api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Ftoo-large-header").expect(413);
+    await request(app).get("/api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Ftoo-large-body").expect(413);
+
+    expect(ok.headers["content-type"]).toContain("image/jpeg");
+    expect(ok.body.toString()).toBe("fake-image");
+    expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining("evil.example"), expect.anything());
   });
 
   it("returns speaker connection setup guidance", async () => {

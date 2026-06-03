@@ -82,6 +82,7 @@ const adminSettingsSchema = z.object({
 
 const adminPassword = process.env.CLOUD_SQUEEZE_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD || "admin";
 const adminToken = process.env.CLOUD_SQUEEZE_ADMIN_TOKEN || "cloud-squeeze-admin";
+const imageProxyMaxBytes = Number(process.env.IMAGE_PROXY_MAX_BYTES || 8 * 1024 * 1024);
 const serviceRefreshMs = 60000;
 const trackInfoRefreshMs = 30000;
 const trackInfoBudgetMs = Number(process.env.TRACK_INFO_BUDGET_MS || 1800);
@@ -682,9 +683,24 @@ export function createApp({ lms = new LmsClient() } = {}) {
         res.status(response.status).json({ error: "Image unavailable" });
         return;
       }
-      res.type(response.headers.get("content-type") || "image/jpeg");
+      const contentType = response.headers.get("content-type") || "image/jpeg";
+      if (!contentType.toLowerCase().startsWith("image/")) {
+        res.status(415).json({ error: "Proxied content is not an image" });
+        return;
+      }
+      const contentLength = Number(response.headers.get("content-length") || 0);
+      if (contentLength > imageProxyMaxBytes) {
+        res.status(413).json({ error: "Image is too large" });
+        return;
+      }
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (bytes.length > imageProxyMaxBytes) {
+        res.status(413).json({ error: "Image is too large" });
+        return;
+      }
+      res.type(contentType);
       res.set("Cache-Control", "public, max-age=86400");
-      res.send(Buffer.from(await response.arrayBuffer()));
+      res.send(bytes);
     } catch (error) {
       res.status(502).json({ error: error.message });
     }
