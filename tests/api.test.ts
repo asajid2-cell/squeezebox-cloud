@@ -1483,6 +1483,32 @@ describe("Cloud Squeeze API", () => {
     expect(controls).not.toContainEqual({ action: "repeat", value: "off" });
   });
 
+  it("does not advance generated next when LMS shuffle disable fails", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: true, smartQueue: false, smartShuffleSource: "spotify", repeat: "off", history: [] };
+    addQueueItem({ title: "Generated A", artist: "Tester", requestedBy: "shuffle", uri: "spotify:track:generated-a" });
+    const played: Array<{ action: string; track: { title?: string } }> = [];
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string) {
+          if (action === "shuffle") throw new Error("LMS refused shuffle");
+          return "ok";
+        },
+        async playTrack(_playerId: string, track: { title?: string }, action: string) {
+          played.push({ action, track });
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/next")
+      .expect(502);
+
+    expect(response.body.error).toContain("LMS refused shuffle");
+    expect(played).toHaveLength(0);
+    expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Generated A"]);
+  });
+
   it("manual play now stops generated shuffle instead of queueing unrelated tracks", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = { ...appState.playback, shuffle: true, smartQueue: false, smartShuffleSource: "spotify", repeat: "off", history: [] };

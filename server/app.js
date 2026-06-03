@@ -1338,7 +1338,7 @@ function addGeneratedQueueItem(track, mode = appState.playback.smartShuffleSourc
 
 async function playNextVisibleQueueItem(lms, playerId, { generatedOnly = false } = {}) {
   if (appState.playback.smartQueue || appState.playback.shuffle) {
-    lms.control(playerId, "shuffle", false).catch(() => null);
+    await lms.control(playerId, "shuffle", false);
   }
   await topOffGeneratedQueue(lms, playerId);
   const next = nextQueueItemForPlayback(appState.queue, { generatedOnly });
