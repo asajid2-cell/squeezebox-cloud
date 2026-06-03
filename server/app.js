@@ -242,6 +242,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(400).json({ error: "Invalid queue update", issues: parsed.error.issues });
       return;
     }
+    if (!publicRequestsOpen()) {
+      res.status(403).json({ error: publicRequestsClosedMessage(), queue: appState.queue });
+      return;
+    }
     const existing = appState.queue.find((item) => item.id === req.params.id);
     if (existing && isSpotifyQueueItem(existing)) {
       res.status(400).json({ error: "Spotify queue item metadata cannot be edited" });
@@ -256,6 +260,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
   }));
 
   app.delete("/api/queue/:id", (req, res) => withQueueMutationLock(async () => {
+    if (!publicRequestsOpen()) {
+      res.status(403).json({ error: publicRequestsClosedMessage(), queue: appState.queue });
+      return;
+    }
     const item = removeQueueItem(req.params.id);
     if (!item) {
       res.status(404).json({ error: "Queue item not found" });
@@ -265,6 +273,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
   }));
 
   app.delete("/api/queue", (_req, res) => withQueueMutationLock(async () => {
+    if (!publicRequestsOpen()) {
+      res.status(403).json({ error: publicRequestsClosedMessage(), queue: appState.queue, playback: appState.playback });
+      return;
+    }
     const removed = [];
     for (const item of [...appState.queue]) {
       const removedItem = removeQueueItem(item.id);
@@ -276,6 +288,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
   }));
 
   app.post("/api/queue/:id/move", (req, res) => withQueueMutationLock(async () => {
+    if (!publicRequestsOpen()) {
+      res.status(403).json({ error: publicRequestsClosedMessage(), queue: appState.queue });
+      return;
+    }
     const direction = req.body?.direction ?? req.body?.index;
     const item = moveQueueItem(req.params.id, direction);
     if (item === null) {

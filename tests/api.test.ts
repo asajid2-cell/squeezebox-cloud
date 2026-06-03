@@ -1019,6 +1019,12 @@ describe("Cloud Squeeze API", () => {
         .post("/api/player/tracks")
         .send({ action: "add-queue", tracks: [{ title: "Paused Batch", uri: "spotify:track:0000000000000000000010", kind: "track", source: "Spotify" }] })
         .expect(403);
+      const first = addQueueItem({ title: "Paused Existing A", artist: "Tester", path: "/music/test/paused-a.mp3", requestedBy: "guest" });
+      const second = addQueueItem({ title: "Paused Existing B", artist: "Tester", path: "/music/test/paused-b.mp3", requestedBy: "guest" });
+      await request(app).patch(`/api/queue/${first.id}`).send({ title: "Paused Edited" }).expect(403);
+      await request(app).post(`/api/queue/${second.id}/move`).send({ direction: "up" }).expect(403);
+      await request(app).delete(`/api/queue/${first.id}`).expect(403);
+      await request(app).delete("/api/queue").expect(403);
       await request(app).post("/api/player/smart-shuffle").send({ source: "local", count: 1 }).expect(403);
       await request(app)
         .post("/api/library/upload?filename=paused.mp3")
@@ -1027,7 +1033,7 @@ describe("Cloud Squeeze API", () => {
         .expect(403);
       await request(app).post("/api/player/playback").send({ repeat: "all" }).expect(403);
 
-      expect(appState.queue).toHaveLength(0);
+      expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Paused Existing A", "Paused Existing B"]);
       expect(appState.playback.repeat).toBe("off");
     } finally {
       appState.admin = previousAdmin;
