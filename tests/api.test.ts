@@ -269,7 +269,13 @@ describe("Cloud Squeeze API", () => {
   });
 
   it("rejects invalid volume values", async () => {
-    await request(createApp({ lms: mockLms })).post("/api/player/volume").send({ volume: "loud" }).expect(400);
+    const app = createApp({ lms: mockLms });
+
+    await request(app).post("/api/player/volume").send({ volume: "loud" }).expect(400);
+    await request(app).post("/api/player/volume").send({ volume: null }).expect(400);
+    await request(app).post("/api/player/volume").send({ volume: "" }).expect(400);
+    await request(app).post("/api/player/volume").send({ volume: false }).expect(400);
+    await request(app).post("/api/player/volume").send({ volume: [] }).expect(400);
   });
 
   it("does not mutate player mode when play pause or stop control fails", async () => {
@@ -417,7 +423,13 @@ describe("Cloud Squeeze API", () => {
   });
 
   it("rejects invalid seek values", async () => {
-    await request(createApp({ lms: mockLms })).post("/api/player/seek").send({ seconds: "later" }).expect(400);
+    const app = createApp({ lms: mockLms });
+
+    await request(app).post("/api/player/seek").send({ seconds: "later" }).expect(400);
+    await request(app).post("/api/player/seek").send({ seconds: null }).expect(400);
+    await request(app).post("/api/player/seek").send({ seconds: "" }).expect(400);
+    await request(app).post("/api/player/seek").send({ seconds: false }).expect(400);
+    await request(app).post("/api/player/seek").send({ seconds: [] }).expect(400);
   });
 
   it("does not restart the current track when previous has no app history", async () => {

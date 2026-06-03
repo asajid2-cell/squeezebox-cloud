@@ -52,11 +52,11 @@ const queueUpdateSchema = z.object({
 }).strict();
 
 const volumeSchema = z.object({
-  volume: z.coerce.number().finite()
+  volume: z.number().finite()
 });
 
 const seekSchema = z.object({
-  seconds: z.coerce.number().finite()
+  seconds: z.number().finite()
 });
 
 const playbackSchema = z.object({
