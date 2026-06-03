@@ -1923,9 +1923,11 @@ describe("Cloud Squeeze API", () => {
     const app = createApp({ lms: mockLms });
     try {
       await fs.writeFile(path.join(root, "Artist - One.mp3"), "ID3");
+      await request(app).post("/api/library/rescan").expect(401);
+      const login = await request(app).post("/api/admin/login").send({ password: "admin" }).expect(200);
       const [first, second] = await Promise.all([
-        request(app).post("/api/library/rescan").expect(200),
-        request(app).post("/api/library/rescan").expect(200)
+        request(app).post("/api/library/rescan").set("Authorization", `Bearer ${login.body.token}`).expect(200),
+        request(app).post("/api/library/rescan").set("Authorization", `Bearer ${login.body.token}`).expect(200)
       ]);
 
       expect(first.body.trackCount).toBe(second.body.trackCount);

@@ -288,6 +288,6 @@ export async function checkMusicInfo() {
 }
 
 export async function rescanLibrary() {
-  const response = await fetch(`${apiBase}/library/rescan`, { method: "POST" });
-  return response.json();
+  const response = await fetch(`${apiBase}/library/rescan`, { method: "POST", headers: adminAuthHeader() });
+  return responseJson(response, "Library rescan failed");
 }

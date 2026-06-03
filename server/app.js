@@ -571,7 +571,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
     });
   });
 
-  app.post("/api/library/rescan", async (_req, res) => {
+  app.post("/api/library/rescan", requireAdmin, async (_req, res) => {
     const result = await rescanLibraryOnce();
     res.json(result);
   });

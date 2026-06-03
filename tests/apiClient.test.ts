@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchState, playTrack, playTracks, playerAction, postQueue, resetApiClientStateForTests, savePlayback, searchSpotify, seekPlayer, setPlayerVolume } from "../src/lib/api";
+import { fetchState, playTrack, playTracks, playerAction, postQueue, rescanLibrary, resetApiClientStateForTests, savePlayback, searchSpotify, seekPlayer, setPlayerVolume } from "../src/lib/api";
 
 function mockJsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -11,6 +11,7 @@ function mockJsonResponse(status: number, body: unknown) {
 describe("API client mutating requests", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    window.localStorage.clear();
     resetApiClientStateForTests();
   });
 
@@ -83,5 +84,18 @@ describe("API client mutating requests", () => {
 
     await expect(setPlayerVolume(30)).rejects.toThrow("LMS refused control");
     await expect(seekPlayer(42)).rejects.toThrow("LMS refused control");
+  });
+
+  it("sends admin auth when rescanning the local library", async () => {
+    window.localStorage.setItem("cloud-squeeze-admin-token", "test-token");
+    const fetchMock = vi.fn(async () => mockJsonResponse(200, { ok: true, trackCount: 12 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(rescanLibrary()).resolves.toMatchObject({ ok: true, trackCount: 12 });
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/library/rescan", {
+      method: "POST",
+      headers: { Authorization: "Bearer test-token" }
+    });
   });
 });
