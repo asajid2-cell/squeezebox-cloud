@@ -715,7 +715,6 @@ export function createApp({ lms = new LmsClient() } = {}) {
       }
       if (body.repeat) {
         next.repeat = body.repeat;
-        lms.control(playerId, "repeat", body.repeat).catch(() => null);
       }
       if (body.smartShuffleSource) {
         next.smartShuffleSource = body.smartShuffleSource;
@@ -743,11 +742,16 @@ export function createApp({ lms = new LmsClient() } = {}) {
         return;
       }
       const queueModeChanged = sourceChanged || shuffleChanged || smartQueueChanged;
+      if (body.repeat) {
+        await lms.control(playerId, "repeat", body.repeat);
+      }
+      if (queueModeChanged) {
+        await lms.control(playerId, "shuffle", false);
+      }
       if (queueModeChanged && (next.smartQueue === false || next.shuffle === false || next.shuffle === true || sourceChanged)) {
         removeGeneratedQueueItems();
       }
       updatePlayback(next);
-      lms.control(playerId, "shuffle", false).catch(() => null);
       let queued = [];
       if (queueModeChanged && appState.playback.smartQueue) {
         queued = await activateGeneratedQueue(lms, playerId, { smart: true, mode: appState.playback.smartShuffleSource });

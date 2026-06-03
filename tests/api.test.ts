@@ -1265,6 +1265,63 @@ describe("Cloud Squeeze API", () => {
     }
   });
 
+  it("does not mutate repeat when LMS repeat control fails", async () => {
+    appState.playback = { ...appState.playback, repeat: "off", shuffle: false, smartQueue: false };
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string) {
+          if (action === "repeat") throw new Error("LMS refused repeat");
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/playback")
+      .send({ repeat: "all" })
+      .expect(502);
+
+    expect(response.body.error).toContain("LMS refused repeat");
+    expect(response.body.playback.repeat).toBe("off");
+    expect(appState.playback.repeat).toBe("off");
+  });
+
+  it("does not mutate queue mode or generated rows when LMS shuffle disable fails", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = {
+      ...appState.playback,
+      shuffle: false,
+      smartQueue: false,
+      repeat: "off",
+      lastShuffleRefillAt: 12345,
+      lastShuffleSeed: "stable-seed",
+      lastSmartQueueBase: "stable-base"
+    };
+    addQueueItem({ title: "Generated Existing", artist: "Tester", requestedBy: "shuffle", uri: "spotify:track:generated-existing" });
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string) {
+          if (action === "shuffle") throw new Error("LMS refused shuffle");
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/playback")
+      .send({ shuffle: true, smartQueue: false })
+      .expect(502);
+
+    expect(response.body.error).toContain("LMS refused shuffle");
+    expect(response.body.playback).toMatchObject({
+      shuffle: false,
+      smartQueue: false,
+      repeat: "off",
+      lastShuffleRefillAt: 12345,
+      lastShuffleSeed: "stable-seed",
+      lastSmartQueueBase: "stable-base"
+    });
+    expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Generated Existing"]);
+  });
+
   it("rejects malformed playback settings instead of silently ignoring them", async () => {
     const response = await request(createApp({ lms: mockLms }))
       .post("/api/player/playback")
