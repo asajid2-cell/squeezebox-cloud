@@ -74,19 +74,42 @@ describe("Cloud Squeeze API", () => {
   it("prewarms the Spotify library tabs exposed in the UI during state refresh", async () => {
     resetRefreshStateForTests();
     const calls: string[] = [];
+    const childCalls: Array<{ title?: string; uri?: string }> = [];
     const app = createApp({
       lms: {
         ...mockLms,
         async spotifyLibrary(_playerId: string, type: string) {
           calls.push(type);
+          if (type === "playlists") {
+            return [
+              { title: "First Playlist", uri: "spotify:playlist:first", kind: "playlist", browseId: "8.0" },
+              { title: "Second Playlist", uri: "spotify:playlist:second", kind: "playlist", browseId: "8.1" }
+            ];
+          }
+          if (type === "home") {
+            return [
+              { title: "First Playlist Duplicate", uri: "spotify:playlist:first", kind: "playlist", browseId: "0.0" },
+              { title: "Daily Mix", uri: "spotify:playlist:daily", kind: "playlist", browseId: "0.1" }
+            ];
+          }
+          return [];
+        },
+        async spotifyChildren(_playerId: string, item: { title?: string; uri?: string }) {
+          childCalls.push(item);
           return [];
         }
       }
     });
 
     await request(app).get("/api/state").expect(200);
+    await vi.waitFor(() => expect(childCalls).toHaveLength(3));
 
     expect(calls).toEqual(expect.arrayContaining(["playlists", "home", "artists", "tracks"]));
+    expect(childCalls.map((item) => item.uri)).toEqual([
+      "spotify:playlist:first",
+      "spotify:playlist:second",
+      "spotify:playlist:daily"
+    ]);
   });
 
   it("adds queue items and rejects duplicates", async () => {
