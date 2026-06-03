@@ -155,7 +155,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
     res.json({ ok: true, service: "cloud-squeeze" });
   });
 
-  app.get("/api/debug/logs", (req, res) => {
+  app.get("/api/debug/logs", requireAdmin, (req, res) => {
     const limit = Math.max(1, Math.min(500, Number(req.query.limit) || 120));
     res.json({ events: debugLog.slice(-limit) });
   });

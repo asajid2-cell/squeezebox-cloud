@@ -2067,16 +2067,22 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.queue).not.toEqual(expect.arrayContaining([expect.objectContaining({ requestedBy: "smart shuffle" })]));
   });
 
-  it("exposes recent queue and playback debug events", async () => {
+  it("requires admin access for recent queue and playback debug events", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "spotify", history: [] };
     const app = createApp({ lms: mockLms });
+
+    await request(app).get("/api/debug/logs?limit=10").expect(401);
+    const login = await request(app).post("/api/admin/login").send({ password: "admin" }).expect(200);
 
     await request(app)
       .post("/api/player/playback")
       .send({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" })
       .expect(200);
-    const logs = await request(app).get("/api/debug/logs?limit=10").expect(200);
+    const logs = await request(app)
+      .get("/api/debug/logs?limit=10")
+      .set("Authorization", `Bearer ${login.body.token}`)
+      .expect(200);
 
     expect(logs.body.events).toEqual(
       expect.arrayContaining([
