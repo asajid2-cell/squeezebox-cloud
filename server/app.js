@@ -398,7 +398,12 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(400).json({ error: "Library source must be all, local, or uploaded" });
       return;
     }
-    res.json({ results: await searchLibrary(String(req.query.q || ""), undefined, req.query.limit || 100, source) });
+    const limit = parseBoundedIntegerParam(req.query.limit, { defaultValue: 100, min: 1, max: 500 });
+    if (limit === null) {
+      res.status(400).json({ error: "Library search limit must be a positive integer up to 500" });
+      return;
+    }
+    res.json({ results: await searchLibrary(String(req.query.q || ""), undefined, limit, source) });
   });
 
   app.get("/api/spotify/search", async (req, res) => {
@@ -408,7 +413,12 @@ export function createApp({ lms = new LmsClient() } = {}) {
         return;
       }
       const playerId = await hotPlayerId(lms);
-      const results = await lms.spotifySearch(playerId, String(req.query.q || ""), req.query.limit || 20);
+      const limit = parseBoundedIntegerParam(req.query.limit, { defaultValue: 20, min: 1, max: 50 });
+      if (limit === null) {
+        res.status(400).json({ error: "Spotify search limit must be a positive integer up to 50", results: [] });
+        return;
+      }
+      const results = await lms.spotifySearch(playerId, String(req.query.q || ""), limit);
       rememberKnownSpotifyTracks(results);
       res.json({ results });
     } catch (error) {
@@ -428,8 +438,16 @@ export function createApp({ lms = new LmsClient() } = {}) {
         res.status(400).json({ error: "Spotify library type must be playlists, albums, artists, tracks, or home", results: [] });
         return;
       }
-      const limit = req.query.limit || 50;
-      const offset = req.query.offset || 0;
+      const limit = parseBoundedIntegerParam(req.query.limit, { defaultValue: 50, min: 1, max: 100 });
+      const offset = parseBoundedIntegerParam(req.query.offset, { defaultValue: 0, min: 0, max: 10000 });
+      if (limit === null) {
+        res.status(400).json({ error: "Spotify library limit must be a positive integer up to 100", results: [] });
+        return;
+      }
+      if (offset === null) {
+        res.status(400).json({ error: "Spotify library offset must be a non-negative integer", results: [] });
+        return;
+      }
       const results = await lms.spotifyLibrary(playerId, type, limit, offset);
       rememberKnownSpotifyTracks(results);
       res.json({
@@ -462,11 +480,21 @@ export function createApp({ lms = new LmsClient() } = {}) {
         res.status(400).json({ error: "Spotify track children require a Spotify track URI", results: [] });
         return;
       }
+      const limit = parseBoundedIntegerParam(req.query.limit, { defaultValue: 200, min: 1, max: 300 });
+      const offset = parseBoundedIntegerParam(req.query.offset, { defaultValue: 0, min: 0, max: 10000 });
+      if (limit === null) {
+        res.status(400).json({ error: "Spotify child limit must be a positive integer up to 300", results: [] });
+        return;
+      }
+      if (offset === null) {
+        res.status(400).json({ error: "Spotify child offset must be a non-negative integer", results: [] });
+        return;
+      }
       const results = await lms.spotifyChildren(
         playerId,
         { browseId, uri, kind },
-        req.query.limit || 200,
-        req.query.offset || 0
+        limit,
+        offset
       );
       rememberKnownSpotifyTracks(results);
       res.json({ results });
@@ -496,12 +524,17 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(400).json({ error: "Collection or folder is required" });
       return;
     }
+    const limit = parseBoundedIntegerParam(req.query.limit, { defaultValue: 1000, min: 1, max: 2000 });
+    if (limit === null) {
+      res.status(400).json({ error: "Library collection limit must be a positive integer up to 2000" });
+      return;
+    }
     res.json({
       results: await getCollectionTracks({
         collection,
         folder,
         source,
-        limit: req.query.limit || 1000
+        limit
       })
     });
   });
@@ -1092,6 +1125,15 @@ async function checkUrl(url) {
 function parseLibrarySource(value) {
   const source = String(value || "all").toLowerCase();
   return ["all", "local", "uploaded"].includes(source) ? source : null;
+}
+
+function parseBoundedIntegerParam(value, { defaultValue, min, max }) {
+  if (value === undefined || value === null || value === "") return defaultValue;
+  const text = String(value).trim();
+  if (!/^\d+$/.test(text)) return null;
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) return null;
+  return parsed;
 }
 
 function parseByteRange(value, size) {

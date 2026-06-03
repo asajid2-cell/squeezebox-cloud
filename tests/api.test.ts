@@ -1196,6 +1196,10 @@ describe("Cloud Squeeze API", () => {
     const calls: string[] = [];
     const lms = {
       ...mockLms,
+      async spotifySearch() {
+        calls.push("search");
+        return [];
+      },
       async spotifyLibrary() {
         calls.push("library");
         return [];
@@ -1208,9 +1212,15 @@ describe("Cloud Squeeze API", () => {
     const app = createApp({ lms });
 
     await request(app).get("/api/spotify/library?type=bad").expect(400);
+    await request(app).get("/api/spotify/search?q=drake&limit=0").expect(400);
+    await request(app).get("/api/spotify/search?q=drake&limit=51").expect(400);
+    await request(app).get("/api/spotify/library?type=playlists&limit=0").expect(400);
+    await request(app).get("/api/spotify/library?type=playlists&offset=-1").expect(400);
     await request(app).get("/api/spotify/children?kind=bad&uri=spotify%3Aplaylist%3A1").expect(400);
     await request(app).get("/api/spotify/children?kind=playlist").expect(400);
     await request(app).get("/api/spotify/children?kind=track&uri=spotify%3Aplaylist%3A1").expect(400);
+    await request(app).get("/api/spotify/children?kind=playlist&uri=spotify%3Aplaylist%3A1&limit=0").expect(400);
+    await request(app).get("/api/spotify/children?kind=playlist&uri=spotify%3Aplaylist%3A1&offset=-1").expect(400);
 
     expect(calls).toEqual([]);
   });
@@ -1343,6 +1353,9 @@ describe("Cloud Squeeze API", () => {
       await request(app).get("/api/library/collection?source=bad").expect(400);
       const blankCollection = await request(app).get("/api/library/collection?source=all").expect(400);
       expect(blankCollection.body.error).toContain("Collection or folder");
+      await request(app).get("/api/library/search?source=local&limit=0").expect(400);
+      await request(app).get("/api/library/search?source=local&limit=-1").expect(400);
+      await request(app).get("/api/library/collection?source=local&collection=uploads&limit=0").expect(400);
 
       const encodedPath = Buffer.from(uploaded.body.track.path).toString("base64url");
       const stream = await request(app).get(`/api/stream/${encodedPath}`).expect(200);
