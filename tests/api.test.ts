@@ -1517,6 +1517,18 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.error).toBe("Invalid playback settings");
   });
 
+  it("rejects empty playback updates instead of returning a no-op success", async () => {
+    await request(createApp({ lms: mockLms }))
+      .post("/api/player/playback")
+      .send({})
+      .expect(400);
+    await request(createApp({ lms: mockLms }))
+      .post("/api/player/playback")
+      .set("content-type", "text/plain")
+      .send("shuffle=true")
+      .expect(400);
+  });
+
   it("regular shuffle randomizes only the visible queue", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "spotify", history: [] };

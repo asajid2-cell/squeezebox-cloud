@@ -64,7 +64,10 @@ const playbackSchema = z.object({
   smartQueue: z.boolean().optional(),
   repeat: z.enum(["off", "one", "all"]).optional(),
   smartShuffleSource: z.enum(["mixed", "spotify", "local"]).optional()
-}).strict();
+}).strict().refine(
+  (value) => Object.values(value).some((item) => item !== undefined),
+  { message: "At least one playback setting is required" }
+);
 
 const loginSchema = z.object({
   password: z.string().min(1)
