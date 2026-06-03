@@ -799,6 +799,18 @@ describe("LMS client parsing", () => {
     ]);
   });
 
+  it("waits for cold artist search fallback instead of returning a false empty page", async () => {
+    const client = new LmsClient();
+    client.spotifySearch = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 2300));
+      return [{ title: "Slow Artist Song", artist: "Ado", uri: "spotify:track:slow-artist-song", kind: "track" }];
+    };
+
+    const results = await client.spotifyChildren("player-1", { browseId: "7.0", kind: "artist", title: "Ado" }, 10, 0);
+
+    expect(results).toEqual([expect.objectContaining({ title: "Slow Artist Song", artist: "Ado", kind: "track" })]);
+  });
+
   it("serves smaller Spotify children requests through a wider cached page", async () => {
     const requests: unknown[] = [];
     const client = new LmsClient();

@@ -392,8 +392,9 @@ export class LmsClient {
         .find((results) => results && (results.length === 0 || results.length >= count))?.slice(0, count) ||
       [];
     const widerInflight = widerKeys.map((key) => this.inflight.get(key)).find(Boolean);
+    const coldDeadline = kind === "artist" && fallbackTitle ? spotifyColdBrowseDeadlineMs : spotifyChildrenColdBrowseDeadlineMs;
     if (widerInflight) {
-      const deadline = stale.length > 0 ? spotifyBrowseDeadlineMs : spotifyChildrenColdBrowseDeadlineMs;
+      const deadline = stale.length > 0 ? spotifyBrowseDeadlineMs : coldDeadline;
       return (await withDeadline(widerInflight.then((results) => results.slice(0, count)), deadline, stale)) || [];
     }
     const candidates = [browseId, uri].filter(Boolean);
@@ -428,7 +429,7 @@ export class LmsClient {
       this.setCached(requestKey, [], 30000);
       return [];
     });
-    const deadline = stale.length > 0 ? spotifyBrowseDeadlineMs : spotifyChildrenColdBrowseDeadlineMs;
+    const deadline = stale.length > 0 ? spotifyBrowseDeadlineMs : coldDeadline;
     const results = await withDeadline(request, deadline, stale);
     if (results?.length) return results.slice(0, count);
     if (uri && kind === "track" && isSpotifyTrackUri(uri)) return [{ id: uri, uri, title: "Spotify track", artist: "Spotify", source: "Spotify", kind: "track" }];
