@@ -400,7 +400,7 @@ export class LmsClient {
     if (uri && !candidates.includes(uri.replace(/^spotify:/, "spotify://"))) candidates.push(uri.replace(/^spotify:/, "spotify://"));
     const request = this.once(requestKey, async () => {
       if (kind === "artist" && fallbackTitle) {
-        const fallbackTracks = (await this.spotifySearch(playerId, fallbackTitle, Math.min(50, requestCount)).catch(() => []))
+        const fallbackTracks = (await this.spotifySearch(playerId, fallbackTitle, Math.min(20, count)).catch(() => []))
           .filter((track) => track.kind === "track" && String(track.uri || "").includes(":track:"));
         const matchingArtistTracks = normalizedFallbackTitle
           ? fallbackTracks.filter((track) => {
