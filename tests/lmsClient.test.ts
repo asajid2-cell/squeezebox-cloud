@@ -637,6 +637,31 @@ describe("LMS client parsing", () => {
     expect(requests).toBe(1);
   });
 
+  it("normalizes Spotify search whitespace before request and cache lookup", async () => {
+    const searches: string[] = [];
+    const client = new LmsClient();
+    client.jsonRequest = async (params: unknown) => {
+      const command = (params as [string, string[]])[1];
+      const search = command.find((item) => String(item).startsWith("search:"));
+      searches.push(String(search || ""));
+      return {
+        result: {
+          item_loop: Array.from({ length: 20 }, (_, index) => ({
+            text: `Weeknd Track ${index}\nArtist - Album`,
+            goAction: "playControl",
+            presetParams: { favorites_url: `spotify:track:weeknd${index}`, favorites_title: `Weeknd Track ${index} by Artist from Album` }
+          }))
+        }
+      };
+    };
+
+    const first = await client.spotifySearch("player-1", "the   weeknd", 10);
+    const second = await client.spotifySearch("player-1", "The Weeknd", 10);
+
+    expect(first.map((track) => track.uri)).toEqual(second.map((track) => track.uri));
+    expect(searches).toEqual(["search:the weeknd"]);
+  });
+
   it("serves concurrent Spotify searches from one in-flight request", async () => {
     let requests = 0;
     let release: (value: unknown) => void = () => {};

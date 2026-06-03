@@ -271,7 +271,7 @@ export class LmsClient {
   async spotifySearch(playerId, query, limit = 20) {
     if (!playerId || !String(query || "").trim()) return [];
     const count = Math.max(1, Math.min(50, Number(limit) || 20));
-    const search = String(query).trim();
+    const search = normalizeSearchQuery(query);
     const cacheKey = `spotifySearch:${playerId}:${search.toLowerCase()}:${count}`;
     const cached = this.getCached(cacheKey);
     if (cached) return cached;
@@ -649,6 +649,10 @@ function normalizedSpotifyUri(value) {
   return String(value || "")
     .replace(/^spotify:\/\/(playlist|album|artist|track):/i, "spotify:$1:")
     .toLowerCase();
+}
+
+function normalizeSearchQuery(value) {
+  return String(value || "").trim().replace(/\s+/g, " ");
 }
 
 function isIdleStatus(status) {
