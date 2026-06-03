@@ -1220,4 +1220,31 @@ describe("Cloud Squeeze API", () => {
       .send({ publicRequests: false })
       .expect(200);
   });
+
+  it("validates and sanitizes admin settings", async () => {
+    const previousAdmin = { ...appState.admin };
+    const app = createApp({ lms: mockLms });
+    const login = await request(app).post("/api/admin/login").send({ password: "admin" }).expect(200);
+    try {
+      await request(app)
+        .post("/api/admin/settings")
+        .set("Authorization", `Bearer ${login.body.token}`)
+        .send({ publicRequests: "false", maxQueuePerUser: "zero", scheduleEnabled: "yes", extra: true })
+        .expect(400);
+
+      appState.admin = { ...appState.admin, extra: { bad: true }, maxQueuePerUser: 99 } as typeof appState.admin & { extra: { bad: boolean } };
+
+      const response = await request(app)
+        .post("/api/admin/settings")
+        .set("Authorization", `Bearer ${login.body.token}`)
+        .send({ publicRequests: true, maxQueuePerUser: 25, moderation: "strict", scheduleEnabled: false })
+        .expect(200);
+
+      expect(response.body).toEqual({ publicRequests: true, maxQueuePerUser: 25, moderation: "strict", scheduleEnabled: false });
+      expect(response.body.extra).toBeUndefined();
+      expect(appState.admin).toEqual(response.body);
+    } finally {
+      appState.admin = previousAdmin;
+    }
+  });
 });

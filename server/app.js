@@ -65,6 +65,13 @@ const loginSchema = z.object({
   password: z.string().min(1)
 });
 
+const adminSettingsSchema = z.object({
+  publicRequests: z.boolean().optional(),
+  maxQueuePerUser: z.coerce.number().int().min(1).max(25).optional(),
+  moderation: z.enum(["off", "basic", "strict"]).optional(),
+  scheduleEnabled: z.boolean().optional()
+}).strict();
+
 const adminPassword = process.env.CLOUD_SQUEEZE_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD || "admin";
 const adminToken = process.env.CLOUD_SQUEEZE_ADMIN_TOKEN || "cloud-squeeze-admin";
 const serviceRefreshMs = 60000;
@@ -706,7 +713,12 @@ export function createApp({ lms = new LmsClient() } = {}) {
   });
 
   app.post("/api/admin/settings", requireAdmin, (req, res) => {
-    appState.admin = { ...appState.admin, ...req.body };
+    const parsed = adminSettingsSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid admin settings", issues: parsed.error.issues });
+      return;
+    }
+    appState.admin = sanitizeAdminSettings({ ...appState.admin, ...parsed.data });
     res.json(appState.admin);
   });
 
@@ -846,8 +858,23 @@ function publicRequestsClosedMessage() {
 }
 
 function guestQueueLimit() {
-  const limit = Number(appState.admin.maxQueuePerUser);
-  return Number.isFinite(limit) && limit > 0 ? limit : config.publicQueueMaxPerUser;
+  return guestQueueLimitFromValue(appState.admin.maxQueuePerUser);
+}
+
+function sanitizeAdminSettings(settings = appState.admin) {
+  return {
+    publicRequests: settings.publicRequests !== false,
+    maxQueuePerUser: guestQueueLimitFromValue(settings.maxQueuePerUser),
+    moderation: ["off", "basic", "strict"].includes(settings.moderation) ? settings.moderation : "basic",
+    scheduleEnabled: settings.scheduleEnabled !== false
+  };
+}
+
+function guestQueueLimitFromValue(value) {
+  const limit = Number(value);
+  const fallback = Number(config.publicQueueMaxPerUser);
+  const resolved = Number.isFinite(limit) && limit > 0 ? limit : fallback;
+  return Math.max(1, Math.min(25, Math.floor(resolved)));
 }
 
 function guestQueueCount() {
