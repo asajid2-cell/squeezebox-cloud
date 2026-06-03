@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { playTrack, playerAction, postQueue, savePlayback, seekPlayer, setPlayerVolume } from "../src/lib/api";
+import { fetchState, playTrack, playerAction, postQueue, resetApiClientStateForTests, savePlayback, seekPlayer, setPlayerVolume } from "../src/lib/api";
 
 function mockJsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -11,6 +11,31 @@ function mockJsonResponse(status: number, body: unknown) {
 describe("API client mutating requests", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    resetApiClientStateForTests();
+  });
+
+  it("deduplicates concurrent state fetches", async () => {
+    let requests = 0;
+    let release: (value?: unknown) => void = () => {};
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      requests += 1;
+      await gate;
+      return mockJsonResponse(200, { player: { mode: "stop" }, nowPlaying: { title: "No track playing" }, queue: [] });
+    }));
+
+    const first = fetchState();
+    const second = fetchState();
+    release();
+    const [firstState, secondState] = await Promise.all([first, second]);
+
+    expect(firstState).toBe(secondState);
+    expect(requests).toBe(1);
+
+    await fetchState();
+    expect(requests).toBe(2);
   });
 
   it("throws backend errors for failed transport controls", async () => {

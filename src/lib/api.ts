@@ -1,6 +1,7 @@
 import type { AppState, ConnectionGuide, LibraryCollection, Track } from "../types";
 
 const apiBase = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/api`;
+let stateRequest: Promise<AppState> | null = null;
 
 async function responseJson<T = any>(response: Response, fallbackMessage: string): Promise<T> {
   const data = await response.json().catch(() => ({}));
@@ -50,13 +51,23 @@ const fallbackState: AppState = {
 };
 
 export async function fetchState(): Promise<AppState> {
-  try {
-    const response = await fetch(`${apiBase}/state`);
-    if (!response.ok) throw new Error("State request failed");
-    return response.json();
-  } catch {
-    return fallbackState;
-  }
+  if (stateRequest) return stateRequest;
+  stateRequest = (async () => {
+    try {
+      const response = await fetch(`${apiBase}/state`);
+      if (!response.ok) throw new Error("State request failed");
+      return response.json();
+    } catch {
+      return fallbackState;
+    } finally {
+      stateRequest = null;
+    }
+  })();
+  return stateRequest;
+}
+
+export function resetApiClientStateForTests() {
+  stateRequest = null;
 }
 
 export async function searchLibrary(query: string, limit = 100, source = "all"): Promise<Track[]> {
@@ -67,10 +78,14 @@ export async function searchLibrary(query: string, limit = 100, source = "all"):
 }
 
 export async function searchSpotify(query: string, limit = 50): Promise<Track[]> {
-  const response = await fetch(`${apiBase}/spotify/search?q=${encodeURIComponent(query)}&limit=${limit}`);
-  if (!response.ok) return [];
-  const data = await response.json();
-  return data.results || [];
+  try {
+    const response = await fetch(`${apiBase}/spotify/search?q=${encodeURIComponent(query)}&limit=${limit}`);
+    if (!response.ok) return [];
+    const data = await response.json();
+    return data.results || [];
+  } catch {
+    return [];
+  }
 }
 
 export async function fetchSpotifyLibrary(type: "playlists" | "albums" | "artists" | "tracks" | "home", limit = 50): Promise<Track[]> {

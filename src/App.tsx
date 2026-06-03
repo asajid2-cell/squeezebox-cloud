@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle2,
   ChevronRight,
@@ -79,11 +79,11 @@ export default function App() {
   const [actionError, setActionError] = useState("");
   const isAdminRoute = window.location.pathname.replace(/\/$/, "").endsWith("/admin");
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     setState(await fetchState());
-  }
+  }, []);
 
-  async function runAction<T>(action: () => Promise<T>) {
+  const runAction = useCallback(async <T,>(action: () => Promise<T>) => {
     setActionError("");
     try {
       return await action();
@@ -91,18 +91,18 @@ export default function App() {
       setActionError(error instanceof Error ? error.message : "Action failed");
       return undefined;
     }
-  }
+  }, []);
 
   useEffect(() => {
     refresh();
-  }, []);
+  }, [refresh]);
 
   useEffect(() => {
     if (!state) return;
     const intervalMs = state.player.mode === "play" ? 900 : 2500;
     const timer = window.setInterval(refresh, intervalMs);
     return () => window.clearInterval(timer);
-  }, [state?.player.mode, state?.nowPlaying.id]);
+  }, [refresh, state?.player.mode, state?.nowPlaying.id]);
 
   useEffect(() => {
     let cancelled = false;
