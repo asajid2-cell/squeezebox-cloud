@@ -886,6 +886,57 @@ describe("Cloud Squeeze API", () => {
     expect(appState.queue.some((item) => item.title === "Visible Queue Song")).toBe(false);
   });
 
+  it("uses app history for previous after advancing through visible queued Spotify tracks", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
+    appState.nowPlaying = {
+      id: "idle",
+      title: "No track playing",
+      artist: "Connect a player or request a song",
+      album: "",
+      source: "LMS",
+      duration: 0,
+      elapsed: 0,
+      canSeek: false,
+      art: null
+    };
+    appState.playback = { ...appState.playback, previousTracks: [], shuffle: false, smartQueue: false };
+    addQueueItem({ title: "Playlist One", artist: "Tester", uri: "spotify:track:0000000000000000000001", source: "Spotify", requestedBy: "guest" });
+    addQueueItem({ title: "Playlist Two", artist: "Tester", uri: "spotify:track:0000000000000000000002", source: "Spotify", requestedBy: "guest" });
+    const played: Array<{ action: string; track: { title?: string; uri?: string } }> = [];
+    const controls: Array<{ action: string }> = [];
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string; uri?: string }, action: string) {
+        played.push({ action, track });
+        return "ok";
+      },
+      async nowPlaying() {
+        return appState.nowPlaying;
+      },
+      async control(_playerId: string, action: string) {
+        controls.push({ action });
+        return "ok";
+      }
+    };
+    const app = createApp({ lms });
+
+    const first = await request(app).post("/api/player/next").expect(200);
+    const second = await request(app).post("/api/player/next").expect(200);
+    const previous = await request(app).post("/api/player/previous").expect(200);
+
+    expect(first.body.nowPlaying).toMatchObject({ title: "Playlist One", uri: "spotify:track:0000000000000000000001" });
+    expect(second.body.nowPlaying).toMatchObject({ title: "Playlist Two", uri: "spotify:track:0000000000000000000002" });
+    expect(previous.body.action).toBe("app-previous");
+    expect(previous.body.nowPlaying).toMatchObject({ title: "Playlist One", uri: "spotify:track:0000000000000000000001" });
+    expect(played).toEqual([
+      { action: "play-now", track: expect.objectContaining({ title: "Playlist One", uri: "spotify:track:0000000000000000000001" }) },
+      { action: "play-now", track: expect.objectContaining({ title: "Playlist Two", uri: "spotify:track:0000000000000000000002" }) },
+      { action: "play-now", track: expect.objectContaining({ title: "Playlist One", uri: "spotify:track:0000000000000000000001" }) }
+    ]);
+    expect(controls).not.toContainEqual({ action: "previous" });
+  });
+
   it("keeps queued tracks visible when next playback fails", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.nowPlaying = {

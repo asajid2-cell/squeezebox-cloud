@@ -1427,6 +1427,8 @@ async function playQueuedItem(lms, playerId, item) {
   rememberShuffleTrack(item);
   markPendingPlayback(item);
   removeQueueItem(item.id);
+  setMode("play");
+  updateNowPlaying(optimisticTrack(item));
   logEvent("queue.play-item", { item: trackSummary(item), queueAfterRemove: queueSummary(), playback: appState.playback });
   return item;
 }
