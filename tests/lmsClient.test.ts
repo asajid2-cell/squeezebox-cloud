@@ -511,9 +511,65 @@ describe("LMS client parsing", () => {
 
     const results = await client.spotifySearch("player-1", "drake", 10);
 
-    expect(requests).toContainEqual(["player-1", ["spotty", "items", 0, 10, "menu:spotty", "item_id:1.0", "search:drake", "cachesearch:1"]]);
+    expect(requests).toContainEqual(["player-1", ["spotty", "items", 0, 20, "menu:spotty", "item_id:1.0", "search:drake", "cachesearch:1"]]);
     expect(results.map((result) => result.kind)).toEqual(expect.arrayContaining(["track", "artist", "album", "playlist"]));
     expect(results.find((result) => result.kind === "album")).toMatchObject({ title: "Take Care", artist: "Drake" });
+  });
+
+  it("widens small Spotify searches so the returned page can include playable tracks", async () => {
+    const requests: unknown[] = [];
+    const client = new LmsClient();
+    client.jsonRequest = async (params: unknown) => {
+      requests.push(params);
+      return {
+        result: {
+          item_loop: [
+            { text: "Artists", actions: { go: { params: { item_id: "1.0_drake.0" } } } },
+            { text: "Albums", actions: { go: { params: { item_id: "1.0_drake.1" } } } },
+            { text: "Playlists", actions: { go: { params: { item_id: "1.0_drake.2" } } } },
+            {
+              text: "Headlines\nDrake â€¢ Take Care",
+              goAction: "playControl",
+              presetParams: { favorites_url: "spotify:track:track1", favorites_title: "Headlines by Drake from Take Care" }
+            },
+            {
+              text: "Passionfruit\nDrake â€¢ More Life",
+              goAction: "playControl",
+              presetParams: { favorites_url: "spotify:track:track2", favorites_title: "Passionfruit by Drake from More Life" }
+            }
+          ]
+        }
+      };
+    };
+
+    const results = await client.spotifySearch("player-1", "drake", 5);
+
+    expect(requests[0]).toEqual(["player-1", ["spotty", "items", 0, 20, "menu:spotty", "item_id:1.0", "search:drake", "cachesearch:1"]]);
+    expect(results.map((result) => result.kind)).toEqual(["track", "track"]);
+  });
+
+  it("reuses widened Spotify search cache for nearby small limits", async () => {
+    let requests = 0;
+    const client = new LmsClient();
+    client.jsonRequest = async () => {
+      requests += 1;
+      return {
+        result: {
+          item_loop: Array.from({ length: 8 }, (_, index) => ({
+            text: `Track ${index}\nArtist â€¢ Album`,
+            goAction: "playControl",
+            presetParams: { favorites_url: `spotify:track:track${index}`, favorites_title: `Track ${index} by Artist from Album` }
+          }))
+        }
+      };
+    };
+
+    const first = await client.spotifySearch("player-1", "drake", 5);
+    const second = await client.spotifySearch("player-1", "drake", 8);
+
+    expect(first).toHaveLength(5);
+    expect(second).toHaveLength(8);
+    expect(requests).toBe(1);
   });
 
   it("does not cache empty Spotify search pages", async () => {
