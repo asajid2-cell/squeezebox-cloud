@@ -312,7 +312,9 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(409).json({ error: "That song is already in the queue" });
       return;
     }
-    res.status(201).json(addQueueItem({ ...canonicalTrack, requestedBy: "guest" }));
+    const queued = addQueueItem({ ...canonicalTrack, requestedBy: "guest" });
+    markQueueManagedPlayback();
+    res.status(201).json(queued);
   }));
 
   app.patch("/api/queue/:id", (req, res) => withQueueMutationLock(async () => {
@@ -431,6 +433,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
           return;
         }
         queued = addQueueItem({ ...track, requestedBy: "guest" });
+        markQueueManagedPlayback();
         logEvent("queue.add", { action, queued: trackSummary(queued), queue: queueSummary() });
       } else if (action === "play-next") {
         if (queuedTrackInputExists(track)) {
@@ -446,6 +449,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
           return;
         }
         queued = addQueueItemNext({ ...track, requestedBy: "guest" });
+        markQueueManagedPlayback();
         logEvent("queue.add-next", { action, queued: trackSummary(queued), queue: queueSummary() });
       } else {
         if (!(await trackInputsExistOnDisk([track]))) {
@@ -518,6 +522,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
         : addQueueItem({ ...track, requestedBy: "guest" });
       queued.push(item);
     }
+    if (queued.length > 0) markQueueManagedPlayback();
     if (action === "play-next") queued.reverse();
     const rejected = Math.max(0, playable.length - queued.length);
     logEvent("queue.batch", { action, count: queued.length, requested: playable.length, deduped: uniquePlayable.length, rejected, queued: queued.map(trackSummary), queue: queueSummary() });
@@ -1431,6 +1436,12 @@ function publicRequestsClosedMessage() {
   return appState.admin.publicRequests === false
     ? "Public requests are paused"
     : "Public requests are paused for the current schedule";
+}
+
+function markQueueManagedPlayback() {
+  if (appState.player.mode !== "play") return;
+  if (!isTrackInfoCandidate(appState.nowPlaying)) return;
+  updatePlayback({ appManagedPlayback: true });
 }
 
 function guestQueueLimit() {

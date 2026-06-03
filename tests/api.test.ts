@@ -187,6 +187,72 @@ describe("Cloud Squeeze API", () => {
     await request(app).post("/api/queue").send(payload).expect(409);
   });
 
+  it("keeps manually queued songs advancing after the current playing track ends", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "player-1", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = {
+      id: "current-track",
+      title: "Current Track",
+      artist: "Tester",
+      album: "",
+      source: "LMS",
+      duration: 100,
+      elapsed: 20,
+      canSeek: true,
+      art: null,
+      path: "/music/test/current-track.mp3"
+    };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, appManagedPlayback: false, previousTracks: [] };
+    const played: Array<{ title?: string; path?: string }> = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async playTrack(_playerId: string, track: { title?: string; path?: string }) {
+          played.push(track);
+          return "ok";
+        },
+        async nowPlaying() {
+          return {
+            id: "current-track",
+            title: "Current Track",
+            artist: "Tester",
+            album: "",
+            source: "LMS",
+            duration: 100,
+            elapsed: 100,
+            canSeek: true,
+            art: null,
+            path: "/music/test/current-track.mp3"
+          };
+        }
+      }
+    });
+
+    await request(app)
+      .post("/api/queue")
+      .send({ title: "Queued After Current", artist: "Tester", path: "/music/test/queued-after-current.mp3" })
+      .expect(201);
+
+    expect(appState.playback.appManagedPlayback).toBe(true);
+
+    await maintainVisiblePlaybackQueueForTests(
+      {
+        ...mockLms,
+        async playTrack(_playerId: string, track: { title?: string; path?: string }) {
+          played.push(track);
+          return "ok";
+        }
+      },
+      { id: "player-1", mode: "stopped" },
+      appState.nowPlaying
+    );
+
+    expect(played).toEqual([expect.objectContaining({ title: "Queued After Current" })]);
+    expect(appState.queue).toEqual([]);
+    expect(appState.nowPlaying.title).toBe("Queued After Current");
+    expect(appState.playback.previousTracks[0]).toMatchObject({ title: "Current Track" });
+  });
+
   it("deduplicates direct queue posts by playable key instead of title", async () => {
     appState.queue.splice(0, appState.queue.length);
     const app = createApp({ lms: mockLms });
