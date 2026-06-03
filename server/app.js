@@ -1467,7 +1467,7 @@ function markQueueManagedPlayback() {
 function restoreCurrentTrackAfterPrevious(track) {
   if (!appState.playback.appManagedPlayback) return null;
   if (!isRestorablePreviousTrack(track)) return null;
-  const item = restorableTrack(track);
+  const item = richRestorableTrack(track);
   if (queuedTrackInputExists(item)) return null;
   return addQueueItemNext({ ...item, requestedBy: "guest" });
 }
@@ -2344,7 +2344,7 @@ function rememberPreviousTrack(track) {
   if (!isRestorablePreviousTrack(track)) return;
   const key = trackKey(track);
   const previousTracks = [
-    restorableTrack(track),
+    richRestorableTrack(track),
     ...(appState.playback.previousTracks || []).filter((item) => trackKey(item) !== key)
   ].slice(0, 20);
   updatePlayback({ previousTracks });
@@ -2380,6 +2380,20 @@ function restorableTrack(track) {
     lmsTrackId: track.lmsTrackId,
     kind: track.kind,
     uploaded: track.uploaded
+  };
+}
+
+function richRestorableTrack(track) {
+  const restorable = restorableTrack(track);
+  const known = lookupRecentPlaybackMetadata(restorable);
+  if (!known || !tracksSharePlaybackIdentity(restorable, known)) return restorable;
+  if (metadataQualityScore(known) < metadataQualityScore(restorable)) return restorable;
+  return {
+    ...restorable,
+    ...known,
+    duration: restorable.duration || known.duration,
+    elapsed: restorable.elapsed,
+    canSeek: restorable.canSeek
   };
 }
 

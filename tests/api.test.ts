@@ -2248,6 +2248,87 @@ describe("Cloud Squeeze API", () => {
     });
   });
 
+  it("restores rich uploaded metadata when previous requeues the forward track", async () => {
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = {
+      id: "current-upload",
+      title: "Shabang",
+      artist: "Drake",
+      album: "ICEMAN",
+      source: "Uploaded",
+      duration: 188,
+      elapsed: 15,
+      canSeek: true,
+      art: "https://covers.example/shabang.jpg",
+      path: "/music/uploads/Drake - Shabang.mp3"
+    };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, previousTracks: [], appManagedPlayback: true };
+    addQueueItem({
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      album: "Haha - Single",
+      source: "Uploaded",
+      path: "/music/uploads/Sleep Paralysis-Jackson Ivy.mp3",
+      art: "https://covers.example/sleep.jpg",
+      requestedBy: "guest"
+    });
+    const played: Array<{ action: string; title?: string; artist?: string; art?: string | null }> = [];
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string; artist?: string; art?: string | null }, action: string) {
+        played.push({ action, title: track.title, artist: track.artist, art: track.art });
+        return "ok";
+      }
+    };
+    const app = createApp({ lms });
+
+    const next = await request(app).post("/api/player/next").expect(200);
+    expect(next.body.nowPlaying).toMatchObject({
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      art: "https://covers.example/sleep.jpg"
+    });
+
+    appState.nowPlaying = {
+      id: "local-uploaded",
+      title: "Sleep Paralysis Jackson Ivy",
+      artist: "Uploaded",
+      album: "uploads",
+      source: "Uploaded",
+      path: "/music/uploads/Sleep Paralysis-Jackson Ivy.mp3",
+      duration: 158,
+      elapsed: 12,
+      canSeek: true,
+      art: null
+    };
+
+    const previous = await request(app).post("/api/player/previous").expect(200);
+
+    expect(previous.body.queue[0]).toMatchObject({
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      album: "Haha - Single",
+      art: "https://covers.example/sleep.jpg"
+    });
+    expect(previous.body.playback.previousTracks[0]).toMatchObject({
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      art: "https://covers.example/sleep.jpg"
+    });
+
+    const forward = await request(app).post("/api/player/next").expect(200);
+
+    expect(forward.body.nowPlaying).toMatchObject({
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      album: "Haha - Single",
+      art: "https://covers.example/sleep.jpg"
+    });
+    expect(played.map((item) => item.title)).toEqual(["Sleep Paralysis", "Shabang", "Sleep Paralysis"]);
+  });
+
   it("uses app history for previous after advancing through visible queued Spotify tracks", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
