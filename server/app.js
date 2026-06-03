@@ -2183,10 +2183,11 @@ function peekPreviousTrack() {
 }
 
 function isRestorablePreviousTrack(track) {
-  return Boolean(track?.title && track.id !== "idle" && (track.path || track.uri || track.lmsTrackId));
+  return Boolean(track?.title && track.id !== "idle" && (track.path || track.uri || track.lmsTrackId || spotifyTrackId(track)));
 }
 
 function restorableTrack(track) {
+  const uri = track.uri || spotifyTrackId(track);
   return {
     id: track.id,
     title: track.title,
@@ -2195,12 +2196,18 @@ function restorableTrack(track) {
     source: track.source,
     duration: track.duration,
     art: track.art,
-    uri: track.uri,
+    uri,
     path: track.path,
     lmsTrackId: track.lmsTrackId,
     kind: track.kind,
     uploaded: track.uploaded
   };
+}
+
+function spotifyTrackId(track) {
+  const id = String(track?.id || "");
+  const normalized = id.replace(/^spotify:\/\/track:/i, "spotify:track:");
+  return /^spotify:track:[a-z0-9]+$/i.test(normalized) ? normalized : "";
 }
 
 function sameTitleArtist(left, right) {

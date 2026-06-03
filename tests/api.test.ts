@@ -916,6 +916,60 @@ describe("Cloud Squeeze API", () => {
     expect(appState.playback.previousTracks[0]).toMatchObject({ title: "Track B", path: "/music/b.mp3" });
   });
 
+  it("remembers LMS-observed Spotify id-only tracks for the previous button", async () => {
+    appState.playback = { ...appState.playback, previousTracks: [] };
+    appState.nowPlaying = {
+      id: "idle",
+      title: "No track playing",
+      artist: "Connect a player or request a song",
+      album: "",
+      source: "LMS",
+      duration: 0,
+      elapsed: 0,
+      canSeek: false,
+      art: null
+    };
+    const observedTracks = [
+      { id: "spotify://track:29TPjc8wxfz4XMn21O7VsZ", title: "Sky", artist: "Playboi Carti", album: "", source: "Spotify", duration: 193, elapsed: 20, canSeek: true, art: null },
+      { id: "spotify://track:6IYcyuk3ob0NPmdAdURn1W", title: "Skyfull", artist: "Arjan Dhillon", album: "", source: "Spotify", duration: 200, elapsed: 3, canSeek: true, art: null }
+    ];
+    const played: Array<{ action: string; track: { title?: string; uri?: string } }> = [];
+    let nowPlayingIndex = 0;
+    const lms = {
+      ...mockLms,
+      async nowPlaying() {
+        return observedTracks[nowPlayingIndex];
+      },
+      async playTrack(_playerId: string, track: { title?: string; uri?: string }, action: string) {
+        played.push({ action, track });
+        return "ok";
+      }
+    };
+    const app = createApp({ lms });
+
+    resetRefreshStateForTests();
+    await request(app).get("/api/state").expect(200);
+    nowPlayingIndex = 1;
+    resetRefreshStateForTests();
+    const state = await request(app).get("/api/state").expect(200);
+
+    expect(state.body.nowPlaying.title).toBe("Skyfull");
+    expect(appState.playback.previousTracks[0]).toMatchObject({
+      title: "Sky",
+      uri: "spotify:track:29TPjc8wxfz4XMn21O7VsZ"
+    });
+
+    const previous = await request(app).post("/api/player/previous").expect(200);
+
+    expect(previous.body.action).toBe("app-previous");
+    expect(played).toEqual([
+      {
+        action: "play-now",
+        track: expect.objectContaining({ title: "Sky", uri: "spotify:track:29TPjc8wxfz4XMn21O7VsZ" })
+      }
+    ]);
+  });
+
   it("no-ops previous with the hot player id without waiting on a fresh status call", async () => {
     appState.playback = { ...appState.playback, previousTracks: [] };
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true };
