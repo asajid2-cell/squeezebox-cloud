@@ -1088,7 +1088,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       const queued = await activateGeneratedQueue(lms, status.id, { smart: true, mode, count, seed });
       await refreshLms(lms);
       logEvent("smart-shuffle.result", { queued: queued.map(trackSummary), queue: queueSummary(), playback: appState.playback });
-      res.json({ ok: true, mode, seed, queued, playback: appState.playback });
+      res.json({ ok: true, mode, seed, queued, queue: appState.queue, playback: appState.playback });
     } catch (error) {
       res.status(502).json({ error: error.message, queued: [] });
     }

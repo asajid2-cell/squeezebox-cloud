@@ -2903,6 +2903,7 @@ describe("Cloud Squeeze API", () => {
       .send({ source: "spotify", count: 1 })
       .expect(200);
     expect(response.body.queued[0].source).toBe("Spotify");
+    expect(response.body.queue[0].source).toBe("Spotify");
     expect(response.body.playback.smartQueue).toBe(true);
     expect(response.body.playback.smartShuffleSource).toBe("spotify");
     expect(played).toHaveLength(0);

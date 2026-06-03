@@ -72,6 +72,35 @@ const navItems = [
 type PublicScreenName = (typeof navItems)[number]["label"];
 type ActionRunner = <T>(action: () => Promise<T>) => Promise<T | undefined>;
 
+function mergeStateFromAction(previous: AppState | null, result: unknown): AppState | null {
+  if (!previous || !result || typeof result !== "object") return previous;
+  const payload = result as Partial<AppState> & { mode?: AppState["player"]["mode"] };
+  let changed = false;
+  const next = { ...previous };
+
+  if (payload.player && typeof payload.player === "object") {
+    next.player = { ...previous.player, ...payload.player };
+    changed = true;
+  } else if (payload.mode) {
+    next.player = { ...previous.player, mode: payload.mode };
+    changed = true;
+  }
+  if (payload.nowPlaying && typeof payload.nowPlaying === "object") {
+    next.nowPlaying = { ...previous.nowPlaying, ...payload.nowPlaying };
+    changed = true;
+  }
+  if (Array.isArray(payload.queue)) {
+    next.queue = payload.queue;
+    changed = true;
+  }
+  if (payload.playback && typeof payload.playback === "object") {
+    next.playback = { ...previous.playback, ...payload.playback };
+    changed = true;
+  }
+
+  return changed ? next : previous;
+}
+
 export default function App() {
   const [state, setState] = useState<AppState | null>(null);
   const [activeScreen, setActiveScreen] = useState<PublicScreenName>("Now Playing");
@@ -88,7 +117,9 @@ export default function App() {
   const runAction = useCallback(async <T,>(action: () => Promise<T>) => {
     setActionError("");
     try {
-      return await action();
+      const result = await action();
+      setState((previous) => mergeStateFromAction(previous, result));
+      return result;
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Action failed");
       return undefined;
