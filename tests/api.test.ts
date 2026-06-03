@@ -75,12 +75,12 @@ describe("Cloud Squeeze API", () => {
     resetRefreshStateForTests();
     const calls: string[] = [];
     const childCalls: Array<{ title?: string; uri?: string }> = [];
-    const searchCalls: string[] = [];
+    const searchCalls: Array<{ query: string; limit: number }> = [];
     const app = createApp({
       lms: {
         ...mockLms,
-        async spotifySearch(_playerId: string, query: string) {
-          searchCalls.push(query);
+        async spotifySearch(_playerId: string, query: string, limit: number) {
+          searchCalls.push({ query, limit });
           return [];
         },
         async spotifyLibrary(_playerId: string, type: string) {
@@ -115,7 +115,12 @@ describe("Cloud Squeeze API", () => {
 
     await request(app).get("/api/state").expect(200);
     await vi.waitFor(() => expect(childCalls).toHaveLength(5));
-    await vi.waitFor(() => expect(searchCalls).toEqual(expect.arrayContaining(["drake", "juice wrld", "the weeknd", "travis scott"])));
+    await vi.waitFor(() => expect(searchCalls).toEqual(expect.arrayContaining([
+      { query: "drake", limit: 50 },
+      { query: "juice wrld", limit: 50 },
+      { query: "the weeknd", limit: 50 },
+      { query: "travis scott", limit: 50 }
+    ])));
 
     expect(calls).toEqual(expect.arrayContaining(["playlists", "home", "artists", "tracks"]));
     expect(childCalls.map((item) => item.uri)).toEqual(expect.arrayContaining([

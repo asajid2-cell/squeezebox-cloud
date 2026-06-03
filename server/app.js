@@ -1566,7 +1566,7 @@ function prewarmSpotifyLibrary(lms, playerId) {
         20,
         0
       ).catch(() => [])),
-      ...spotifySearchPrewarmTerms.map((term) => lms.spotifySearch(playerId, term, 20).catch(() => []))
+      ...spotifySearchPrewarmTerms.map((term) => lms.spotifySearch(playerId, term, 50).catch(() => []))
     ]);
   })();
 }
