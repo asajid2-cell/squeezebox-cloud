@@ -21,6 +21,21 @@ describe("library scanner helpers", () => {
     expect(versioned.title).toBe("734 [v1]");
   });
 
+  it("prefers embedded tags for uploaded track display metadata", () => {
+    const track = fileToTrack("/music/uploads/Sleep Paralysis-Jackson Ivy.mp3", {
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      album: "Haha - Single"
+    });
+
+    expect(track).toMatchObject({
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      album: "Haha - Single",
+      source: "Uploaded"
+    });
+  });
+
   it("caches search results until library caches are cleared", async () => {
     clearLibraryCaches();
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-library-cache-"));

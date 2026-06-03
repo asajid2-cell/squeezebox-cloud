@@ -34,7 +34,10 @@ export async function scanLibrary(root = null, limit = 5000, source = "all", { u
       dot: true,
       deep: 8
     });
-    const tracks = files.sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).map(fileToTrack);
+    const sortedFiles = files.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    const tracks = isUploadRoot
+      ? await Promise.all(sortedFiles.map(uploadedFileToTrack))
+      : sortedFiles.map(fileToTrack);
     const status = { root, reachable: true, trackCount: files.length };
     scanCache.set(cacheKey, { tracks, status, createdAt: Date.now() });
     if (updateStatus) updateLibraryStatus(status);
@@ -110,17 +113,20 @@ export async function getCollectionTracks({ collection = "", folder = "", source
   return results;
 }
 
-export function fileToTrack(filePath) {
+export function fileToTrack(filePath, tags = {}) {
   const parsed = path.parse(filePath);
   const meta = pathMeta(filePath);
   const parts = parsed.name.split(/\s+-\s+| - /).filter(Boolean);
-  const artist = parts.length > 1 ? cleanName(parts[0]) : meta.artist || inferArtist(filePath);
-  const title = cleanName(parts.length > 1 ? parts.slice(1).join(" ") : parsed.name);
+  const taggedTitle = cleanTag(tags.title);
+  const taggedArtist = cleanTag(tags.artist);
+  const taggedAlbum = cleanTag(tags.album);
+  const artist = taggedArtist || (parts.length > 1 ? cleanName(parts[0]) : meta.artist || inferArtist(filePath));
+  const title = taggedTitle || cleanName(parts.length > 1 ? parts.slice(1).join(" ") : parsed.name);
   return {
     id: `local:${Buffer.from(filePath).toString("base64url")}`,
     title,
     artist,
-    album: meta.album || cleanName(path.basename(path.dirname(filePath))),
+    album: taggedAlbum || meta.album || cleanName(path.basename(path.dirname(filePath))),
     collection: meta.collection,
     folder: meta.folder,
     source: meta.uploaded ? "Uploaded" : "Local library",
@@ -128,6 +134,25 @@ export function fileToTrack(filePath) {
     duration: null,
     path: filePath
   };
+}
+
+async function uploadedFileToTrack(filePath) {
+  const tags = await readAudioTags(filePath).catch(() => ({}));
+  return fileToTrack(filePath, tags);
+}
+
+async function readAudioTags(filePath) {
+  const { stdout } = await execFileAsync("ffprobe", [
+    "-v",
+    "error",
+    "-show_entries",
+    "format_tags=title,artist,album",
+    "-of",
+    "json",
+    filePath
+  ], { timeout: 2500, windowsHide: true });
+  const parsed = JSON.parse(stdout || "{}");
+  return parsed?.format?.tags || {};
 }
 
 function pathMeta(filePath) {
@@ -291,6 +316,13 @@ function cleanName(value) {
   return String(value || "")
     .replace(/\.(mp3|flac|m4a|wav|ogg|aac)$/i, "")
     .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cleanTag(value) {
+  return String(value || "")
+    .replace(/\.(mp3|flac|m4a|wav|ogg|aac)$/i, "")
     .replace(/\s+/g, " ")
     .trim();
 }
