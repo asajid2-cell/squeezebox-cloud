@@ -1641,7 +1641,7 @@ export function syncVisibleQueueWithCurrentTrack(track) {
 
 export function shouldNudgePlayback(status, track, playback = appState.playback) {
   if (playback.repeat === "one") return false;
-  if (status.mode === "stop" || status.mode === "stopped") return playback.smartQueue || playback.shuffle;
+  if (status.mode === "stop" || status.mode === "stopped") return false;
   if (status.mode === "pause") return false;
   const duration = Number(track?.duration || 0);
   const elapsed = Number(track?.elapsed || 0);

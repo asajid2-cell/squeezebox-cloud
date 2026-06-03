@@ -1288,10 +1288,41 @@ describe("Cloud Squeeze API", () => {
     const idleTrack = { id: "idle", title: "No track playing", artist: "Connect a player or request a song", source: "LMS", duration: 0, elapsed: 0 };
 
     expect(shouldNudgePlayback({ mode: "stop" }, idleTrack, { repeat: "off", smartQueue: false, shuffle: false })).toBe(false);
-    expect(shouldNudgePlayback({ mode: "stopped" }, idleTrack, { repeat: "off", smartQueue: true, shuffle: false })).toBe(true);
+    expect(shouldNudgePlayback({ mode: "stopped" }, idleTrack, { repeat: "off", smartQueue: true, shuffle: false })).toBe(false);
     expect(shouldNudgePlayback({ mode: "pause" }, { duration: 100, elapsed: 99 }, { repeat: "off", smartQueue: false, shuffle: false })).toBe(false);
     expect(shouldNudgePlayback({ mode: "play" }, { duration: 100, elapsed: 99 }, { repeat: "off", smartQueue: false, shuffle: false })).toBe(true);
     expect(shouldNudgePlayback({ mode: "play" }, { duration: 100, elapsed: 99 }, { repeat: "one", smartQueue: true, shuffle: false })).toBe(false);
+  });
+
+  it("does not auto-play generated queue rows while stopped", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: true, smartShuffleSource: "spotify", history: [] };
+    const idleTrack = { id: "idle", title: "No track playing", artist: "Connect a player or request a song", source: "LMS", duration: 0, elapsed: 0 };
+    addQueueItem({ title: "Generated Keeper", artist: "Tester", requestedBy: "smart shuffle", uri: "spotify:track:keeper", kind: "track" });
+    const played: string[] = [];
+    const searched: string[] = [];
+
+    await maintainVisiblePlaybackQueueForTests(
+      {
+        ...mockLms,
+        async control() {
+          return "ok";
+        },
+        async playTrack(_playerId: string, track: { title?: string }) {
+          played.push(String(track.title || ""));
+          return "ok";
+        },
+        async spotifySearch(_playerId: string, term: string) {
+          searched.push(term);
+          return [{ id: "spotify:fresh", title: "Fresh Generated", artist: "Tester", source: "Spotify", uri: "spotify:track:fresh", kind: "track" }];
+        }
+      },
+      { id: "player-1", mode: "stop" },
+      idleTrack
+    );
+
+    expect(played).toEqual([]);
+    expect(appState.queue.some((item: { title: string }) => item.title === "Generated Keeper")).toBe(true);
   });
 
   it("does not record idle metadata in shuffle history", () => {
