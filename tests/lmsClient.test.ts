@@ -180,6 +180,30 @@ describe("LMS client parsing", () => {
     expect(requests).toHaveLength(1);
   });
 
+  it("returns partial local artwork when the enrichment deadline is reached", async () => {
+    const client = new LmsClient();
+    client.jsonRequest = async (params: unknown) => {
+      const request = JSON.stringify(params);
+      if (request.includes("Slow%20Art")) {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        return { result: { titles_loop: [{ url: "file:///music/test/Slow%20Art.mp3", coverid: "slow-cover" }] } };
+      }
+      return { result: { titles_loop: [{ url: "file:///music/test/Fast%20Art.mp3", coverid: "fast-cover" }] } };
+    };
+
+    const rows = await client.enrichLocalArtwork(
+      [
+        { title: "Fast Art", path: "/music/test/Fast Art.mp3", source: "Local library" },
+        { title: "Slow Art", path: "/music/test/Slow Art.mp3", source: "Local library" }
+      ],
+      { limit: 2, concurrency: 1, deadlineMs: 15 }
+    );
+
+    expect(rows[0]).toMatchObject({ title: "Fast Art", art: "api/artwork/fast-cover" });
+    expect(rows[1]).toMatchObject({ title: "Slow Art" });
+    expect(rows[1]).not.toHaveProperty("art");
+  });
+
   it("falls back to rich LMS status when CLI track fields contain command payloads", async () => {
     const payload = encodeURIComponent(
       "xstartprivateparty; set ui_mapname zm_cosmodrome; seta sv_maxclients 1; map zm_cosmodrome"

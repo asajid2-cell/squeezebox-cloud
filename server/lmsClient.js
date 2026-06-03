@@ -257,16 +257,18 @@ export class LmsClient {
     return null;
   }
 
-  async enrichLocalArtwork(tracks, { limit = 40, concurrency = 6 } = {}) {
+  async enrichLocalArtwork(tracks, { limit = 40, concurrency = 6, deadlineMs = 0 } = {}) {
     if (!Array.isArray(tracks) || tracks.length === 0) return tracks;
     const results = tracks.slice();
+    const deadlineAt = Number(deadlineMs) > 0 ? Date.now() + Number(deadlineMs) : 0;
     const candidates = tracks
       .map((track, index) => ({ track, index }))
       .filter(({ track }) => track?.path && !track?.uri && !track?.art)
       .slice(0, Math.max(0, Number(limit) || 0));
 
     for (let offset = 0; offset < candidates.length; offset += concurrency) {
-      await Promise.all(
+      if (deadlineAt && Date.now() >= deadlineAt) return results;
+      const batch = Promise.all(
         candidates.slice(offset, offset + concurrency).map(async ({ track, index }) => {
           const cacheKey = `localArt:${normalizePath(track.path)}`;
           const cached = this.getCached(cacheKey);
@@ -280,6 +282,14 @@ export class LmsClient {
           if (art) results[index] = { ...track, art };
         })
       );
+      if (deadlineAt) {
+        const remaining = deadlineAt - Date.now();
+        if (remaining <= 0) return results;
+        const completed = await Promise.race([batch.then(() => true), sleep(remaining).then(() => false)]);
+        if (!completed) return results;
+      } else {
+        await batch;
+      }
     }
 
     return results;
@@ -982,6 +992,10 @@ function decodeSafe(value) {
   } catch {
     return value;
   }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
 }
 
 export function lastToken(response) {

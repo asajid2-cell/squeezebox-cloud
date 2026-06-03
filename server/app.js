@@ -1581,7 +1581,7 @@ function withTimeout(promise, timeoutMs, fallback) {
 async function enrichLibraryArtwork(lms, tracks) {
   if (!Array.isArray(tracks) || tracks.length === 0) return tracks;
   const localEnriched = typeof lms.enrichLocalArtwork === "function"
-    ? await withTimeout(lms.enrichLocalArtwork(tracks, { limit: localArtworkLimit }), localArtworkBudgetMs, tracks)
+    ? await withTimeout(lms.enrichLocalArtwork(tracks, { limit: localArtworkLimit, deadlineMs: Math.max(100, localArtworkBudgetMs - 50) }), localArtworkBudgetMs, tracks)
     : tracks;
   return enrichUploadedArtwork(lms, localEnriched);
 }
