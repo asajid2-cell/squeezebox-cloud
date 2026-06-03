@@ -1542,6 +1542,27 @@ describe("Cloud Squeeze API", () => {
     expect(appState.queue).toEqual([]);
   });
 
+  it("records the current song before native LMS next so previous can restore it", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = { id: "current", title: "Current Native", artist: "Tester", album: "", source: "Local library", duration: 100, elapsed: 5, canSeek: true, art: null, path: "/music/test/current-native.mp3" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, previousTracks: [], appManagedPlayback: false };
+    const controls: string[] = [];
+    const lms = {
+      ...mockLms,
+      async control(_playerId: string, action: string) {
+        controls.push(action);
+        return "ok";
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/next").expect(200);
+
+    expect(response.body.action).toBe("next");
+    expect(controls).toEqual(["next"]);
+    expect(appState.playback.previousTracks[0]).toMatchObject({ title: "Current Native", path: "/music/test/current-native.mp3" });
+  });
+
   it("serializes stop behind an in-flight visible queue next", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
@@ -2569,6 +2590,29 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.playback.repeat).toBe("off");
   });
 
+  it("regular shuffle generates a visible queue when no manual songs are queued", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "spotify", history: [] };
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async spotifySearch() {
+          return [
+            { id: "spotify:shuffle-one", title: "Shuffle One", artist: "Tester", source: "Spotify", uri: "spotify:track:0000000000000000000101", kind: "track" },
+            { id: "spotify:shuffle-two", title: "Shuffle Two", artist: "Tester", source: "Spotify", uri: "spotify:track:0000000000000000000102", kind: "track" }
+          ];
+        }
+      }
+    }))
+      .post("/api/player/playback")
+      .send({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" })
+      .expect(200);
+
+    expect(response.body.playback).toMatchObject({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" });
+    expect(response.body.queued).toHaveLength(2);
+    expect(response.body.queue.map((item: { requestedBy: string }) => item.requestedBy)).toEqual(["shuffle", "shuffle"]);
+  });
+
   it("rejects smart-shuffle cycling while manual playlist rows are queued", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = {
@@ -3195,7 +3239,7 @@ describe("Cloud Squeeze API", () => {
     expect(appState.queue).toEqual([]);
   });
 
-  it("does not fall through to LMS next when normal shuffle has an empty visible queue", async () => {
+  it("refills normal shuffle instead of falling through to LMS next when the visible queue is empty", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
     appState.playback = {
@@ -3208,6 +3252,7 @@ describe("Cloud Squeeze API", () => {
       history: []
     };
     const controls: string[] = [];
+    const played: Array<{ title?: string; uri?: string }> = [];
     const lms = {
       ...mockLms,
       async control(_playerId: string, action: string) {
@@ -3216,14 +3261,19 @@ describe("Cloud Squeeze API", () => {
       },
       async spotifySearch(_playerId: string, term: string) {
         return [{ title: "Unrelated Generated", artist: "Spotify", uri: "spotify:track:random", kind: "track" }];
+      },
+      async playTrack(_playerId: string, track: { title?: string; uri?: string }) {
+        played.push(track);
+        return "ok";
       }
     };
 
     const response = await request(createApp({ lms })).post("/api/player/next").expect(200);
 
-    expect(response.body.action).toBe("noop");
+    expect(response.body.action).toBe("visible-queue-next");
     expect(controls).toContain("shuffle");
     expect(controls).not.toContain("next");
+    expect(played).toEqual([expect.objectContaining({ title: "Unrelated Generated" })]);
     expect(appState.queue).toEqual([]);
   });
 

@@ -136,7 +136,11 @@ describe("Cloud Squeeze UI", () => {
     const fetchMock = vi.mocked(fetch);
     render(<App />);
     await screen.findByRole("button", { name: "Pause" });
-    fetchMock.mockImplementationOnce(async () => jsonResponse({ error: "LMS control failed" }, 502));
+    const defaultFetch = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (url.includes("/api/player/pause")) return jsonResponse({ error: "LMS control failed" }, 502);
+      return defaultFetch?.(url, options) ?? jsonResponse({ ok: true });
+    });
 
     await userEvent.click(screen.getByRole("button", { name: "Pause" }));
 
