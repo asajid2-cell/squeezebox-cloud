@@ -399,17 +399,6 @@ export class LmsClient {
     const candidates = [browseId, uri].filter(Boolean);
     if (uri && !candidates.includes(uri.replace(/^spotify:/, "spotify://"))) candidates.push(uri.replace(/^spotify:/, "spotify://"));
     const request = this.once(requestKey, async () => {
-      for (const id of candidates) {
-        const response = await this.jsonRequest([playerId, ["spotty", "items", start, requestCount, "menu:spotty", `item_id:${id}`]]).catch(() => null);
-        const items = response?.result?.item_loop || response?.result?.loop_loop || [];
-        const tracks = spotifyPlayableItems(items, "track")
-          .map((item) => spotifyItemToTrack(item))
-          .filter((track) => track.kind === "track" && String(track.uri || "").includes(":track:"));
-        if (tracks.length > 0) {
-          this.setCached(requestKey, tracks, spotifyBrowseCacheMs);
-          return tracks;
-        }
-      }
       if (kind === "artist" && fallbackTitle) {
         const fallbackTracks = (await this.spotifySearch(playerId, fallbackTitle, Math.min(50, requestCount)).catch(() => []))
           .filter((track) => track.kind === "track" && String(track.uri || "").includes(":track:"));
@@ -420,6 +409,17 @@ export class LmsClient {
             })
           : [];
         const tracks = matchingArtistTracks.length > 0 ? matchingArtistTracks : fallbackTracks;
+        if (tracks.length > 0) {
+          this.setCached(requestKey, tracks, spotifyBrowseCacheMs);
+          return tracks;
+        }
+      }
+      for (const id of candidates) {
+        const response = await this.jsonRequest([playerId, ["spotty", "items", start, requestCount, "menu:spotty", `item_id:${id}`]]).catch(() => null);
+        const items = response?.result?.item_loop || response?.result?.loop_loop || [];
+        const tracks = spotifyPlayableItems(items, "track")
+          .map((item) => spotifyItemToTrack(item))
+          .filter((track) => track.kind === "track" && String(track.uri || "").includes(":track:"));
         if (tracks.length > 0) {
           this.setCached(requestKey, tracks, spotifyBrowseCacheMs);
           return tracks;

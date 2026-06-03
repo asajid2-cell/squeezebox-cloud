@@ -795,9 +795,6 @@ describe("LMS client parsing", () => {
 
     expect(results).toEqual([expect.objectContaining({ title: "Artist Song", artist: "Ado", kind: "track" })]);
     expect(requests).toEqual([
-      ["player-1", ["spotty", "items", 0, 200, "menu:spotty", "item_id:7.0"]],
-      ["player-1", ["spotty", "items", 0, 200, "menu:spotty", "item_id:spotify:artist:artist"]],
-      ["player-1", ["spotty", "items", 0, 200, "menu:spotty", "item_id:spotify://artist:artist"]],
       ["player-1", ["spotty", "items", 0, 50, "menu:spotty", "item_id:1.0", "search:Ado", "cachesearch:1"]]
     ]);
   });
