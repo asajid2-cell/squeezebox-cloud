@@ -277,8 +277,18 @@ export class LmsClient {
     if (cached) return cached;
     const requestCount = Math.max(count, 20);
     const requestKey = `spotifySearch:${playerId}:${search.toLowerCase()}:${requestCount}`;
-    const widerCached = this.getCached(requestKey);
+    const widerKeys = requestCount < 50
+      ? [requestKey, `spotifySearch:${playerId}:${search.toLowerCase()}:50`]
+      : [requestKey];
+    const widerCached = widerKeys
+      .map((key) => this.getCached(key))
+      .find((results) => results && results.length >= count);
     if (widerCached && widerCached.length >= count) return widerCached.slice(0, count);
+    const widerInflight = widerKeys.map((key) => this.inflight.get(key)).find(Boolean);
+    if (widerInflight) {
+      const results = await widerInflight.catch(() => null);
+      if (results && results.length >= count) return results.slice(0, count);
+    }
     const fullResults = await this.once(requestKey, async () => {
       let response = await this.jsonRequest([
         playerId,

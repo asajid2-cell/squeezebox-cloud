@@ -637,6 +637,63 @@ describe("LMS client parsing", () => {
     expect(requests).toBe(1);
   });
 
+  it("serves narrower Spotify searches from a cached full suggestion page", async () => {
+    let requests = 0;
+    const client = new LmsClient();
+    client.jsonRequest = async () => {
+      requests += 1;
+      return {
+        result: {
+          item_loop: Array.from({ length: 50 }, (_, index) => ({
+            text: `Track ${index}\nArtist - Album`,
+            goAction: "playControl",
+            presetParams: { favorites_url: `spotify:track:wide${index}`, favorites_title: `Track ${index} by Artist from Album` }
+          }))
+        }
+      };
+    };
+
+    const full = await client.spotifySearch("player-1", "drake", 50);
+    const narrow = await client.spotifySearch("player-1", "drake", 20);
+
+    expect(full).toHaveLength(50);
+    expect(narrow).toHaveLength(20);
+    expect(narrow.map((track) => track.uri)).toEqual(full.slice(0, 20).map((track) => track.uri));
+    expect(requests).toBe(1);
+  });
+
+  it("serves narrower Spotify searches from an in-flight full suggestion page", async () => {
+    let requests = 0;
+    let release: (value: unknown) => void = () => {};
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const client = new LmsClient();
+    client.jsonRequest = async () => {
+      requests += 1;
+      await gate;
+      return {
+        result: {
+          item_loop: Array.from({ length: 50 }, (_, index) => ({
+            text: `Track ${index}\nArtist - Album`,
+            goAction: "playControl",
+            presetParams: { favorites_url: `spotify:track:inflight${index}`, favorites_title: `Track ${index} by Artist from Album` }
+          }))
+        }
+      };
+    };
+
+    const full = client.spotifySearch("player-1", "drake", 50);
+    const narrow = client.spotifySearch("player-1", "drake", 20);
+    release(null);
+    const [fullResult, narrowResult] = await Promise.all([full, narrow]);
+
+    expect(fullResult).toHaveLength(50);
+    expect(narrowResult).toHaveLength(20);
+    expect(narrowResult.map((track) => track.uri)).toEqual(fullResult.slice(0, 20).map((track) => track.uri));
+    expect(requests).toBe(1);
+  });
+
   it("normalizes Spotify search whitespace before request and cache lookup", async () => {
     const searches: string[] = [];
     const client = new LmsClient();
