@@ -139,6 +139,18 @@ describe("Cloud Squeeze API", () => {
     expect(appState.queue).toHaveLength(0);
   });
 
+  it("rejects malformed direct queue item fields before mutating queue state", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const app = createApp({ lms: mockLms });
+
+    await request(app).post("/api/queue").send({ title: "Extra Queue", path: "/music/test/extra-queue.mp3", extra: true }).expect(400);
+    await request(app).post("/api/queue").send({ title: "Array Path Queue", path: [] }).expect(400);
+    await request(app).post("/api/queue").send({ title: "Object Id Queue", lmsTrackId: { x: 1 } }).expect(400);
+    await request(app).post("/api/queue").send({ title: "Array Uri Queue", uri: ["spotify:track:0000000000000000000101"], kind: "track", source: "Spotify" }).expect(400);
+
+    expect(appState.queue).toHaveLength(0);
+  });
+
   it("rejects nonexistent local paths when strict public validation is enabled", async () => {
     appState.queue.splice(0, appState.queue.length);
     const previousStrict = process.env.STRICT_PUBLIC_TRACK_VALIDATION;

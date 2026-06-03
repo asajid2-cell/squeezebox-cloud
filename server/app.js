@@ -32,6 +32,7 @@ const optionalText = z.preprocess(
 );
 
 const queueSchema = z.object({
+  id: z.union([z.string().trim().min(1), z.number()]).optional(),
   title: requiredText,
   artist: optionalText,
   album: optionalText,
@@ -40,10 +41,16 @@ const queueSchema = z.object({
   uri: optionalText,
   kind: optionalText,
   lmsTrackId: z.union([z.string().trim().min(1), z.number()]).optional(),
-  art: optionalText,
+  art: optionalText.nullable(),
   uploaded: z.boolean().optional(),
+  duration: z.number().finite().nonnegative().nullable().optional(),
+  elapsed: z.number().finite().nonnegative().optional(),
+  canSeek: z.boolean().optional(),
+  browseId: optionalText,
+  collection: optionalText,
+  folder: optionalText,
   requestedBy: optionalText
-});
+}).strict();
 
 const playbackTrackInputSchema = z.object({
   id: z.union([z.string().trim().min(1), z.number()]).optional(),
