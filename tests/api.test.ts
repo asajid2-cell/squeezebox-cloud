@@ -429,6 +429,42 @@ describe("Cloud Squeeze API", () => {
     expect(played).toEqual([{ action: "play-now", track: expect.objectContaining({ uri: "spotify:track:0000000000000000000101" }) }]);
   });
 
+  it("rejects unknown Spotify queue tracks even when their ids are well formed", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const app = createApp({ lms: mockLms });
+
+    await request(app)
+      .post("/api/player/track")
+      .send({ action: "add-queue", track: { title: "Unknown Spotify", uri: "spotify:track:0000000000000000000200", kind: "track", source: "Spotify" } })
+      .expect(400);
+
+    const batch = await request(app)
+      .post("/api/player/tracks")
+      .send({
+        action: "play-next",
+        tracks: [{ title: "Unknown Spotify Batch", uri: "spotify:track:0000000000000000000201", kind: "track", source: "Spotify" }]
+      })
+      .expect(400);
+
+    expect(batch.body.error).toBe("Spotify tracks must come from Cloud Squeeze search, playlist, or library results");
+    expect(appState.queue).toHaveLength(0);
+  });
+
+  it("allows Spotify queue tracks returned by Cloud Squeeze search", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const app = createApp({ lms: mockLms });
+    const search = await request(app).get("/api/spotify/search?q=drake").expect(200);
+    const track = search.body.results[0];
+
+    const response = await request(app)
+      .post("/api/player/tracks")
+      .send({ action: "add-queue", tracks: [track] })
+      .expect(200);
+
+    expect(response.body.queued).toHaveLength(1);
+    expect(response.body.queued[0].uri).toBe("spotify:track:0000000000000000000101");
+  });
+
   it("rejects unknown single-track playback actions", async () => {
     appState.queue.splice(0, appState.queue.length);
     const beforeMode = appState.player.mode;
@@ -464,7 +500,7 @@ describe("Cloud Squeeze API", () => {
         action: "add-queue",
         tracks: [
           { title: "Artist Container", uri: "spotify:artist:container", kind: "artist", source: "Spotify artist" },
-          { title: "Playable Track", uri: "spotify:track:0000000000000000000001", kind: "track", source: "Spotify" }
+          { title: "Playable Track", path: "/music/test/playable-track.mp3", source: "Local library" }
         ]
       })
       .expect(200);
@@ -476,34 +512,34 @@ describe("Cloud Squeeze API", () => {
   it("rejects duplicate direct playback queue requests by playable key", async () => {
     appState.queue.splice(0, appState.queue.length);
     const app = createApp({ lms: mockLms });
-    const track = { title: "Duplicate Spotify Track", uri: "spotify:track:0000000000000000000002", kind: "track", source: "Spotify" };
+    const track = { title: "Duplicate Local Track", path: "/music/test/duplicate-track.mp3", source: "Local library" };
 
     await request(app).post("/api/player/track").send({ action: "add-queue", track }).expect(200);
     const duplicate = await request(app).post("/api/player/track").send({ action: "add-queue", track }).expect(409);
 
     expect(duplicate.body.error).toBe("That song is already in the queue");
-    expect(appState.queue.filter((item) => item.uri === track.uri)).toHaveLength(1);
+    expect(appState.queue.filter((item) => item.path === track.path)).toHaveLength(1);
   });
 
   it("deduplicates batch playback by playable key", async () => {
     appState.queue.splice(0, appState.queue.length);
-    addQueueItem({ title: "Existing", artist: "Tester", uri: "spotify:track:0000000000000000000003", kind: "track" });
+    addQueueItem({ title: "Existing", artist: "Tester", path: "/music/test/existing.mp3" });
 
     const response = await request(createApp({ lms: mockLms }))
       .post("/api/player/tracks")
       .send({
         action: "add-queue",
         tracks: [
-          { title: "Existing Again", uri: "spotify:track:0000000000000000000003", kind: "track", source: "Spotify" },
-          { title: "New Track", uri: "spotify:track:0000000000000000000004", kind: "track", source: "Spotify" },
-          { title: "New Track Duplicate", uri: "spotify:track:0000000000000000000004", kind: "track", source: "Spotify" }
+          { title: "Existing Again", path: "/music/test/existing.mp3", source: "Local library" },
+          { title: "New Track", path: "/music/test/new-track.mp3", source: "Local library" },
+          { title: "New Track Duplicate", path: "/music/test/new-track.mp3", source: "Local library" }
         ]
       })
       .expect(200);
 
     expect(response.body.queued).toHaveLength(1);
     expect(response.body.queued[0].title).toBe("New Track");
-    expect(appState.queue.filter((item) => item.uri === "spotify:track:0000000000000000000004")).toHaveLength(1);
+    expect(appState.queue.filter((item) => item.path === "/music/test/new-track.mp3")).toHaveLength(1);
   });
 
   it("enforces the public guest queue limit for single and batch requests", async () => {
@@ -519,8 +555,8 @@ describe("Cloud Squeeze API", () => {
       .send({
         action: "add-queue",
         tracks: [
-          { title: "Limit New 1", uri: "spotify:track:0000000000000000000005", kind: "track", source: "Spotify" },
-          { title: "Limit New 2", uri: "spotify:track:0000000000000000000006", kind: "track", source: "Spotify" }
+          { title: "Limit New 1", path: "/music/test/limit-new-1.mp3", source: "Local library" },
+          { title: "Limit New 2", path: "/music/test/limit-new-2.mp3", source: "Local library" }
         ]
       })
       .expect(429);
@@ -529,12 +565,12 @@ describe("Cloud Squeeze API", () => {
 
     await request(app)
       .post("/api/player/track")
-      .send({ action: "play-next", track: { title: "Limit Allowed", uri: "spotify:track:0000000000000000000007", kind: "track", source: "Spotify" } })
+      .send({ action: "play-next", track: { title: "Limit Allowed", path: "/music/test/limit-allowed.mp3", source: "Local library" } })
       .expect(200);
 
     const tooManySingle = await request(app)
       .post("/api/player/track")
-      .send({ action: "add-queue", track: { title: "Limit Rejected", uri: "spotify:track:0000000000000000000008", kind: "track", source: "Spotify" } })
+      .send({ action: "add-queue", track: { title: "Limit Rejected", path: "/music/test/limit-rejected.mp3", source: "Local library" } })
       .expect(429);
     expect(tooManySingle.body.error).toContain("max 3");
 
@@ -680,9 +716,9 @@ describe("Cloud Squeeze API", () => {
       .send({
         action: "play-next",
         tracks: [
-          { title: "Playlist One", artist: "Tester", uri: "spotify:track:0000000000000000000012", source: "Spotify", kind: "track" },
-          { title: "Playlist Two", artist: "Tester", uri: "spotify:track:0000000000000000000013", source: "Spotify", kind: "track" },
-          { title: "Playlist Three", artist: "Tester", uri: "spotify:track:0000000000000000000014", source: "Spotify", kind: "track" }
+          { title: "Playlist One", artist: "Tester", path: "/music/test/playlist-one.mp3", source: "Local library" },
+          { title: "Playlist Two", artist: "Tester", path: "/music/test/playlist-two.mp3", source: "Local library" },
+          { title: "Playlist Three", artist: "Tester", path: "/music/test/playlist-three.mp3", source: "Local library" }
         ]
       })
       .expect(200);

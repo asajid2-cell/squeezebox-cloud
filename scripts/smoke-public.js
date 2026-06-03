@@ -67,8 +67,8 @@ async function assertBatchQueueAndShuffle() {
     body: {
       action: "add-queue",
       tracks: [
-        { title: "Smoke Verify One", artist: "CloudSqueeze", uri: "spotify:track:1000000000000000000001", source: "Spotify", kind: "track" },
-        { title: "Smoke Verify Two", artist: "CloudSqueeze", uri: "spotify:track:1000000000000000000002", source: "Spotify", kind: "track" }
+        { title: "Smoke Verify One", artist: "CloudSqueeze", path: "/music/smoke/verify-one.mp3", source: "Smoke" },
+        { title: "Smoke Verify Two", artist: "CloudSqueeze", path: "/music/smoke/verify-two.mp3", source: "Smoke" }
       ]
     }
   });
@@ -84,9 +84,9 @@ async function assertBatchQueueAndShuffle() {
     body: {
       action: "play-next",
       tracks: [
-        { title: "Smoke Verify Three", artist: "CloudSqueeze", uri: "spotify:track:1000000000000000000003", source: "Spotify", kind: "track" },
-        { title: "Smoke Verify Four", artist: "CloudSqueeze", uri: "spotify:track:1000000000000000000004", source: "Spotify", kind: "track" },
-        { title: "Smoke Verify Five", artist: "CloudSqueeze", uri: "spotify:track:1000000000000000000005", source: "Spotify", kind: "track" }
+        { title: "Smoke Verify Three", artist: "CloudSqueeze", path: "/music/smoke/verify-three.mp3", source: "Smoke" },
+        { title: "Smoke Verify Four", artist: "CloudSqueeze", path: "/music/smoke/verify-four.mp3", source: "Smoke" },
+        { title: "Smoke Verify Five", artist: "CloudSqueeze", path: "/music/smoke/verify-five.mp3", source: "Smoke" }
       ]
     }
   });
@@ -213,7 +213,7 @@ async function assertPlayableDuplicateRejection() {
     method: "POST",
     body: {
       action: "add-queue",
-      tracks: [{ title, artist: "CloudSqueeze", uri: "spotify:track:1000000000000000000006", source: "Spotify", kind: "track" }]
+      tracks: [{ title, artist: "CloudSqueeze", path: "/music/smoke/verify-duplicate.mp3", source: "Smoke" }]
     }
   });
   for (const item of first.queued || []) createdQueueIds.push(item.id);
@@ -223,7 +223,7 @@ async function assertPlayableDuplicateRejection() {
     method: "POST",
     body: {
       action: "add-queue",
-      tracks: [{ title, artist: "CloudSqueeze", uri: "spotify:track:1000000000000000000006", source: "Spotify", kind: "track" }]
+      tracks: [{ title, artist: "CloudSqueeze", path: "/music/smoke/verify-duplicate.mp3", source: "Smoke" }]
     }
   }, { expectedStatus: 409 });
   assert(duplicate.error === "Those songs are already in the queue", "batch duplicate rejection returned an unexpected error");
@@ -236,9 +236,8 @@ async function assertQueueLimit() {
   const tracks = Array.from({ length: 4 }, (_, index) => ({
     title: `Smoke Verify Limit ${index + 1}`,
     artist: "CloudSqueeze",
-    uri: `spotify:track:${ids[index]}`,
-    source: "Spotify",
-    kind: "track"
+    path: `/music/smoke/verify-limit-${ids[index]}.mp3`,
+    source: "Smoke"
   }));
   const rejected = await requestJson("/player/tracks", {
     method: "POST",

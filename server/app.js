@@ -251,6 +251,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(403).json({ error: publicRequestsClosedMessage(), queue: appState.queue, playback: appState.playback });
       return;
     }
+    if (!spotifyTracksAreKnown([track])) {
+      res.status(400).json({ error: "Spotify tracks must come from Cloud Squeeze search, playlist, or library results" });
+      return;
+    }
     try {
       logEvent("track.request", { action, track: trackSummary(track), playerId: appState.player.id });
       let queued = null;
@@ -277,10 +281,6 @@ export function createApp({ lms = new LmsClient() } = {}) {
         queued = addQueueItemNext({ ...track, requestedBy: "guest" });
         logEvent("queue.add-next", { action, queued: trackSummary(queued), queue: queueSummary() });
       } else {
-        if (isSpotifyTrackInput(track) && !isKnownSpotifyTrack(track.uri)) {
-          res.status(400).json({ error: "Spotify track must come from Cloud Squeeze search, playlist, or library results" });
-          return;
-        }
         const playerId = await hotPlayerId(lms);
         stopGeneratedPlayback();
         setMode("play");
@@ -315,6 +315,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
     const playable = tracks.filter(isPlayableTrackInput);
     if (playable.length === 0) {
       res.status(400).json({ error: "No playable tracks were provided" });
+      return;
+    }
+    if (!spotifyTracksAreKnown(playable)) {
+      res.status(400).json({ error: "Spotify tracks must come from Cloud Squeeze search, playlist, or library results" });
       return;
     }
 
@@ -862,6 +866,10 @@ function isKnownSpotifyTrack(uri) {
     return false;
   }
   return true;
+}
+
+function spotifyTracksAreKnown(tracks = []) {
+  return (tracks || []).every((track) => !isSpotifyTrackInput(track) || isKnownSpotifyTrack(track.uri));
 }
 
 function normalizedSpotifyTrackUri(uri) {
