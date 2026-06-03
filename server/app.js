@@ -179,6 +179,9 @@ const queueMutationLockState = { tail: Promise.resolve() };
 const knownSpotifyTracks = new Map();
 const knownSpotifyTrackTtlMs = 30 * 60 * 1000;
 const knownSpotifyTrackLimit = 1500;
+const recentPlaybackMetadata = new Map();
+const recentPlaybackMetadataTtlMs = 5 * 60 * 1000;
+const recentPlaybackMetadataLimit = 100;
 const debugLog = [];
 const debugLogLimit = 500;
 const debugLogPath = process.env.CLOUD_SQUEEZE_LOG_PATH || "/tmp/cloud-squeeze-events.jsonl";
@@ -460,6 +463,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
         }
         const playerId = await hotPlayerId(lms);
         const previousTrack = appState.nowPlaying;
+        rememberPlaybackMetadata(track);
         await lms.playTrack(playerId, track, "play-now");
         stopGeneratedPlayback();
         setMode("play");
@@ -2082,6 +2086,7 @@ export function nextQueueItemForPlayback(queue = appState.queue, { generatedOnly
 
 async function playQueuedItem(lms, playerId, item) {
   const previousTrack = appState.nowPlaying;
+  rememberPlaybackMetadata(item);
   await lms.playTrack(playerId, item, "play-now");
   rememberPreviousTrack(previousTrack);
   rememberShuffleTrack(item);
@@ -2108,8 +2113,10 @@ async function refreshPlayedTrackMetadata(lms, playerId, requestedTrack) {
 
 function preserveKnownNowPlayingMetadata(fresh, requestedTrack = null) {
   if (!fresh) return fresh;
-  const known = requestedTrack || appState.nowPlaying;
-  if (!known || trackKey(fresh) !== trackKey(known)) return fresh;
+  if (requestedTrack) rememberPlaybackMetadata(requestedTrack);
+  const current = appState.nowPlaying;
+  const known = requestedTrack || lookupRecentPlaybackMetadata(fresh) || (tracksSharePlaybackIdentity(fresh, current) ? current : null);
+  if (!known || !tracksSharePlaybackIdentity(fresh, known)) return fresh;
   const art = fresh.art || known.art || null;
   if (!isUploadedTrackPath(fresh.path || known.path)) return { ...fresh, art };
   return {
@@ -2124,6 +2131,49 @@ function preserveKnownNowPlayingMetadata(fresh, requestedTrack = null) {
 
 function isUploadedTrackPath(value) {
   return normalizeTrackKey(value).includes("/music/uploads/");
+}
+
+function rememberPlaybackMetadata(track) {
+  if (!isTrackInfoCandidate(track)) return;
+  const keys = playbackMetadataKeys(track);
+  if (keys.length === 0) return;
+  const entry = { track: restorableTrack(track), expiresAt: Date.now() + recentPlaybackMetadataTtlMs };
+  for (const key of keys) recentPlaybackMetadata.set(key, entry);
+  if (recentPlaybackMetadata.size > recentPlaybackMetadataLimit) {
+    for (const [key, value] of recentPlaybackMetadata) {
+      if (value.expiresAt <= Date.now() || recentPlaybackMetadata.size > recentPlaybackMetadataLimit) {
+        recentPlaybackMetadata.delete(key);
+      }
+    }
+  }
+}
+
+function lookupRecentPlaybackMetadata(track) {
+  for (const key of playbackMetadataKeys(track)) {
+    const entry = recentPlaybackMetadata.get(key);
+    if (!entry) continue;
+    if (entry.expiresAt <= Date.now()) {
+      recentPlaybackMetadata.delete(key);
+      continue;
+    }
+    return entry.track;
+  }
+  return null;
+}
+
+function tracksSharePlaybackIdentity(left, right) {
+  if (!left || !right) return false;
+  const leftKeys = new Set(playbackMetadataKeys(left));
+  return playbackMetadataKeys(right).some((key) => leftKeys.has(key));
+}
+
+function playbackMetadataKeys(track) {
+  return [
+    track?.uri,
+    track?.path,
+    track?.lmsTrackId,
+    track?.id
+  ].map(normalizeTrackKey).filter(Boolean);
 }
 
 function removeGeneratedQueueItems() {
@@ -2196,6 +2246,7 @@ export function resetRefreshStateForTests() {
   prewarmState.at = 0;
   spotifyLibraryPrewarmState.playerId = "";
   spotifyLibraryPrewarmState.at = 0;
+  recentPlaybackMetadata.clear();
   clearPendingPlayback();
   clearPendingSeek();
 }
