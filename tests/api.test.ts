@@ -1128,7 +1128,25 @@ describe("Cloud Squeeze API", () => {
     expect(appState.queue.find((item) => item.id === created.body.id)?.requestedBy).toBe("guest");
   });
 
-  it("rejects Spotify queue metadata edits while allowing local queue edits", async () => {
+  it("accepts queue edit UI payloads without allowing requester spoofing", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const local = addQueueItem({ title: "Local Editable", artist: "Tester", path: "/music/test/local-editable-ui.mp3", requestedBy: "guest" });
+    const app = createApp({ lms: mockLms });
+
+    const edited = await request(app)
+      .patch(`/api/queue/${local.id}`)
+      .send({ title: "Local Edited", artist: "Edited", requestedBy: "guest" })
+      .expect(200);
+    await request(app)
+      .patch(`/api/queue/${local.id}`)
+      .send({ title: "Local Edited Again", artist: "Edited", requestedBy: "admin" })
+      .expect(400);
+
+    expect(edited.body.item).toMatchObject({ title: "Local Edited", artist: "Edited", requestedBy: "guest" });
+    expect(appState.queue.find((item) => item.id === local.id)?.requestedBy).toBe("guest");
+  });
+
+  it("rejects changed Spotify queue metadata while allowing unchanged queue edit payloads", async () => {
     appState.queue.splice(0, appState.queue.length);
     const local = addQueueItem({ title: "Local Editable", artist: "Tester", path: "/music/test/local-editable.mp3", requestedBy: "guest" });
     const spotify = addQueueItem({ title: "Spotify Locked", artist: "Tester", uri: "spotify:track:0000000000000000000001", kind: "track", source: "Spotify", requestedBy: "guest" });
@@ -1142,9 +1160,14 @@ describe("Cloud Squeeze API", () => {
       .patch(`/api/queue/${spotify.id}`)
       .send({ title: "Wrong Spotify Title" })
       .expect(400);
+    const unchangedSpotify = await request(app)
+      .patch(`/api/queue/${spotify.id}`)
+      .send({ title: "Spotify Locked", artist: "Tester", requestedBy: "guest" })
+      .expect(200);
 
     expect(edited.body.item).toMatchObject({ title: "Local Edited", artist: "Edited" });
     expect(rejected.body.error).toContain("Spotify queue item metadata");
+    expect(unchangedSpotify.body.item).toMatchObject({ title: "Spotify Locked", artist: "Tester", requestedBy: "guest" });
     expect(appState.queue.find((item) => item.id === spotify.id)?.title).toBe("Spotify Locked");
   });
 

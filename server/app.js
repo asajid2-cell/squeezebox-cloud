@@ -78,7 +78,8 @@ const playbackTrackInputSchema = z.object({
 const queueUpdateSchema = z.object({
   title: requiredText.optional(),
   artist: requiredText.optional(),
-  album: optionalText
+  album: optionalText,
+  requestedBy: optionalText
 }).strict();
 
 const queueMoveSchema = z.object({
@@ -305,7 +306,11 @@ export function createApp({ lms = new LmsClient() } = {}) {
       return;
     }
     const existing = appState.queue.find((item) => item.id === req.params.id);
-    if (existing && isSpotifyQueueItem(existing)) {
+    if (existing && parsed.data.requestedBy !== undefined && parsed.data.requestedBy !== existing.requestedBy) {
+      res.status(400).json({ error: "Queue request ownership cannot be edited" });
+      return;
+    }
+    if (existing && isSpotifyQueueItem(existing) && hasQueueMetadataChange(existing, parsed.data)) {
       res.status(400).json({ error: "Spotify queue item metadata cannot be edited" });
       return;
     }
@@ -1200,6 +1205,13 @@ function isSpotifyTrackInput(track) {
 
 function isSpotifyQueueItem(track) {
   return Boolean(track?.uri && String(track.uri).toLowerCase().startsWith("spotify:"));
+}
+
+function hasQueueMetadataChange(existing, updates) {
+  return ["title", "artist", "album"].some((key) => {
+    if (updates[key] === undefined) return false;
+    return String(updates[key] || "").trim() !== String(existing?.[key] || "").trim();
+  });
 }
 
 function isValidSpotifyTrackUri(uri) {
