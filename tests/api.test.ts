@@ -3752,6 +3752,39 @@ describe("Cloud Squeeze API", () => {
     }
   });
 
+  it("does not add broad unrelated local rows when local smart shuffle has a focused seed", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-local-smart-"));
+    appState.queue.splice(0, appState.queue.length);
+    appState.nowPlaying = {
+      id: "idle",
+      title: "No track playing",
+      artist: "Connect a player or request a song",
+      album: "",
+      source: "LMS",
+      duration: 0,
+      elapsed: 0,
+      canSeek: false,
+      art: null
+    };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "local", history: [] };
+    config.musicSourceDir = root;
+    try {
+      await fs.writeFile(path.join(root, "Juice WRLD - Random Local.mp3"), "ID3");
+      const response = await request(createApp({ lms: mockLms }))
+        .post("/api/player/smart-shuffle")
+        .send({ source: "local", count: 3, seed: "Radiohead" })
+        .expect(200);
+
+      expect(response.body.queued).toEqual([]);
+      expect(response.body.queue).toEqual([]);
+      expect(response.body.playback).toMatchObject({ smartQueue: true, smartShuffleSource: "local", lastShuffleSeed: "Radiohead" });
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("clears generated history when smart-shuffle source or seed changes", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = {
@@ -3983,7 +4016,7 @@ describe("Cloud Squeeze API", () => {
       lastShuffleRefillAt: 12345,
       lastShuffleSeed: "stale seed",
       lastSmartQueueBase: "stale base",
-      history: []
+      history: ["spotify:track:stale-generated"]
     };
     addQueueItem({ title: "Manual Next", artist: "Tester", requestedBy: "guest", path: "/music/manual.mp3" });
     addQueueItem({ title: "Generated Next", artist: "Tester", requestedBy: "smart shuffle", uri: "spotify:track:generated" });
@@ -3997,6 +4030,7 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.playback.lastShuffleRefillAt).toBe(0);
     expect(response.body.playback.lastShuffleSeed).toBe("");
     expect(response.body.playback.lastSmartQueueBase).toBe("");
+    expect(response.body.playback.history).toEqual([]);
     expect(response.body.queue).toEqual([expect.objectContaining({ title: "Manual Next", requestedBy: "guest" })]);
   });
 

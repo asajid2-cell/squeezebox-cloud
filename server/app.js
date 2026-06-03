@@ -1060,6 +1060,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
         next.lastShuffleRefillAt = 0;
         next.lastShuffleSeed = "";
         next.lastSmartQueueBase = "";
+        next.history = [];
       }
       const requestedSource = next.smartShuffleSource || appState.playback.smartShuffleSource;
       const finalManualShuffle = finalShuffle && !finalSmartQueue && (
@@ -1785,6 +1786,7 @@ async function activateGeneratedQueue(lms, playerId, { smart = false, shuffle: s
   const currentSeed = isTrackInfoCandidate(appState.nowPlaying)
     ? (appState.nowPlaying.artist || appState.nowPlaying.title)
     : "";
+  const hasFocusedSeed = Boolean(String(seed || currentSeed || appState.playback.lastShuffleSeed || "").trim());
   const queueSeed = String(seed || currentSeed || appState.playback.lastShuffleSeed || "drake").trim();
   const requestType = smart ? "smart shuffle" : "shuffle";
   const previousRequestType = appState.playback.smartQueue ? "smart shuffle" : appState.playback.shuffle ? "shuffle" : "";
@@ -1806,13 +1808,13 @@ async function activateGeneratedQueue(lms, playerId, { smart = false, shuffle: s
     lastSmartQueueBase: trackKey(appState.nowPlaying),
     history
   });
-  const queued = await buildGeneratedQueue(lms, playerId, queueSeed, mode, count, requestType);
+  const queued = await buildGeneratedQueue(lms, playerId, queueSeed, mode, count, requestType, { allowLocalWideFallback: !hasFocusedSeed });
   updatePlayback(smart ? { lastShuffleRefillAt: Date.now(), repeat: "off" } : { lastShuffleRefillAt: Date.now() });
   logEvent("queue.activate-generated", { type: smart ? "smart shuffle" : "shuffle", mode, queued: queued.map(trackSummary), queue: queueSummary() });
   return queued;
 }
 
-async function buildGeneratedQueue(lms, playerId, seed, mode, count, requestedBy) {
+async function buildGeneratedQueue(lms, playerId, seed, mode, count, requestedBy, { allowLocalWideFallback = true } = {}) {
   if (!generatedRequestActive(requestedBy)) return [];
   const normalizedSeed = seed || "drake";
   const exclude = shuffleExclusionSet();
@@ -1823,7 +1825,9 @@ async function buildGeneratedQueue(lms, playerId, seed, mode, count, requestedBy
     mode !== "spotify" ? searchLibrary("", undefined, 500).catch(() => []) : []
   ]);
   const spotifyTracks = uniqueTracks(spotify).filter(isPlayableSpotifyTrack);
-  const localCandidates = mode === "local" ? [...localFocused, ...shuffle(localWide).slice(0, 180)] : localFocused;
+  const localCandidates = mode === "local" && allowLocalWideFallback
+    ? [...localFocused, ...shuffle(localWide).slice(0, 180)]
+    : localFocused;
   const localTracks = uniqueTracks(localCandidates).filter((track) => track.path);
   const spotifyPool = shuffle(preferFreshTracks(spotifyTracks, exclude, hardExclude));
   const localPool = shuffle(preferFreshTracks(localTracks, exclude, hardExclude));
@@ -1928,8 +1932,9 @@ async function ensureSmartShuffleQueue(lms, playerId, { force = false } = {}) {
   const currentSeed = isTrackInfoCandidate(appState.nowPlaying)
     ? (appState.nowPlaying.artist || appState.nowPlaying.title)
     : "";
+  const hasFocusedSeed = Boolean(String(currentSeed || appState.playback.lastShuffleSeed || "").trim());
   const seed = String(currentSeed || appState.playback.lastShuffleSeed || "drake").trim();
-  const queued = await buildGeneratedQueue(lms, playerId, seed, appState.playback.smartShuffleSource, desired, requestType);
+  const queued = await buildGeneratedQueue(lms, playerId, seed, appState.playback.smartShuffleSource, desired, requestType, { allowLocalWideFallback: !hasFocusedSeed });
   if (!generatedRequestActive(requestType)) return queued;
   updatePlayback({ lastShuffleRefillAt: now, lastShuffleSeed: seed });
   if (queued.length > 0) logEvent("queue.refill", { requestType, desired, queued: queued.map(trackSummary), queue: queueSummary() });
@@ -1947,8 +1952,10 @@ async function topOffGeneratedQueue(lms, playerId) {
   logEvent("queue.top-off.request", { requestType, generatedCount, queue: queueSummary() });
   if (appState.playback.smartQueue) return ensureSmartShuffleQueue(lms, playerId, { force: true });
   const desired = Math.max(1, 5 - generatedCount);
-  const seed = String(appState.nowPlaying?.artist || appState.nowPlaying?.title || appState.playback.lastShuffleSeed || "drake").trim();
-  const queued = await buildGeneratedQueue(lms, playerId, seed, appState.playback.smartShuffleSource, desired, requestType);
+  const topOffSeed = appState.nowPlaying?.artist || appState.nowPlaying?.title || appState.playback.lastShuffleSeed;
+  const hasFocusedSeed = Boolean(String(topOffSeed || "").trim());
+  const seed = String(topOffSeed || "drake").trim();
+  const queued = await buildGeneratedQueue(lms, playerId, seed, appState.playback.smartShuffleSource, desired, requestType, { allowLocalWideFallback: !hasFocusedSeed });
   if (!generatedRequestActive(requestType)) return queued;
   updatePlayback({ lastShuffleRefillAt: Date.now(), lastShuffleSeed: seed });
   if (queued.length > 0) logEvent("queue.refill", { requestType, desired, queued: queued.map(trackSummary), queue: queueSummary() });
@@ -2197,7 +2204,7 @@ function isGeneratedQueueItem(item) {
 function stopGeneratedPlayback() {
   if (!appState.playback.shuffle && !appState.playback.smartQueue) return;
   removeGeneratedQueueItems();
-  updatePlayback({ shuffle: false, manualShuffle: false, smartQueue: false, lastShuffleRefillAt: 0, lastShuffleSeed: "", lastSmartQueueBase: "" });
+  updatePlayback({ shuffle: false, manualShuffle: false, smartQueue: false, lastShuffleRefillAt: 0, lastShuffleSeed: "", lastSmartQueueBase: "", history: [] });
 }
 
 function shuffleVisibleQueue() {
