@@ -278,46 +278,49 @@ export class LmsClient {
     const requestKey = `spotifySearch:${playerId}:${search.toLowerCase()}:${requestCount}`;
     const widerCached = this.getCached(requestKey);
     if (widerCached && widerCached.length >= count) return widerCached.slice(0, count);
-    let response = await this.jsonRequest([
-      playerId,
-      ["spotty", "items", 0, requestCount, "menu:spotty", "item_id:1.0", `search:${search}`, "cachesearch:1"]
-    ]);
-    let items = response?.result?.item_loop || response?.result?.loop_loop || [];
-    let playable = spotifyPlayableItems(items, "track");
-    const directPlayable = [...playable];
-    const categoryIds = items
-      .map((item) => item.actions?.go?.params?.item_id)
-      .filter((id) => /^1\.0_.*\.[012]$/.test(String(id)));
-    const categoryResults = await Promise.all(
-      categoryIds.map((itemId) =>
-        this.jsonRequest([playerId, ["spotty", "items", 0, Math.min(10, requestCount), "menu:spotty", `item_id:${itemId}`]]).catch(() => null)
-      )
-    );
-    for (const category of categoryResults) {
-      const title = String(category?.result?.title || "").toLowerCase();
-      const kind = title.includes("artist") ? "artist" : title.includes("album") ? "album" : title.includes("playlist") ? "playlist" : "track";
-      playable.push(...spotifyPlayableItems(category?.result?.item_loop || category?.result?.loop_loop || [], kind));
-    }
-
-    if (playable.length === 0) {
-      const recent = items.find((item) => String(item.text || "").toLowerCase() === search.toLowerCase());
-      const recentId = recent?.actions?.go?.params?.item_id;
-      if (recentId) {
-        response = await this.jsonRequest([playerId, ["spotty", "items", 0, requestCount, "menu:spotty", `item_id:${recentId}`]]);
-        items = response?.result?.item_loop || response?.result?.loop_loop || [];
-        playable = spotifyPlayableItems(items, "track");
+    const fullResults = await this.once(requestKey, async () => {
+      let response = await this.jsonRequest([
+        playerId,
+        ["spotty", "items", 0, requestCount, "menu:spotty", "item_id:1.0", `search:${search}`, "cachesearch:1"]
+      ]);
+      let items = response?.result?.item_loop || response?.result?.loop_loop || [];
+      let playable = spotifyPlayableItems(items, "track");
+      const directPlayable = [...playable];
+      const categoryIds = items
+        .map((item) => item.actions?.go?.params?.item_id)
+        .filter((id) => /^1\.0_.*\.[012]$/.test(String(id)));
+      const categoryResults = await Promise.all(
+        categoryIds.map((itemId) =>
+          this.jsonRequest([playerId, ["spotty", "items", 0, Math.min(10, requestCount), "menu:spotty", `item_id:${itemId}`]]).catch(() => null)
+        )
+      );
+      for (const category of categoryResults) {
+        const title = String(category?.result?.title || "").toLowerCase();
+        const kind = title.includes("artist") ? "artist" : title.includes("album") ? "album" : title.includes("playlist") ? "playlist" : "track";
+        playable.push(...spotifyPlayableItems(category?.result?.item_loop || category?.result?.loop_loop || [], kind));
       }
-    }
 
-    const categoryPlayable = playable.filter((item) => item.resultKind !== "track");
-    const firstPageTrackCount = Math.max(6, count - Math.min(12, categoryPlayable.length));
-    const fullResults = uniqueByUri([...directPlayable.slice(0, firstPageTrackCount), ...categoryPlayable, ...directPlayable.slice(firstPageTrackCount)])
-      .map((item) => spotifyItemToTrack(item));
+      if (playable.length === 0) {
+        const recent = items.find((item) => String(item.text || "").toLowerCase() === search.toLowerCase());
+        const recentId = recent?.actions?.go?.params?.item_id;
+        if (recentId) {
+          response = await this.jsonRequest([playerId, ["spotty", "items", 0, requestCount, "menu:spotty", `item_id:${recentId}`]]);
+          items = response?.result?.item_loop || response?.result?.loop_loop || [];
+          playable = spotifyPlayableItems(items, "track");
+        }
+      }
+
+      const categoryPlayable = playable.filter((item) => item.resultKind !== "track");
+      const firstPageTrackCount = Math.max(6, count - Math.min(12, categoryPlayable.length));
+      const mapped = uniqueByUri([...directPlayable.slice(0, firstPageTrackCount), ...categoryPlayable, ...directPlayable.slice(firstPageTrackCount)])
+        .map((item) => spotifyItemToTrack(item));
+      if (mapped.length > 0) this.setCached(requestKey, mapped.slice(0, requestCount), spotifySearchCacheMs);
+      return mapped;
+    });
     this.rememberSpotifyBrowseIds(fullResults);
     const results = fullResults.slice(0, count);
     if (results.length > 0) {
       this.setCached(cacheKey, results, spotifySearchCacheMs);
-      if (requestKey !== cacheKey) this.setCached(requestKey, fullResults.slice(0, requestCount), spotifySearchCacheMs);
     }
     return results;
   }

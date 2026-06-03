@@ -604,6 +604,37 @@ describe("LMS client parsing", () => {
     expect(requests).toBe(1);
   });
 
+  it("serves concurrent Spotify searches from one in-flight request", async () => {
+    let requests = 0;
+    let release: (value: unknown) => void = () => {};
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const client = new LmsClient();
+    client.jsonRequest = async () => {
+      requests += 1;
+      await gate;
+      return {
+        result: {
+          item_loop: Array.from({ length: 20 }, (_, index) => ({
+            text: `Track ${index}\nArtist - Album`,
+            goAction: "playControl",
+            presetParams: { favorites_url: `spotify:track:track${index}`, favorites_title: `Track ${index} by Artist from Album` }
+          }))
+        }
+      };
+    };
+
+    const narrow = client.spotifySearch("player-1", "drake", 5);
+    const wide = client.spotifySearch("player-1", "drake", 20);
+    release(null);
+    const [narrowResult, wideResult] = await Promise.all([narrow, wide]);
+
+    expect(narrowResult).toHaveLength(5);
+    expect(wideResult).toHaveLength(20);
+    expect(requests).toBe(1);
+  });
+
   it("does not cache empty Spotify search pages", async () => {
     let requests = 0;
     const client = new LmsClient();
