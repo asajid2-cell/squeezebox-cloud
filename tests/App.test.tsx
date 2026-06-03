@@ -66,7 +66,9 @@ beforeEach(() => {
       }
       if (url.includes("/api/spotify/library")) {
         return jsonResponse({
-          results: [{ id: "spotify:playlist:1", title: "Drake Mix", artist: "Spotify", source: "Spotify playlist", uri: "spotify:playlist:1", kind: "playlist", browseId: "8.1" }]
+          results: String(url).includes("type=tracks")
+            ? [{ id: "spotify:track:saved", title: "Saved Track", artist: "Drake", source: "Spotify", uri: "spotify:track:saved", kind: "track" }]
+            : [{ id: "spotify:playlist:1", title: "Drake Mix", artist: "Spotify", source: "Spotify playlist", uri: "spotify:playlist:1", kind: "playlist", browseId: "8.1" }]
         });
       }
       if (url.includes("/api/spotify/children")) {
@@ -321,6 +323,27 @@ describe("Cloud Squeeze UI", () => {
     await userEvent.click(screen.getByRole("button", { name: "Spotify" }));
     await userEvent.click(await screen.findByText("Drake Mix"));
     expect(await screen.findByText("Playlist Child")).toBeInTheDocument();
+  });
+
+  it("opens saved Spotify tracks without queueing them until an explicit action", async () => {
+    const fetchMock = vi.mocked(fetch);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Playlists" }));
+    await userEvent.click(screen.getByRole("button", { name: "Spotify" }));
+    await userEvent.click(screen.getByRole("button", { name: "tracks" }));
+    await userEvent.click(await screen.findByText("Saved Track"));
+
+    expect(await screen.findByLabelText("Saved Track tracks")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/spotify/children"))).toBe(false);
+    expect(fetchMock.mock.calls.some(([url, options]) => String(url).includes("/api/player/track") && options?.method === "POST")).toBe(false);
+
+    const row = screen.getAllByText("Saved Track").find((element) => element.closest(".result-row"))?.closest(".result-row");
+    expect(row).toBeTruthy();
+    await userEvent.click(within(row as HTMLElement).getByRole("button", { name: "Queue" }));
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url, options]) => String(url).includes("/api/player/track") && options?.method === "POST")).toBe(true);
+    });
   });
 
   it("surfaces partial playlist batch queue acceptance", async () => {

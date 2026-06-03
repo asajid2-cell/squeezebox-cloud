@@ -833,10 +833,10 @@ function PlaylistsPanel({ onRefresh, onAction }: { onRefresh: () => void; onActi
 
   async function openSpotify(track: Track) {
     if (track.kind === "track") {
-      await onAction(async () => {
-        await playTrack("add-queue", track);
-        await onRefresh();
-      });
+      setSelectedLocal(null);
+      setSelectedSpotify(track);
+      setDetailTracks([track]);
+      setLoadingDetail(false);
       return;
     }
     setSelectedLocal(null);
