@@ -835,6 +835,26 @@ describe("Cloud Squeeze API", () => {
     expect(appState.queue.find((item) => item.id === created.body.id)?.requestedBy).toBe("guest");
   });
 
+  it("rejects Spotify queue metadata edits while allowing local queue edits", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const local = addQueueItem({ title: "Local Editable", artist: "Tester", path: "/music/test/local-editable.mp3", requestedBy: "guest" });
+    const spotify = addQueueItem({ title: "Spotify Locked", artist: "Tester", uri: "spotify:track:0000000000000000000001", kind: "track", source: "Spotify", requestedBy: "guest" });
+    const app = createApp({ lms: mockLms });
+
+    const edited = await request(app)
+      .patch(`/api/queue/${local.id}`)
+      .send({ title: "Local Edited", artist: "Edited" })
+      .expect(200);
+    const rejected = await request(app)
+      .patch(`/api/queue/${spotify.id}`)
+      .send({ title: "Wrong Spotify Title" })
+      .expect(400);
+
+    expect(edited.body.item).toMatchObject({ title: "Local Edited", artist: "Edited" });
+    expect(rejected.body.error).toContain("Spotify queue item metadata");
+    expect(appState.queue.find((item) => item.id === spotify.id)?.title).toBe("Spotify Locked");
+  });
+
   it("rejects new public song requests when public requests are paused", async () => {
     appState.queue.splice(0, appState.queue.length);
     const previousAdmin = { ...appState.admin };

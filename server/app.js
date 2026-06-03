@@ -235,6 +235,11 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(400).json({ error: "Invalid queue update", issues: parsed.error.issues });
       return;
     }
+    const existing = appState.queue.find((item) => item.id === req.params.id);
+    if (existing && isSpotifyQueueItem(existing)) {
+      res.status(400).json({ error: "Spotify queue item metadata cannot be edited" });
+      return;
+    }
     const item = updateQueueItem(req.params.id, parsed.data);
     if (!item) {
       res.status(404).json({ error: "Queue item not found" });
@@ -989,6 +994,10 @@ function isPlayableTrackInput(track) {
 
 function isSpotifyTrackInput(track) {
   return Boolean(track?.uri && isValidSpotifyTrackUri(track.uri));
+}
+
+function isSpotifyQueueItem(track) {
+  return Boolean(track?.uri && String(track.uri).toLowerCase().startsWith("spotify:"));
 }
 
 function isValidSpotifyTrackUri(uri) {
