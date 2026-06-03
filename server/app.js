@@ -1279,7 +1279,7 @@ function queuedTrackExists(track) {
   return appState.queue.some((item) => trackKey(item) === key);
 }
 
-function syncVisibleQueueWithCurrentTrack(track) {
+export function syncVisibleQueueWithCurrentTrack(track) {
   if (!track) return;
   rememberShuffleTrack(track);
   for (const item of [...appState.queue]) {
@@ -1353,6 +1353,7 @@ function preferFreshTracks(tracks, exclude, hardExclude) {
 }
 
 function rememberShuffleTrack(track) {
+  if (!isTrackInfoCandidate(track)) return;
   const key = trackKey(track);
   if (!key) return;
   const history = [key, ...(appState.playback.history || []).filter((item) => item !== key)].slice(0, 80);

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createApp, nextQueueItemForPlayback, resetRefreshStateForTests, shouldNudgePlayback } from "../server/app.js";
+import { createApp, nextQueueItemForPlayback, resetRefreshStateForTests, shouldNudgePlayback, syncVisibleQueueWithCurrentTrack } from "../server/app.js";
 import { addQueueItem, appState, config, removeQueueItem, updateNowPlaying } from "../server/state.js";
 
 const mockLms = {
@@ -657,6 +657,15 @@ describe("Cloud Squeeze API", () => {
     expect(shouldNudgePlayback({ mode: "pause" }, { duration: 100, elapsed: 99 }, { repeat: "off", smartQueue: false, shuffle: false })).toBe(false);
     expect(shouldNudgePlayback({ mode: "play" }, { duration: 100, elapsed: 99 }, { repeat: "off", smartQueue: false, shuffle: false })).toBe(true);
     expect(shouldNudgePlayback({ mode: "play" }, { duration: 100, elapsed: 99 }, { repeat: "one", smartQueue: true, shuffle: false })).toBe(false);
+  });
+
+  it("does not record idle metadata in shuffle history", () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, history: [] };
+
+    syncVisibleQueueWithCurrentTrack({ id: "idle", title: "No track playing", artist: "Connect a player or request a song", source: "LMS", duration: 0, elapsed: 0 });
+
+    expect(appState.playback.history).toEqual([]);
   });
 
   it("replaces stale now playing fields when LMS is idle", () => {
