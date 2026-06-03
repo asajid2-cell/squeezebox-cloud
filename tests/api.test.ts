@@ -2807,6 +2807,11 @@ describe("Cloud Squeeze API", () => {
         .set("Authorization", `Bearer ${login.body.token}`)
         .send({ publicRequests: "false", maxQueuePerUser: "zero", scheduleEnabled: "yes", extra: true })
         .expect(400);
+      await request(app)
+        .post("/api/admin/settings")
+        .set("Authorization", `Bearer ${login.body.token}`)
+        .send({ maxQueuePerUser: "7" })
+        .expect(400);
 
       appState.admin = { ...appState.admin, extra: { bad: true }, maxQueuePerUser: 99 } as typeof appState.admin & { extra: { bad: boolean } };
 

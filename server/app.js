@@ -75,7 +75,7 @@ const loginSchema = z.object({
 
 const adminSettingsSchema = z.object({
   publicRequests: z.boolean().optional(),
-  maxQueuePerUser: z.coerce.number().int().min(1).max(25).optional(),
+  maxQueuePerUser: z.number().int().min(1).max(25).optional(),
   moderation: z.enum(["off", "basic", "strict"]).optional(),
   scheduleEnabled: z.boolean().optional()
 }).strict();
