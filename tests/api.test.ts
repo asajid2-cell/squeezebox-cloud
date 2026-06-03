@@ -555,6 +555,11 @@ describe("Cloud Squeeze API", () => {
 
   it("stops playback and clears stale now playing after LMS accepts stop", async () => {
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.playback = {
+      ...appState.playback,
+      appManagedPlayback: true,
+      previousTracks: [{ title: "Previous Track", artist: "Tester", path: "/music/previous.mp3", source: "Local library" }]
+    };
     updateNowPlaying({ id: "stale-track", title: "Stale Track", artist: "Tester", source: "LMS", duration: 100, elapsed: 12 });
     const controls: string[] = [];
     const response = await request(createApp({
@@ -573,6 +578,8 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.mode).toBe("stop");
     expect(appState.player.mode).toBe("stop");
     expect(appState.nowPlaying).toMatchObject({ id: "idle", title: "No track playing", elapsed: 0, canSeek: false });
+    expect(appState.playback).toMatchObject({ appManagedPlayback: false, previousTracks: [] });
+    expect(response.body.playback).toMatchObject({ appManagedPlayback: false, previousTracks: [] });
   });
 
   it("seeks the current player position", async () => {

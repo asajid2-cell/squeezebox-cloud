@@ -858,10 +858,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
       await control(lms, "stop");
       clearPendingPlayback();
       clearPendingSeek();
-      updatePlayback({ appManagedPlayback: false });
+      updatePlayback({ previousTracks: [], appManagedPlayback: false });
       updateNowPlaying(idleNowPlaying);
       updateTrackInfo(idleTrackInfo);
-      res.json({ ok: true, mode: appState.player.mode, player: appState.player });
+      res.json({ ok: true, mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying, playback: appState.playback });
     } catch (error) {
       res.status(502).json({ error: error.message, mode: appState.player.mode, player: appState.player });
     }
