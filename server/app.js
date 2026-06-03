@@ -198,7 +198,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
     });
   });
 
-  app.post("/api/queue", async (req, res) => {
+  app.post("/api/queue", async (req, res) => withQueueMutationLock(async () => {
     const parsed = queueSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "Invalid queue item", issues: parsed.error.issues });
@@ -229,7 +229,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       return;
     }
     res.status(201).json(addQueueItem({ ...parsed.data, requestedBy: "guest" }));
-  });
+  }));
 
   app.patch("/api/queue/:id", (req, res) => {
     const parsed = queueUpdateSchema.safeParse(req.body);
@@ -284,7 +284,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
     res.json({ ok: true, item, queue: appState.queue });
   });
 
-  app.post("/api/player/track", async (req, res) => {
+  app.post("/api/player/track", async (req, res) => withQueueMutationLock(async () => {
     const action = String(req.body?.action || "add-queue");
     const track = req.body?.track || {};
     if (!["add-queue", "play-next", "play-now"].includes(action)) {
@@ -357,7 +357,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
     } catch (error) {
       res.status(502).json({ error: error.message });
     }
-  });
+  }));
 
   app.post("/api/player/tracks", async (req, res) => withQueueMutationLock(async () => {
     const action = String(req.body?.action || "add-queue");

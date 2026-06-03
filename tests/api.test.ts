@@ -1341,6 +1341,34 @@ describe("Cloud Squeeze API", () => {
     ]);
   });
 
+  it("serializes mixed queue endpoints against batch requests", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.admin = { ...appState.admin, maxQueuePerUser: 3 };
+    const app = createApp({ lms: mockLms });
+    const tracks = [
+      { title: "Mixed Batch One", path: "/music/test/mixed-batch-one.mp3", source: "Local library" },
+      { title: "Mixed Batch Two", path: "/music/test/mixed-batch-two.mp3", source: "Local library" },
+      { title: "Mixed Batch Three", path: "/music/test/mixed-batch-three.mp3", source: "Local library" }
+    ];
+
+    const responses = await Promise.all([
+      request(app).post("/api/player/tracks").send({ action: "add-queue", tracks }),
+      request(app).post("/api/player/track").send({ action: "add-queue", track: tracks[0] }),
+      request(app).post("/api/queue").send(tracks[1])
+    ]);
+
+    const acceptedRows = responses.flatMap((response) => {
+      if (response.status === 201) return [response.body.title];
+      if (response.status === 200 && Array.isArray(response.body.queued)) return response.body.queued.map((item: { title: string }) => item.title);
+      if (response.status === 200 && response.body.queued?.title) return [response.body.queued.title];
+      return [];
+    });
+
+    expect(acceptedRows).toHaveLength(3);
+    expect(new Set(appState.queue.map((item: { path: string }) => item.path)).size).toBe(3);
+    expect(appState.queue).toHaveLength(3);
+  });
+
   it("does not advance playback while refreshing public state", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = { ...appState.playback, shuffle: true, smartShuffleSource: "spotify", history: [] };
