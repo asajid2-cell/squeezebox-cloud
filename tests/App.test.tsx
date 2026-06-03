@@ -173,6 +173,26 @@ describe("Cloud Squeeze UI", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("That song is already in the queue");
   });
 
+  it("does not send requester ownership when editing queue metadata", async () => {
+    const fetchMock = vi.mocked(fetch);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Queue" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Awake" }));
+
+    expect(screen.queryByLabelText("Requested by")).not.toBeInTheDocument();
+    await userEvent.clear(screen.getByLabelText("Queue title"));
+    await userEvent.type(screen.getByLabelText("Queue title"), "Edited Awake");
+    await userEvent.clear(screen.getByLabelText("Queue artist"));
+    await userEvent.type(screen.getByLabelText("Queue artist"), "Edited Tycho");
+    await userEvent.click(screen.getByRole("button", { name: "Save Awake" }));
+
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(([url, options]) => String(url).includes("/api/queue/") && options?.method === "PATCH");
+      expect(patchCall).toBeTruthy();
+      expect(JSON.parse(String(patchCall?.[1]?.body))).toEqual({ title: "Edited Awake", artist: "Edited Tycho" });
+    });
+  });
+
   it("navigates public sections from the sidebar", async () => {
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Queue" }));

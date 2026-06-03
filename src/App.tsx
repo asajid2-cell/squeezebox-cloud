@@ -553,11 +553,11 @@ function VolumeControl({ volume, onChange }: { volume: number; onChange: (volume
 
 function QueuePanel({ queue, onRefresh, onAction }: { queue: AppState["queue"]; onRefresh: () => void; onAction: ActionRunner }) {
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [draft, setDraft] = useState({ title: "", artist: "", requestedBy: "" });
+  const [draft, setDraft] = useState({ title: "", artist: "" });
 
   function beginEdit(item: AppState["queue"][number]) {
     setEditingId(item.id);
-    setDraft({ title: item.title, artist: item.artist, requestedBy: item.requestedBy });
+    setDraft({ title: item.title, artist: item.artist });
   }
 
   async function saveEdit(id: string) {
@@ -587,7 +587,6 @@ function QueuePanel({ queue, onRefresh, onAction }: { queue: AppState["queue"]; 
                 <small>Editing queue item</small>
                 <input aria-label="Queue title" value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.currentTarget.value })} />
                 <input aria-label="Queue artist" value={draft.artist} onChange={(event) => setDraft({ ...draft, artist: event.currentTarget.value })} />
-                <input aria-label="Requested by" value={draft.requestedBy} onChange={(event) => setDraft({ ...draft, requestedBy: event.currentTarget.value })} />
               </div>
             ) : (
               <div>
