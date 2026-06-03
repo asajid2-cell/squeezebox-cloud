@@ -5,7 +5,7 @@ export async function enrichTrackInfo(track) {
   const key = `${parsed.artist}::${parsed.title}`.toLowerCase();
   if (cache.has(key)) return cache.get(key);
 
-  if (process.env.VITEST) {
+  if (process.env.VITEST && !process.env.TRACK_INFO_ALLOW_NETWORK_IN_TESTS) {
     return fallbackInfo(parsed);
   }
 
@@ -112,17 +112,35 @@ async function fetchLrclibLyrics({ artist, title }) {
 }
 
 async function fetchArtistSummary(artist) {
-  try {
-    const response = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(artist)}`, {
-      headers: { "user-agent": "SqueezeboxCloud/0.1 (harmonizerlabs.cc)" },
-      signal: AbortSignal.timeout(2500)
-    });
-    if (!response.ok) return "";
-    const data = await response.json();
-    return clean(data.extract || "").slice(0, 900);
-  } catch {
-    return "";
+  const candidates = [
+    artist,
+    `${artist} (musician)`,
+    `${artist} (rapper)`,
+    `${artist} (singer)`,
+    `${artist} (band)`
+  ];
+  for (const candidate of candidates) {
+    try {
+      const response = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(candidate)}`, {
+        headers: { "user-agent": "SqueezeboxCloud/0.1 (harmonizerlabs.cc)" },
+        signal: AbortSignal.timeout(2500)
+      });
+      if (!response.ok) continue;
+      const data = await response.json();
+      const summary = clean(data.extract || "").slice(0, 900);
+      if (!summary || isDisambiguationSummary(summary, artist)) continue;
+      return summary;
+    } catch {
+      // Try the next music-specific candidate.
+    }
   }
+  return "";
+}
+
+function isDisambiguationSummary(summary, artist) {
+  const value = summary.toLowerCase();
+  const name = clean(artist).toLowerCase();
+  return value.startsWith(`${name} may refer to`) || value.includes("may refer to:");
 }
 
 async function fetchArtwork({ artist, title }) {
