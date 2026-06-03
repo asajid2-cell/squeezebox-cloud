@@ -1528,6 +1528,49 @@ describe("Cloud Squeeze API", () => {
     expect(played).toHaveLength(0);
   });
 
+  it("does not mutate smart-shuffle state when LMS repeat-off control fails", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, repeat: "one", smartShuffleSource: "mixed" };
+    addQueueItem({ title: "Generated Existing", artist: "Tester", requestedBy: "smart shuffle", uri: "spotify:track:generated-existing" });
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string, value: string) {
+          if (action === "repeat" && value === "off") throw new Error("LMS refused repeat off");
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/smart-shuffle")
+      .send({ source: "local", count: 1 })
+      .expect(502);
+
+    expect(response.body.error).toContain("LMS refused repeat off");
+    expect(appState.playback).toMatchObject({ shuffle: false, smartQueue: false, repeat: "one", smartShuffleSource: "mixed" });
+    expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Generated Existing"]);
+  });
+
+  it("does not enable smart queue through playback when repeat-off control fails", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, repeat: "one", smartShuffleSource: "local" };
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string, value: string) {
+          if (action === "repeat" && value === "off") throw new Error("LMS refused repeat off");
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/playback")
+      .send({ smartQueue: true, smartShuffleSource: "local" })
+      .expect(502);
+
+    expect(response.body.error).toContain("LMS refused repeat off");
+    expect(appState.playback).toMatchObject({ shuffle: false, smartQueue: false, repeat: "one", smartShuffleSource: "local" });
+    expect(appState.queue).toHaveLength(0);
+  });
+
   it("regenerates smart queue from the selected source and preserves user queue rows", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = { ...appState.playback, shuffle: false, smartQueue: true, smartShuffleSource: "mixed", history: [] };

@@ -748,13 +748,16 @@ export function createApp({ lms = new LmsClient() } = {}) {
       if (queueModeChanged) {
         await lms.control(playerId, "shuffle", false);
       }
+      if (queueModeChanged && finalSmartQueue) {
+        await lms.control(playerId, "repeat", "off");
+      }
       if (queueModeChanged && (next.smartQueue === false || next.shuffle === false || next.shuffle === true || sourceChanged)) {
         removeGeneratedQueueItems();
       }
       updatePlayback(next);
       let queued = [];
       if (queueModeChanged && appState.playback.smartQueue) {
-        queued = await activateGeneratedQueue(lms, playerId, { smart: true, mode: appState.playback.smartShuffleSource });
+        queued = await activateGeneratedQueue(lms, playerId, { smart: true, mode: appState.playback.smartShuffleSource, controlsReady: true });
       } else if (queueModeChanged && appState.playback.shuffle) {
         shuffleVisibleQueue();
       }
@@ -1202,10 +1205,14 @@ async function control(lms, action, value) {
   if (modeMap[action]) setMode(modeMap[action]);
 }
 
-async function activateGeneratedQueue(lms, playerId, { smart = false, shuffle: shuffleOn = false, mode = appState.playback.smartShuffleSource, count = 5, seed } = {}) {
+async function activateGeneratedQueue(lms, playerId, { smart = false, shuffle: shuffleOn = false, mode = appState.playback.smartShuffleSource, count = 5, seed, controlsReady = false } = {}) {
   if (!playerId || (!smart && !shuffleOn)) return [];
-  removeGeneratedQueueItems();
   const queueSeed = String(seed || appState.nowPlaying.artist || appState.nowPlaying.title || appState.playback.lastShuffleSeed || "drake").trim();
+  if (!controlsReady) {
+    await lms.control(playerId, "shuffle", false);
+    await lms.control(playerId, "repeat", "off");
+  }
+  removeGeneratedQueueItems();
   updatePlayback({
     smartQueue: Boolean(smart),
     shuffle: Boolean(shuffleOn && !smart),
@@ -1214,8 +1221,6 @@ async function activateGeneratedQueue(lms, playerId, { smart = false, shuffle: s
     lastShuffleSeed: queueSeed,
     lastSmartQueueBase: trackKey(appState.nowPlaying)
   });
-  await lms.control(playerId, "shuffle", false).catch(() => null);
-  await lms.control(playerId, "repeat", "off").catch(() => null);
   const queued = await buildGeneratedQueue(lms, playerId, queueSeed, mode, count, smart ? "smart shuffle" : "shuffle");
   updatePlayback({ lastShuffleRefillAt: Date.now(), repeat: "off" });
   logEvent("queue.activate-generated", { type: smart ? "smart shuffle" : "shuffle", mode, queued: queued.map(trackSummary), queue: queueSummary() });
