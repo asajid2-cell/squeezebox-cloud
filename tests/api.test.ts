@@ -1003,6 +1003,45 @@ describe("Cloud Squeeze API", () => {
     }
   });
 
+  it("does not follow library symlinks outside allowed roots", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const previousStrict = process.env.STRICT_PUBLIC_TRACK_VALIDATION;
+    const previousUploadDir = config.uploadDir;
+    const previousMusicDir = config.musicSourceDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-safe-root-"));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-outside-root-"));
+    config.musicSourceDir = path.join(root, "music");
+    config.uploadDir = path.join(root, "uploads");
+    process.env.STRICT_PUBLIC_TRACK_VALIDATION = "1";
+    const outsideTrack = path.join(outside, "outside.mp3");
+    const linkTrack = path.join(config.musicSourceDir, "linked-outside.mp3");
+    const app = createApp({ lms: mockLms });
+    try {
+      await fs.mkdir(config.musicSourceDir, { recursive: true });
+      await fs.mkdir(config.uploadDir, { recursive: true });
+      await fs.writeFile(outsideTrack, Buffer.from("ID3 outside"));
+      await fs.symlink(outsideTrack, linkTrack);
+
+      await request(app)
+        .post("/api/player/track")
+        .send({ action: "add-queue", track: { title: "Linked Outside", artist: "Tester", path: linkTrack } })
+        .expect(400);
+
+      const encoded = Buffer.from(linkTrack).toString("base64url");
+      await request(app).get(`/api/stream/${encoded}`).expect(404);
+      expect(appState.queue).toHaveLength(0);
+    } catch (error) {
+      if (!["EPERM", "EACCES"].includes((error as NodeJS.ErrnoException).code || "")) throw error;
+    } finally {
+      if (previousStrict === undefined) delete process.env.STRICT_PUBLIC_TRACK_VALIDATION;
+      else process.env.STRICT_PUBLIC_TRACK_VALIDATION = previousStrict;
+      config.uploadDir = previousUploadDir;
+      config.musicSourceDir = previousMusicDir;
+      await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
   it("deduplicates concurrent library rescans", async () => {
     const previousMusicDir = config.musicSourceDir;
     const previousUploadDir = config.uploadDir;

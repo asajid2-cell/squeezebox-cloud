@@ -1535,12 +1535,19 @@ function sameTitleArtist(left, right) {
 
 async function safeMusicPath(inputPath) {
   const resolved = path.resolve(String(inputPath || ""));
-  const roots = [config.musicSourceDir, config.uploadDir].map((root) => path.resolve(root));
-  const allowedRoot = roots.some((root) => resolved === root || resolved.startsWith(`${root}${path.sep}`));
-  if (!allowedRoot || !isStreamableAudio(resolved)) return null;
-  const stat = await fs.promises.stat(resolved).catch(() => null);
+  if (!isStreamableAudio(resolved)) return null;
+  const [target, roots] = await Promise.all([
+    fs.promises.realpath(resolved).catch(() => null),
+    Promise.all([config.musicSourceDir, config.uploadDir].map((root) => fs.promises.realpath(path.resolve(root)).catch(() => null)))
+  ]);
+  if (!target || !isStreamableAudio(target)) return null;
+  const allowedRoot = roots
+    .filter(Boolean)
+    .some((root) => target === root || target.startsWith(`${root}${path.sep}`));
+  if (!allowedRoot) return null;
+  const stat = await fs.promises.stat(target).catch(() => null);
   if (!stat?.isFile()) return null;
-  return resolved;
+  return target;
 }
 
 function isStreamableAudio(filePath) {
