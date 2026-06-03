@@ -2215,12 +2215,11 @@ describe("Cloud Squeeze API", () => {
       },
       async nowPlaying() {
         return {
-          id: "local-uploaded",
+          id: `local:${Buffer.from("/music/uploads/Sleep Paralysis-Jackson Ivy.mp3").toString("base64url")}`,
           title: "Sleep Paralysis Jackson Ivy",
           artist: "Uploaded",
           album: "uploads",
           source: "Uploaded",
-          path: "/music/uploads/Sleep Paralysis-Jackson Ivy.mp3",
           duration: 158,
           elapsed: 12,
           canSeek: true,
@@ -2243,6 +2242,55 @@ describe("Cloud Squeeze API", () => {
       title: "Sleep Paralysis",
       artist: "Jackson Ivy",
       album: "Haha - Single",
+      art: "https://covers.example/sleep.jpg",
+      elapsed: 12
+    });
+  });
+
+  it("preserves uploaded metadata when LMS reports only a local id after queue advance", async () => {
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = { id: "current", title: "Current", artist: "Tester", album: "", source: "Uploaded", duration: 100, elapsed: 98, canSeek: true, art: null, path: "/music/uploads/Current.mp3" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, previousTracks: [], appManagedPlayback: true };
+    addQueueItem({
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      album: "Haha - Single",
+      source: "Uploaded",
+      path: "/music/uploads/Sleep Paralysis-Jackson Ivy.mp3",
+      art: "https://covers.example/sleep.jpg",
+      requestedBy: "guest"
+    });
+    const lms = {
+      ...mockLms,
+      async playTrack() {
+        return "ok";
+      },
+      async nowPlaying() {
+        return {
+          id: `local:${Buffer.from("/music/uploads/Sleep Paralysis-Jackson Ivy.mp3").toString("base64url")}`,
+          title: "Sleep Paralysis Jackson Ivy",
+          artist: "Uploaded",
+          album: "uploads",
+          source: "Uploaded",
+          duration: 158,
+          elapsed: 12,
+          canSeek: true,
+          art: null
+        };
+      }
+    };
+    const app = createApp({ lms });
+
+    await request(app).post("/api/player/next").expect(200);
+    await refreshLmsForTests(lms, { force: true });
+
+    expect(appState.nowPlaying).toMatchObject({
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      album: "Haha - Single",
+      path: "/music/uploads/Sleep Paralysis-Jackson Ivy.mp3",
       art: "https://covers.example/sleep.jpg",
       elapsed: 12
     });
@@ -2292,12 +2340,11 @@ describe("Cloud Squeeze API", () => {
     });
 
     appState.nowPlaying = {
-      id: "local-uploaded",
+      id: `local:${Buffer.from("/music/uploads/Sleep Paralysis-Jackson Ivy.mp3").toString("base64url")}`,
       title: "Sleep Paralysis Jackson Ivy",
       artist: "Uploaded",
       album: "uploads",
       source: "Uploaded",
-      path: "/music/uploads/Sleep Paralysis-Jackson Ivy.mp3",
       duration: 158,
       elapsed: 12,
       canSeek: true,

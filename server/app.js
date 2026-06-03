@@ -2309,9 +2309,22 @@ function trackKey(track) {
 }
 
 function normalizeTrackKey(value) {
-  return String(value || "")
+  const raw = String(value || "");
+  const localPath = decodedLocalTrackIdPath(raw);
+  return (localPath || raw)
     .replace(/^spotify:\/\/(track|episode):/i, "spotify:$1:")
     .toLowerCase();
+}
+
+function decodedLocalTrackIdPath(value) {
+  const match = String(value || "").match(/^local:([A-Za-z0-9_-]+)$/);
+  if (!match) return "";
+  try {
+    const decoded = Buffer.from(match[1], "base64url").toString("utf8");
+    return decoded.startsWith("/") || /^[A-Za-z]:[\\/]/.test(decoded) ? decoded : "";
+  } catch {
+    return "";
+  }
 }
 
 function isPlayableSpotifyTrack(track) {
@@ -2376,11 +2389,12 @@ function peekPreviousTrack() {
 }
 
 function isRestorablePreviousTrack(track) {
-  return Boolean(track?.title && track.id !== "idle" && (track.path || track.uri || track.lmsTrackId || spotifyTrackId(track)));
+  return Boolean(track?.title && track.id !== "idle" && (track.path || decodedLocalTrackIdPath(track.id) || track.uri || track.lmsTrackId || spotifyTrackId(track)));
 }
 
 function restorableTrack(track) {
   const uri = track.uri || spotifyTrackId(track);
+  const decodedPath = track.path || decodedLocalTrackIdPath(track.id);
   return {
     id: track.id,
     title: track.title,
@@ -2390,7 +2404,7 @@ function restorableTrack(track) {
     duration: track.duration,
     art: track.art,
     uri,
-    path: track.path,
+    path: decodedPath,
     lmsTrackId: track.lmsTrackId,
     kind: track.kind,
     uploaded: track.uploaded
