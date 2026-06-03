@@ -198,6 +198,20 @@ describe("Cloud Squeeze UI", () => {
     expect(screen.getByRole("button", { name: "Play next" })).toBeInTheDocument();
   });
 
+  it("uses a compact default local search and full limit for typed searches", async () => {
+    const fetchMock = vi.mocked(fetch);
+    render(<App />);
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/library/search") && String(url).includes("limit=60"))).toBe(true);
+    });
+
+    await userEvent.type(screen.getByLabelText("Search music"), "local");
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/library/search") && String(url).includes("q=local") && String(url).includes("limit=2000"))).toBe(true);
+    });
+  });
+
   it("searches Spotify when the Spotify source is selected", async () => {
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Library" }));
