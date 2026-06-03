@@ -1838,6 +1838,10 @@ describe("Cloud Squeeze API", () => {
     await request(app).get("/api/spotify/children?kind=bad&uri=spotify%3Aplaylist%3A1").expect(400);
     await request(app).get("/api/spotify/children?kind=playlist").expect(400);
     await request(app).get("/api/spotify/children?kind=track&uri=spotify%3Aplaylist%3A1").expect(400);
+    await request(app).get("/api/spotify/children?kind=playlist&uri=spotify%3Aalbum%3A1").expect(400);
+    await request(app).get("/api/spotify/children?kind=album&uri=spotify%3Aplaylist%3A1").expect(400);
+    await request(app).get("/api/spotify/children?kind=artist&uri=spotify%3Aplaylist%3A1").expect(400);
+    await request(app).get("/api/spotify/children?kind=playlist&uri=notspotify").expect(400);
     await request(app).get("/api/spotify/children?kind=playlist&uri=spotify%3Aplaylist%3A1&limit=0").expect(400);
     await request(app).get("/api/spotify/children?kind=playlist&uri=spotify%3Aplaylist%3A1&offset=-1").expect(400);
 
