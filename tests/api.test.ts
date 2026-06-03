@@ -71,6 +71,24 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.nowPlaying.title).toBe("Test Song");
   });
 
+  it("prewarms the Spotify library tabs exposed in the UI during state refresh", async () => {
+    resetRefreshStateForTests();
+    const calls: string[] = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async spotifyLibrary(_playerId: string, type: string) {
+          calls.push(type);
+          return [];
+        }
+      }
+    });
+
+    await request(app).get("/api/state").expect(200);
+
+    expect(calls).toEqual(expect.arrayContaining(["playlists", "home", "artists", "tracks"]));
+  });
+
   it("adds queue items and rejects duplicates", async () => {
     appState.queue.splice(0, appState.queue.length);
     const app = createApp({ lms: mockLms });

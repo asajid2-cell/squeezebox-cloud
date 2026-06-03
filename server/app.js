@@ -1489,7 +1489,9 @@ function prewarmSpotifyLibrary(lms, playerId) {
   (async () => {
     await Promise.all([
       lms.spotifyLibrary(playerId, "playlists", 80, 0).catch(() => []),
-      lms.spotifyLibrary(playerId, "home", 80, 0).catch(() => [])
+      lms.spotifyLibrary(playerId, "home", 80, 0).catch(() => []),
+      lms.spotifyLibrary(playerId, "artists", 80, 0).catch(() => []),
+      lms.spotifyLibrary(playerId, "tracks", 80, 0).catch(() => [])
     ]);
   })();
 }
@@ -1847,6 +1849,10 @@ export function resetRefreshStateForTests() {
   refreshState.trackKey = "";
   refreshState.trackInfoPromise = null;
   refreshState.trackInfoPendingKey = "";
+  prewarmState.key = "";
+  prewarmState.at = 0;
+  spotifyLibraryPrewarmState.playerId = "";
+  spotifyLibraryPrewarmState.at = 0;
   clearPendingPlayback();
   clearPendingSeek();
 }
