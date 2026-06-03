@@ -847,7 +847,12 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(400).json({ error: "Invalid seek position", issues: parsed.error.issues });
       return;
     }
-    const seconds = Math.max(0, parsed.data.seconds);
+    if (!appState.nowPlaying?.canSeek || appState.nowPlaying?.id === "idle") {
+      res.status(409).json({ error: "No seekable track is playing", player: appState.player, nowPlaying: appState.nowPlaying });
+      return;
+    }
+    const duration = Number(appState.nowPlaying.duration || 0);
+    const seconds = Math.max(0, duration > 0 ? Math.min(parsed.data.seconds, duration) : parsed.data.seconds);
     const wasPlaying = appState.player.mode === "play";
     try {
       await control(lms, "seek", seconds);

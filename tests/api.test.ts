@@ -354,6 +354,44 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.nowPlaying.canSeek).toBe(true);
   });
 
+  it("rejects seek requests when no seekable track is playing", async () => {
+    const controls: Array<{ action: string; value?: number }> = [];
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
+    updateNowPlaying({ id: "idle", title: "No track playing", artist: "Connect a player or request a song", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null });
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string, value?: number) {
+          controls.push({ action, value });
+          return "ok";
+        }
+      }
+    })).post("/api/player/seek").send({ seconds: 999999 }).expect(409);
+
+    expect(response.body.error).toContain("No seekable track");
+    expect(appState.nowPlaying.elapsed).toBe(0);
+    expect(controls).toEqual([]);
+  });
+
+  it("clamps seek requests to the current track duration", async () => {
+    const controls: Array<{ action: string; value?: number }> = [];
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "pause" };
+    updateNowPlaying({ id: "seek-track", title: "Seek Track", artist: "Tester", source: "LMS", duration: 100, elapsed: 12, canSeek: true });
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string, value?: number) {
+          controls.push({ action, value });
+          return "ok";
+        }
+      }
+    })).post("/api/player/seek").send({ seconds: 999999 }).expect(200);
+
+    expect(response.body.seconds).toBe(100);
+    expect(response.body.nowPlaying.elapsed).toBe(100);
+    expect(controls).toEqual([{ action: "seek", value: 100 }]);
+  });
+
   it("keeps public elapsed near the seek target while LMS catches up", async () => {
     resetRefreshStateForTests();
     appState.player = { ...appState.player, id: "player-1", connected: true, online: true, mode: "play" };
@@ -1625,6 +1663,8 @@ describe("Cloud Squeeze API", () => {
 
   it("resumes playback immediately after seeking when already playing", async () => {
     const controls: Array<{ action: string; value?: number }> = [];
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    updateNowPlaying({ id: "seek-current", title: "Seek Current", artist: "Tester", source: "LMS", duration: 100, elapsed: 5, canSeek: true });
     const lms = {
       ...mockLms,
       async control(_playerId: string, action: string, value?: number) {
