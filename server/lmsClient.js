@@ -346,6 +346,12 @@ export class LmsClient {
     const widerKeys = [...new Set([requestKey, `spotifyLibrary:${playerId}:${type}:80:${start}`, `spotifyLibrary:${playerId}:${type}:100:${start}`])];
     const widerCached = this.getCached(widerKeys[0]) || this.getCached(widerKeys[1]);
     if (widerCached && widerCached.length >= count) return widerCached.slice(0, count);
+    if (start > 0) {
+      const firstPageCached = [`spotifyLibrary:${playerId}:${type}:80:0`, `spotifyLibrary:${playerId}:${type}:100:0`]
+        .map((key) => this.getCached(key))
+        .find((results) => results && results.length >= start + count);
+      if (firstPageCached) return firstPageCached.slice(start, start + count);
+    }
     const stale = this.getCached(cacheKey, { allowExpired: true }) || this.getCached(widerKeys[0], { allowExpired: true })?.slice(0, count) || [];
     if (type === "albums") return stale.slice(0, count);
     const widerInflight = widerKeys.map((key) => this.inflight.get(key)).find(Boolean);
@@ -393,6 +399,12 @@ export class LmsClient {
       .map((key) => this.getCached(key))
       .find((results) => results && (results.length === 0 || results.length >= count));
     if (widerCached) return widerCached.slice(0, count);
+    if (start > 0) {
+      const firstPageCached = [`${cacheBase}:200:0`, `${cacheBase}:300:0`]
+        .map((key) => this.getCached(key))
+        .find((results) => results && results.length >= start + count);
+      if (firstPageCached) return firstPageCached.slice(start, start + count);
+    }
     const stale =
       this.getCached(cacheKey, { allowExpired: true }) ||
       widerKeys

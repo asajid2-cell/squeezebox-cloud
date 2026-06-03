@@ -820,6 +820,29 @@ describe("LMS client parsing", () => {
     expect(requests).toBe(1);
   });
 
+  it("serves offset Spotify library requests from a cached wider first page", async () => {
+    let requests = 0;
+    const client = new LmsClient();
+    client.jsonRequest = async () => {
+      requests += 1;
+      return {
+        result: {
+          item_loop: Array.from({ length: 80 }, (_, index) => ({
+            text: `Playlist ${index + 1}\nby Spotify`,
+            presetParams: { favorites_url: `spotify:playlist:${index + 1}`, favorites_title: `Playlist ${index + 1}` }
+          }))
+        }
+      };
+    };
+
+    const firstPage = await client.spotifyLibrary("player-1", "playlists", 80, 0);
+    const offsetPage = await client.spotifyLibrary("player-1", "playlists", 5, 10);
+
+    expect(firstPage).toHaveLength(80);
+    expect(offsetPage.map((item) => item.title)).toEqual(["Playlist 11", "Playlist 12", "Playlist 13", "Playlist 14", "Playlist 15"]);
+    expect(requests).toBe(1);
+  });
+
   it("returns empty uncached Spotify saved albums without retrying Spotty", async () => {
     let requests = 0;
     const client = new LmsClient();
@@ -950,10 +973,12 @@ describe("LMS client parsing", () => {
     const firstNarrow = await client.spotifyChildren("player-1", { uri: "spotify:playlist:test", kind: "playlist" }, 10, 0);
     const wide = await client.spotifyChildren("player-1", { uri: "spotify:playlist:test", kind: "playlist" }, 200, 0);
     const secondNarrow = await client.spotifyChildren("player-1", { uri: "spotify:playlist:test", kind: "playlist" }, 5, 0);
+    const offsetWindow = await client.spotifyChildren("player-1", { uri: "spotify:playlist:test", kind: "playlist" }, 5, 10);
 
     expect(firstNarrow).toHaveLength(10);
     expect(wide).toHaveLength(200);
     expect(secondNarrow).toHaveLength(5);
+    expect(offsetWindow.map((item) => item.title)).toEqual(["Track 11", "Track 12", "Track 13", "Track 14", "Track 15"]);
     expect(requests).toEqual([
       ["player-1", ["spotty", "items", 0, 200, "menu:spotty", "item_id:spotify:playlist:test"]]
     ]);
