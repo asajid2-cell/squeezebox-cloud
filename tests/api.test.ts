@@ -375,6 +375,8 @@ describe("Cloud Squeeze API", () => {
     await request(app).post("/api/player/volume").send({ volume: "" }).expect(400);
     await request(app).post("/api/player/volume").send({ volume: false }).expect(400);
     await request(app).post("/api/player/volume").send({ volume: [] }).expect(400);
+    await request(app).post("/api/player/volume").send({ volume: -1 }).expect(400);
+    await request(app).post("/api/player/volume").send({ volume: 101 }).expect(400);
   });
 
   it("rejects extra volume command fields before sending LMS controls", async () => {
@@ -2605,6 +2607,17 @@ describe("Cloud Squeeze API", () => {
       .expect(400);
 
     expect(response.body.error).toBe("Invalid playback settings");
+  });
+
+  it("rejects ambiguous playback queue modes", async () => {
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false };
+    const response = await request(createApp({ lms: mockLms }))
+      .post("/api/player/playback")
+      .send({ shuffle: true, smartQueue: true })
+      .expect(400);
+
+    expect(response.body.error).toBe("Invalid playback settings");
+    expect(appState.playback).toMatchObject({ shuffle: false, smartQueue: false });
   });
 
   it("rejects empty playback updates instead of returning a no-op success", async () => {

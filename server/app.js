@@ -101,7 +101,7 @@ const playbackTracksSchema = z.object({
 }).strict();
 
 const volumeSchema = z.object({
-  volume: z.number().finite()
+  volume: z.number().finite().min(0).max(100)
 }).strict();
 
 const seekSchema = z.object({
@@ -116,6 +116,9 @@ const playbackSchema = z.object({
 }).strict().refine(
   (value) => Object.values(value).some((item) => item !== undefined),
   { message: "At least one playback setting is required" }
+).refine(
+  (value) => !(value.shuffle === true && value.smartQueue === true),
+  { message: "Shuffle and smart shuffle cannot both be enabled" }
 );
 
 const smartShuffleSchema = z.object({
