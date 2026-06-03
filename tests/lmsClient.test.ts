@@ -695,6 +695,45 @@ describe("LMS client parsing", () => {
     expect(requests).toBe(1);
   });
 
+  it("serves stale Spotify search cache while refreshing in the background", async () => {
+    let release: (value: unknown) => void = () => {};
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const client = new LmsClient();
+    client.setCached(
+      "spotifySearch:player-1:drake:20",
+      [{ title: "Stale Track", artist: "Drake", uri: "spotify:track:stale", kind: "track" }],
+      -1
+    );
+    client.jsonRequest = async () => {
+      await gate;
+      return {
+        result: {
+          item_loop: [
+            {
+              text: "Fresh Track\nDrake - Album",
+              goAction: "playControl",
+              presetParams: { favorites_url: "spotify:track:fresh", favorites_title: "Fresh Track by Drake from Album" }
+            }
+          ]
+        }
+      };
+    };
+
+    const started = Date.now();
+    const stale = await client.spotifySearch("player-1", "drake", 20);
+
+    expect(Date.now() - started).toBeLessThan(200);
+    expect(stale).toEqual([expect.objectContaining({ title: "Stale Track" })]);
+
+    release(null);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const fresh = await client.spotifySearch("player-1", "drake", 20);
+
+    expect(fresh).toEqual([expect.objectContaining({ title: "Fresh Track" })]);
+  });
+
   it("serves narrower Spotify searches from an in-flight full suggestion page", async () => {
     let requests = 0;
     let release: (value: unknown) => void = () => {};

@@ -323,12 +323,17 @@ export class LmsClient {
       .map((key) => this.getCached(key))
       .find((results) => results && results.length >= count);
     if (widerCached && widerCached.length >= count) return widerCached.slice(0, count);
+    const stale =
+      this.getCached(cacheKey, { allowExpired: true }) ||
+      widerKeys.map((key) => this.getCached(key, { allowExpired: true })).find((results) => results && results.length >= count)?.slice(0, count) ||
+      [];
     const widerInflight = widerKeys.map((key) => this.inflight.get(key)).find(Boolean);
     if (widerInflight) {
+      if (stale.length > 0) return stale.slice(0, count);
       const results = await widerInflight.catch(() => null);
       if (results && results.length >= count) return results.slice(0, count);
     }
-    const fullResults = await this.once(requestKey, async () => {
+    const request = this.once(requestKey, async () => {
       let response = await this.jsonRequest([
         playerId,
         ["spotty", "items", 0, requestCount, "menu:spotty", "item_id:1.0", `search:${search}`, "cachesearch:1"]
@@ -374,6 +379,17 @@ export class LmsClient {
       if (mapped.length > 0) this.setCached(requestKey, mapped.slice(0, requestCount), spotifySearchCacheMs);
       return mapped;
     });
+    if (stale.length > 0) {
+      request
+        .then((fresh) => {
+          this.rememberSpotifyBrowseIds(fresh);
+          const results = fresh.slice(0, count);
+          if (results.length > 0) this.setCached(cacheKey, results, spotifySearchCacheMs);
+        })
+        .catch(() => null);
+      return stale.slice(0, count);
+    }
+    const fullResults = await request;
     this.rememberSpotifyBrowseIds(fullResults);
     const results = fullResults.slice(0, count);
     if (results.length > 0) {
