@@ -760,7 +760,7 @@ describe("Cloud Squeeze API", () => {
     addQueueItem({ title: "Generated Does Not Count", artist: "Tester", uri: "spotify:track:generated-limit", kind: "track", requestedBy: "smart shuffle" });
     const app = createApp({ lms: mockLms });
 
-    const tooManyBatch = await request(app)
+    const partialBatch = await request(app)
       .post("/api/player/tracks")
       .send({
         action: "add-queue",
@@ -769,14 +769,16 @@ describe("Cloud Squeeze API", () => {
           { title: "Limit New 2", path: "/music/test/limit-new-2.mp3", source: "Local library" }
         ]
       })
-      .expect(429);
-    expect(tooManyBatch.body.error).toContain("max 3");
-    expect(appState.queue.some((item) => item.title === "Limit New 1")).toBe(false);
+      .expect(200);
+    expect(partialBatch.body.accepted).toBe(1);
+    expect(partialBatch.body.rejected).toBe(1);
+    expect(partialBatch.body.queued).toEqual([expect.objectContaining({ title: "Limit New 1" })]);
+    expect(appState.queue.some((item) => item.title === "Limit New 1")).toBe(true);
 
     await request(app)
       .post("/api/player/track")
       .send({ action: "play-next", track: { title: "Limit Allowed", path: "/music/test/limit-allowed.mp3", source: "Local library" } })
-      .expect(200);
+      .expect(429);
 
     const tooManySingle = await request(app)
       .post("/api/player/track")
@@ -1023,6 +1025,28 @@ describe("Cloud Squeeze API", () => {
 
     expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Playlist One", "Playlist Two", "Playlist Three"]);
     expect(played).toHaveLength(0);
+  });
+
+  it("partially accepts play-next batches without reversing playlist order", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.admin = { ...appState.admin, maxQueuePerUser: 3 };
+    addQueueItem({ title: "Existing Tail", artist: "Tester", path: "/music/test/existing-tail.mp3", requestedBy: "guest" });
+    const response = await request(createApp({ lms: mockLms }))
+      .post("/api/player/tracks")
+      .send({
+        action: "play-next",
+        tracks: [
+          { title: "Next One", artist: "Tester", path: "/music/test/next-one.mp3", source: "Local library" },
+          { title: "Next Two", artist: "Tester", path: "/music/test/next-two.mp3", source: "Local library" },
+          { title: "Next Three", artist: "Tester", path: "/music/test/next-three.mp3", source: "Local library" }
+        ]
+      })
+      .expect(200);
+
+    expect(response.body.accepted).toBe(2);
+    expect(response.body.rejected).toBe(1);
+    expect(response.body.queued.map((item: { title: string }) => item.title)).toEqual(["Next One", "Next Two"]);
+    expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Next One", "Next Two", "Existing Tail"]);
   });
 
   it("does not advance playback while refreshing public state", async () => {

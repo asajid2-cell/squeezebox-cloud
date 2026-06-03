@@ -368,17 +368,19 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(409).json({ error: "Those songs are already in the queue", queue: appState.queue });
       return;
     }
-    if (!canQueueMoreGuestTracks(uniquePlayable.length)) {
+    const availableSlots = Math.max(0, guestQueueLimit() - guestQueueCount());
+    if (availableSlots <= 0) {
       res.status(429).json({ error: queueLimitMessage(), queue: appState.queue, accepted: Math.max(0, guestQueueLimit() - guestQueueCount()) });
       return;
     }
-    if (!(await trackInputsExistOnDisk(uniquePlayable))) {
+    const acceptedPlayable = uniquePlayable.slice(0, availableSlots);
+    if (!(await trackInputsExistOnDisk(acceptedPlayable))) {
       res.status(400).json({ error: "Local tracks must come from the Cloud Squeeze library or uploads" });
       return;
     }
 
     const queued = [];
-    const ordered = action === "play-next" ? [...uniquePlayable].reverse() : uniquePlayable;
+    const ordered = action === "play-next" ? [...acceptedPlayable].reverse() : acceptedPlayable;
     for (const track of ordered) {
       const item = action === "play-next"
         ? addQueueItemNext({ ...track, requestedBy: "guest" })
@@ -386,8 +388,8 @@ export function createApp({ lms = new LmsClient() } = {}) {
       queued.push(item);
     }
     if (action === "play-next") queued.reverse();
-    logEvent("queue.batch", { action, count: queued.length, queued: queued.map(trackSummary), queue: queueSummary() });
-    res.json({ ok: true, action, queued, queue: appState.queue });
+    logEvent("queue.batch", { action, count: queued.length, requested: uniquePlayable.length, queued: queued.map(trackSummary), queue: queueSummary() });
+    res.json({ ok: true, action, queued, queue: appState.queue, accepted: queued.length, rejected: Math.max(0, uniquePlayable.length - queued.length) });
   });
 
   app.get("/api/library/search", async (req, res) => {
