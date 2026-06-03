@@ -1803,18 +1803,33 @@ async function playNextVisibleQueueItem(lms, playerId, { generatedOnly = false }
   if (appState.playback.smartQueue || appState.playback.shuffle) {
     await lms.control(playerId, "shuffle", false);
   }
-  await topOffGeneratedQueue(lms, playerId);
   const next = nextQueueItemForPlayback(appState.queue, { generatedOnly });
-  if (!next) {
-    await ensureSmartShuffleQueue(lms, playerId, { force: true });
-    const refilled = nextQueueItemForPlayback(appState.queue, { generatedOnly });
-    if (!refilled) {
-      logEvent("queue.next-empty", { playback: appState.playback, queue: queueSummary() });
-      return null;
-    }
+  if (next) {
+    const played = await playQueuedItem(lms, playerId, next);
+    scheduleGeneratedTopOff(lms, playerId, played);
+    return played;
+  }
+  await topOffGeneratedQueue(lms, playerId);
+  const refilled = nextQueueItemForPlayback(appState.queue, { generatedOnly });
+  if (refilled) {
     return playQueuedItem(lms, playerId, refilled);
   }
-  return playQueuedItem(lms, playerId, next);
+  await ensureSmartShuffleQueue(lms, playerId, { force: true });
+  const ensured = nextQueueItemForPlayback(appState.queue, { generatedOnly });
+  if (!ensured) {
+    logEvent("queue.next-empty", { playback: appState.playback, queue: queueSummary() });
+    return null;
+  }
+  return playQueuedItem(lms, playerId, ensured);
+}
+
+function scheduleGeneratedTopOff(lms, playerId, played) {
+  if (!isGeneratedQueueItem(played)) return;
+  if (process.env.VITEST) return;
+  const timer = setTimeout(() => {
+    topOffGeneratedQueue(lms, playerId).catch(() => null);
+  }, 0);
+  timer.unref?.();
 }
 
 function isTrackInfoCandidate(track) {

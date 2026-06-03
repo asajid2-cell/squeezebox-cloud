@@ -3335,6 +3335,44 @@ describe("Cloud Squeeze API", () => {
     expect(appState.queue).toEqual([]);
   });
 
+  it("plays an existing generated queue row before slow shuffle top-off", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = { id: "current", title: "Current", artist: "Tester", album: "", source: "Spotify", duration: 100, elapsed: 5, canSeek: true, art: null, uri: "spotify:track:current" };
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      smartQueue: false,
+      smartShuffleSource: "spotify",
+      lastShuffleRefillAt: 0,
+      lastShuffleSeed: "Tester",
+      history: []
+    };
+    addQueueItem({ title: "Visible Generated", artist: "Tester", requestedBy: "shuffle", uri: "spotify:track:visible-generated", kind: "track" });
+    const played: string[] = [];
+    const lms = {
+      ...mockLms,
+      async control() {
+        return "ok";
+      },
+      async playTrack(_playerId: string, track: { title?: string }) {
+        played.push(String(track.title || ""));
+        return "ok";
+      },
+      async spotifySearch() {
+        return new Promise(() => {});
+      }
+    };
+
+    const started = Date.now();
+    const response = await request(createApp({ lms })).post("/api/player/next").expect(200);
+
+    expect(Date.now() - started).toBeLessThan(800);
+    expect(response.body.action).toBe("visible-queue-next");
+    expect(response.body.nowPlaying.title).toBe("Visible Generated");
+    expect(played).toEqual(["Visible Generated"]);
+  });
+
   it("refills normal shuffle instead of falling through to LMS next when the visible queue is empty", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
