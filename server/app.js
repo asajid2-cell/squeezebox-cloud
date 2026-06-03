@@ -1526,28 +1526,46 @@ function prewarmSpotifyLibrary(lms, playerId) {
   spotifyLibraryPrewarmState.playerId = playerId;
   spotifyLibraryPrewarmState.at = Date.now();
   (async () => {
-    const [playlists, home] = await Promise.all([
+    const [playlists, home, artists] = await Promise.all([
       lms.spotifyLibrary(playerId, "playlists", 80, 0).catch(() => []),
       lms.spotifyLibrary(playerId, "home", 80, 0).catch(() => []),
       lms.spotifyLibrary(playerId, "artists", 80, 0).catch(() => []),
       lms.spotifyLibrary(playerId, "tracks", 80, 0).catch(() => [])
     ]);
-    const seen = new Set();
-    const containers = [...playlists, ...home]
+    const seenPlaylists = new Set();
+    const playlistContainers = [...playlists, ...home]
       .filter((item) => item?.uri && item.kind === "playlist")
       .filter((item) => {
         const key = trackKey(item);
-        if (!key || seen.has(key)) return false;
-        seen.add(key);
+        if (!key || seenPlaylists.has(key)) return false;
+        seenPlaylists.add(key);
         return true;
       })
       .slice(0, 3);
-    await Promise.all(containers.map((item) => lms.spotifyChildren(
-      playerId,
-      { browseId: item.browseId, uri: item.uri, kind: "playlist", title: item.title },
-      50,
-      0
-    ).catch(() => [])));
+    const seenArtists = new Set();
+    const artistContainers = artists
+      .filter((item) => item?.uri && item.kind === "artist")
+      .filter((item) => {
+        const key = trackKey(item);
+        if (!key || seenArtists.has(key)) return false;
+        seenArtists.add(key);
+        return true;
+      })
+      .slice(0, 3);
+    await Promise.all([
+      ...playlistContainers.map((item) => lms.spotifyChildren(
+        playerId,
+        { browseId: item.browseId, uri: item.uri, kind: "playlist", title: item.title },
+        50,
+        0
+      ).catch(() => [])),
+      ...artistContainers.map((item) => lms.spotifyChildren(
+        playerId,
+        { browseId: item.browseId, uri: item.uri, kind: "artist", title: item.title },
+        20,
+        0
+      ).catch(() => []))
+    ]);
   })();
 }
 

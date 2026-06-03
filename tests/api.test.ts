@@ -92,6 +92,13 @@ describe("Cloud Squeeze API", () => {
               { title: "Daily Mix", uri: "spotify:playlist:daily", kind: "playlist", browseId: "0.1" }
             ];
           }
+          if (type === "artists") {
+            return [
+              { title: "Ado", uri: "spotify:artist:ado", kind: "artist", browseId: "7.0" },
+              { title: "Aimer", uri: "spotify:artist:aimer", kind: "artist", browseId: "7.1" },
+              { title: "Ado Duplicate", uri: "spotify:artist:ado", kind: "artist", browseId: "7.2" }
+            ];
+          }
           return [];
         },
         async spotifyChildren(_playerId: string, item: { title?: string; uri?: string }) {
@@ -102,14 +109,16 @@ describe("Cloud Squeeze API", () => {
     });
 
     await request(app).get("/api/state").expect(200);
-    await vi.waitFor(() => expect(childCalls).toHaveLength(3));
+    await vi.waitFor(() => expect(childCalls).toHaveLength(5));
 
     expect(calls).toEqual(expect.arrayContaining(["playlists", "home", "artists", "tracks"]));
-    expect(childCalls.map((item) => item.uri)).toEqual([
+    expect(childCalls.map((item) => item.uri)).toEqual(expect.arrayContaining([
       "spotify:playlist:first",
       "spotify:playlist:second",
-      "spotify:playlist:daily"
-    ]);
+      "spotify:playlist:daily",
+      "spotify:artist:ado",
+      "spotify:artist:aimer"
+    ]));
   });
 
   it("adds queue items and rejects duplicates", async () => {
