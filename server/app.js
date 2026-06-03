@@ -391,7 +391,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
     }
     const availableSlots = Math.max(0, guestQueueLimit() - guestQueueCount());
     if (availableSlots <= 0) {
-      res.status(429).json({ error: queueLimitMessage(), queue: appState.queue, accepted: Math.max(0, guestQueueLimit() - guestQueueCount()) });
+      res.status(429).json({ error: queueLimitMessage(), queue: appState.queue, accepted: 0, rejected: uniquePlayable.length });
       return;
     }
     const acceptedPlayable = uniquePlayable.slice(0, availableSlots);

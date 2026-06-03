@@ -878,6 +878,19 @@ describe("Cloud Squeeze API", () => {
     expect(partialBatch.body.queued).toEqual([expect.objectContaining({ title: "Limit New 1" })]);
     expect(appState.queue.some((item) => item.title === "Limit New 1")).toBe(true);
 
+    const fullBatch = await request(app)
+      .post("/api/player/tracks")
+      .send({
+        action: "add-queue",
+        tracks: [
+          { title: "Limit Full 1", path: "/music/test/limit-full-1.mp3", source: "Local library" },
+          { title: "Limit Full 2", path: "/music/test/limit-full-2.mp3", source: "Local library" }
+        ]
+      })
+      .expect(429);
+    expect(fullBatch.body.accepted).toBe(0);
+    expect(fullBatch.body.rejected).toBe(2);
+
     await request(app)
       .post("/api/player/track")
       .send({ action: "play-next", track: { title: "Limit Allowed", path: "/music/test/limit-allowed.mp3", source: "Local library" } })
