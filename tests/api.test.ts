@@ -745,6 +745,7 @@ describe("Cloud Squeeze API", () => {
   it("plays the previous app track before falling back to LMS previous", async () => {
     const played: Array<{ action: string; track: { title?: string; path?: string } }> = [];
     const controls: Array<{ action: string }> = [];
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
     appState.nowPlaying = {
       id: "current",
       title: "Current Track",
@@ -780,6 +781,55 @@ describe("Cloud Squeeze API", () => {
     expect(played).toEqual([{ action: "play-now", track: expect.objectContaining({ title: "Previous Track", path: "/music/previous.mp3" }) }]);
     expect(controls).not.toContainEqual({ action: "previous" });
     expect(appState.playback.previousTracks[0]).toMatchObject({ title: "Current Track", path: "/music/current.mp3" });
+  });
+
+  it("remembers the pre-command current track when next playback updates LMS immediately", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = {
+      id: "current",
+      title: "Current Before Next",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 20,
+      canSeek: true,
+      art: null,
+      path: "/music/current-before-next.mp3"
+    };
+    appState.playback = { ...appState.playback, previousTracks: [], shuffle: false, smartQueue: false, appManagedPlayback: true };
+    addQueueItem({ title: "Queued Immediate", artist: "Tester", requestedBy: "guest", path: "/music/queued-immediate.mp3" });
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string; path?: string }) {
+        updateNowPlaying({
+          id: "queued",
+          title: track.title || "",
+          artist: "Tester",
+          album: "",
+          source: "Local library",
+          duration: 100,
+          elapsed: 0,
+          canSeek: true,
+          art: null,
+          path: track.path
+        });
+        return "ok";
+      },
+      async nowPlaying() {
+        return appState.nowPlaying;
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/next").send("").expect(200);
+
+    expect(response.body.action).toBe("visible-queue-next");
+    expect(response.body.nowPlaying.title).toBe("Queued Immediate");
+    expect(response.body.playback.previousTracks[0]).toMatchObject({
+      title: "Current Before Next",
+      path: "/music/current-before-next.mp3"
+    });
   });
 
   it("does not mutate previous history when app previous playback fails", async () => {

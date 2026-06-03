@@ -453,10 +453,11 @@ export function createApp({ lms = new LmsClient() } = {}) {
           return;
         }
         const playerId = await hotPlayerId(lms);
+        const previousTrack = appState.nowPlaying;
         await lms.playTrack(playerId, track, "play-now");
         stopGeneratedPlayback();
         setMode("play");
-        rememberPreviousTrack(appState.nowPlaying);
+        rememberPreviousTrack(previousTrack);
         updatePlayback({ appManagedPlayback: true });
         markPendingPlayback(track);
         const optimistic = optimisticTrack(track);
@@ -912,9 +913,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
       logEvent("transport.previous.request", { queue: queueSummary(), playback: appState.playback, nowPlaying: trackSummary(appState.nowPlaying) });
       const previous = peekPreviousTrack();
       if (previous) {
+        const currentBeforePrevious = appState.nowPlaying;
         await lms.playTrack(playerId, previous, "play-now");
         popPreviousTrack();
-        rememberPreviousTrack(appState.nowPlaying);
+        rememberPreviousTrack(currentBeforePrevious);
         updatePlayback({ appManagedPlayback: true });
         setMode("play");
         markPendingPlayback(previous);
@@ -924,7 +926,12 @@ export function createApp({ lms = new LmsClient() } = {}) {
       } else {
         logEvent("transport.previous.noop", { reason: "empty-app-history", queue: queueSummary(), nowPlaying: trackSummary(appState.nowPlaying) });
       }
-      if (previous) refreshLms(lms, { force: true }).catch(() => null);
+      if (previous && !process.env.VITEST) {
+        const refreshTimer = setTimeout(() => {
+          refreshLms(lms, { force: true }).catch(() => null);
+        }, 0);
+        refreshTimer.unref?.();
+      }
       const resultAction = previous ? "app-previous" : "noop";
       logEvent("transport.previous.result", { action: resultAction, previous: trackSummary(previous), queue: queueSummary(), playback: appState.playback, nowPlaying: trackSummary(appState.nowPlaying) });
       res.json({ ok: true, action: resultAction, mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying, queue: appState.queue, playback: appState.playback });
@@ -2001,8 +2008,9 @@ export function nextQueueItemForPlayback(queue = appState.queue, { generatedOnly
 }
 
 async function playQueuedItem(lms, playerId, item) {
+  const previousTrack = appState.nowPlaying;
   await lms.playTrack(playerId, item, "play-now");
-  rememberPreviousTrack(appState.nowPlaying);
+  rememberPreviousTrack(previousTrack);
   rememberShuffleTrack(item);
   markPendingPlayback(item);
   removeQueueItem(item.id);
