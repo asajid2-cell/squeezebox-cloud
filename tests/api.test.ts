@@ -354,7 +354,7 @@ describe("Cloud Squeeze API", () => {
     await request(createApp({ lms: mockLms })).post("/api/player/seek").send({ seconds: "later" }).expect(400);
   });
 
-  it("uses the LMS previous command when previous is pressed", async () => {
+  it("does not restart the current track when previous has no app history", async () => {
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
     appState.playback = { ...appState.playback, previousTracks: [] };
     const controls: Array<{ action: string; value?: number }> = [];
@@ -368,8 +368,8 @@ describe("Cloud Squeeze API", () => {
 
     const response = await request(createApp({ lms })).post("/api/player/previous").expect(200);
 
-    expect(response.body.action).toBe("previous");
-    expect(controls).toContainEqual({ action: "previous", value: undefined });
+    expect(response.body.action).toBe("noop");
+    expect(controls).toEqual([]);
     expect(controls.some((item) => item.action === "seek")).toBe(false);
   });
 
@@ -397,19 +397,22 @@ describe("Cloud Squeeze API", () => {
     expect(controls).toEqual([]);
   });
 
-  it("does not mutate mode when LMS previous fallback fails", async () => {
+  it("does not call LMS previous when app previous history is empty", async () => {
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "pause" };
     appState.playback = { ...appState.playback, previousTracks: [] };
+    const controls: string[] = [];
     const lms = {
       ...mockLms,
-      async control() {
-        throw new Error("LMS previous failed");
+      async control(_playerId: string, action: string) {
+        controls.push(action);
+        return "ok";
       }
     };
 
-    const response = await request(createApp({ lms })).post("/api/player/previous").expect(502);
+    const response = await request(createApp({ lms })).post("/api/player/previous").expect(200);
 
-    expect(response.body.error).toContain("LMS previous failed");
+    expect(response.body.action).toBe("noop");
+    expect(controls).toEqual([]);
     expect(appState.player.mode).toBe("pause");
   });
 
@@ -537,7 +540,7 @@ describe("Cloud Squeeze API", () => {
     expect(appState.playback.previousTracks[0]).toMatchObject({ title: "Track B", path: "/music/b.mp3" });
   });
 
-  it("uses the hot player id for previous without waiting on a fresh status call", async () => {
+  it("no-ops previous with the hot player id without waiting on a fresh status call", async () => {
     appState.playback = { ...appState.playback, previousTracks: [] };
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true };
     const controls: Array<{ playerId: string; action: string }> = [];
@@ -554,8 +557,8 @@ describe("Cloud Squeeze API", () => {
 
     const response = await request(createApp({ lms })).post("/api/player/previous").expect(200);
 
-    expect(response.body.action).toBe("previous");
-    expect(controls).toContainEqual({ playerId: "hot-player", action: "previous" });
+    expect(response.body.action).toBe("noop");
+    expect(controls).toEqual([]);
   });
 
   it("proxies LMS artwork", async () => {
@@ -1066,6 +1069,38 @@ describe("Cloud Squeeze API", () => {
 
     expect([first.body.nowPlaying.title, second.body.nowPlaying.title]).toEqual(["Next One", "Next Two"]);
     expect(played).toEqual(["Next One", "Next Two"]);
+    expect(appState.queue).toEqual([]);
+  });
+
+  it("does not fall through to LMS next after an app-managed queue is exhausted", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = { id: "current", title: "Current", artist: "Tester", album: "", source: "Local library", duration: 100, elapsed: 5, canSeek: true, art: null, path: "/music/test/current.mp3" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, previousTracks: [], appManagedPlayback: false };
+    addQueueItem({ title: "Only Visible Next", artist: "Tester", path: "/music/test/only-visible-next.mp3", requestedBy: "guest" });
+    const played: string[] = [];
+    const controls: string[] = [];
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string }) {
+        played.push(String(track.title || ""));
+        return "ok";
+      },
+      async control(_playerId: string, action: string) {
+        controls.push(action);
+        return "ok";
+      }
+    };
+    const app = createApp({ lms });
+
+    const first = await request(app).post("/api/player/next").expect(200);
+    const second = await request(app).post("/api/player/next").expect(200);
+
+    expect(first.body.action).toBe("visible-queue-next");
+    expect(first.body.nowPlaying.title).toBe("Only Visible Next");
+    expect(second.body.action).toBe("noop");
+    expect(played).toEqual(["Only Visible Next"]);
+    expect(controls).not.toContain("next");
     expect(appState.queue).toEqual([]);
   });
 

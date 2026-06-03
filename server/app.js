@@ -345,6 +345,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
         stopGeneratedPlayback();
         setMode("play");
         rememberPreviousTrack(appState.nowPlaying);
+        updatePlayback({ appManagedPlayback: true });
         markPendingPlayback(track);
         const optimistic = optimisticTrack(track);
         updateNowPlaying(optimistic);
@@ -695,7 +696,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
         (appState.player.mode === "stop" || appState.player.mode === "stopped") &&
         appState.queue.length > 0;
       const played = shouldPlayVisibleQueue ? await playNextVisibleQueueItem(lms, playerId) : null;
-      if (!played) await control(lms, "play");
+      if (!played) {
+        await control(lms, "play");
+        updatePlayback({ appManagedPlayback: false });
+      }
       refreshLms(lms, { force: true }).catch(() => null);
       res.json({ ok: true, action: played ? "visible-queue-play" : "play", mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying, queue: appState.queue });
     } catch (error) {
@@ -716,6 +720,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
     try {
       await control(lms, "stop");
       clearPendingPlayback();
+      updatePlayback({ appManagedPlayback: false });
       updateNowPlaying(idleNowPlaying);
       updateTrackInfo(idleTrackInfo);
       res.json({ ok: true, mode: appState.player.mode, player: appState.player });
@@ -732,7 +737,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       const emptyAppManagedQueue =
         !played &&
         appState.queue.length === 0 &&
-        (appState.playback.shuffle || appState.playback.smartQueue);
+        (appState.playback.shuffle || appState.playback.smartQueue || appState.playback.appManagedPlayback);
       const stoppedWithEmptyManualQueue =
         !played &&
         appState.queue.length === 0 &&
@@ -758,16 +763,17 @@ export function createApp({ lms = new LmsClient() } = {}) {
         await lms.playTrack(playerId, previous, "play-now");
         popPreviousTrack();
         rememberPreviousTrack(appState.nowPlaying);
+        updatePlayback({ appManagedPlayback: true });
         setMode("play");
         markPendingPlayback(previous);
         updateNowPlaying(optimisticTrack(previous));
       } else if (appState.player.mode === "stop" || appState.player.mode === "stopped") {
         logEvent("transport.previous.noop", { reason: "stopped", queue: queueSummary(), nowPlaying: trackSummary(appState.nowPlaying) });
       } else {
-        await control(lms, "previous");
+        logEvent("transport.previous.noop", { reason: "empty-app-history", queue: queueSummary(), nowPlaying: trackSummary(appState.nowPlaying) });
       }
-      refreshLms(lms, { force: true }).catch(() => null);
-      const resultAction = previous ? "app-previous" : (appState.player.mode === "stop" || appState.player.mode === "stopped") ? "noop" : "previous";
+      if (previous) refreshLms(lms, { force: true }).catch(() => null);
+      const resultAction = previous ? "app-previous" : "noop";
       logEvent("transport.previous.result", { action: resultAction, previous: trackSummary(previous), queue: queueSummary(), playback: appState.playback, nowPlaying: trackSummary(appState.nowPlaying) });
       res.json({ ok: true, action: resultAction, mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying });
     } catch (error) {
@@ -1277,7 +1283,7 @@ async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force =
         rememberObservedTrackTransition(track);
         updateNowPlaying(track);
         if (!isTrackInfoCandidate(track)) {
-          updatePlayback({ previousTracks: [] });
+          updatePlayback({ previousTracks: [], appManagedPlayback: false });
           updateTrackInfo(idleTrackInfo);
         }
         if (shouldRefreshTrackInfo) {
@@ -1590,6 +1596,7 @@ async function playQueuedItem(lms, playerId, item) {
   markPendingPlayback(item);
   removeQueueItem(item.id);
   setMode("play");
+  updatePlayback({ appManagedPlayback: true });
   updateNowPlaying(optimisticTrack(item));
   logEvent("queue.play-item", { item: trackSummary(item), queueAfterRemove: queueSummary(), playback: appState.playback });
   return item;

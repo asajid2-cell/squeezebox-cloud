@@ -68,7 +68,8 @@ export const appState = {
     lastShuffleSeed: "",
     lastSmartQueueBase: "",
     history: [],
-    previousTracks: []
+    previousTracks: [],
+    appManagedPlayback: false
   },
   admin: {
     publicRequests: true,
