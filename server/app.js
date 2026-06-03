@@ -774,16 +774,16 @@ export function createApp({ lms = new LmsClient() } = {}) {
     }
   }));
 
-  app.post("/api/player/pause", async (_req, res) => {
+  app.post("/api/player/pause", async (_req, res) => withTransportLock(res, async () => {
     try {
       await control(lms, "pause");
       res.json({ ok: true, mode: appState.player.mode, player: appState.player });
     } catch (error) {
       res.status(502).json({ error: error.message, mode: appState.player.mode, player: appState.player });
     }
-  });
+  }));
 
-  app.post("/api/player/stop", async (_req, res) => {
+  app.post("/api/player/stop", async (_req, res) => withTransportLock(res, async () => {
     try {
       await control(lms, "stop");
       clearPendingPlayback();
@@ -795,7 +795,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
     } catch (error) {
       res.status(502).json({ error: error.message, mode: appState.player.mode, player: appState.player });
     }
-  });
+  }));
 
   app.post("/api/player/next", async (_req, res) => withTransportLock(res, async () => {
     try {

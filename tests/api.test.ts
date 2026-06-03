@@ -1229,6 +1229,48 @@ describe("Cloud Squeeze API", () => {
     expect(appState.queue).toEqual([]);
   });
 
+  it("serializes stop behind an in-flight visible queue next", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = { id: "current", title: "Current", artist: "Tester", album: "", source: "Local library", duration: 100, elapsed: 5, canSeek: true, art: null, path: "/music/test/current.mp3" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, previousTracks: [] };
+    addQueueItem({ title: "Race Next", artist: "Tester", path: "/music/test/race-next.mp3", requestedBy: "guest" });
+    const events: string[] = [];
+    let releasePlay: () => void = () => {};
+    const playGate = new Promise<void>((resolve) => {
+      releasePlay = resolve;
+    });
+    let app: ReturnType<typeof createApp>;
+    let stopRequest: Promise<request.Response> | null = null;
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string }) {
+        events.push(`play:${track.title}`);
+        stopRequest = request(app).post("/api/player/stop").expect(200);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        await playGate;
+        return "ok";
+      },
+      async control(_playerId: string, action: string) {
+        events.push(`control:${action}`);
+        return "ok";
+      }
+    };
+    app = createApp({ lms });
+
+    const nextRequest = request(app).post("/api/player/next").expect(200);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    releasePlay();
+    const next = await nextRequest;
+    const stop = await stopRequest;
+
+    expect(next.body.action).toBe("visible-queue-next");
+    expect(stop.body.mode).toBe("stop");
+    expect(events).toEqual(["play:Race Next", "control:stop"]);
+    expect(appState.player.mode).toBe("stop");
+    expect(appState.nowPlaying).toMatchObject({ id: "idle", title: "No track playing" });
+  });
+
   it("does not fall through to LMS next after an app-managed queue is exhausted", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
