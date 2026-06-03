@@ -1218,6 +1218,8 @@ describe("Cloud Squeeze API", () => {
       await request(app).get("/api/library/search?source=bad").expect(400);
       await request(app).get("/api/library/collections?source=bad").expect(400);
       await request(app).get("/api/library/collection?source=bad").expect(400);
+      const blankCollection = await request(app).get("/api/library/collection?source=all").expect(400);
+      expect(blankCollection.body.error).toContain("Collection or folder");
 
       const encodedPath = Buffer.from(uploaded.body.track.path).toString("base64url");
       const stream = await request(app).get(`/api/stream/${encodedPath}`).expect(200);

@@ -469,10 +469,16 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(400).json({ error: "Library source must be all, local, or uploaded" });
       return;
     }
+    const collection = String(req.query.collection || "");
+    const folder = String(req.query.folder || "");
+    if (!collection.trim() && !folder.trim()) {
+      res.status(400).json({ error: "Collection or folder is required" });
+      return;
+    }
     res.json({
       results: await getCollectionTracks({
-        collection: String(req.query.collection || ""),
-        folder: String(req.query.folder || ""),
+        collection,
+        folder,
         source,
         limit: req.query.limit || 1000
       })
