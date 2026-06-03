@@ -94,7 +94,11 @@ const refreshState = {
   trackInfoPromise: null,
   trackInfoPendingKey: "",
   pendingPlaybackKey: "",
-  pendingPlaybackAt: 0
+  pendingPlaybackAt: 0,
+  pendingSeekKey: "",
+  pendingSeekSeconds: 0,
+  pendingSeekAt: 0,
+  pendingSeekWasPlaying: false
 };
 const prewarmState = { key: "", at: 0 };
 const spotifyLibraryPrewarmState = { playerId: "", at: 0 };
@@ -726,6 +730,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
     try {
       await control(lms, "stop");
       clearPendingPlayback();
+      clearPendingSeek();
       updatePlayback({ appManagedPlayback: false });
       updateNowPlaying(idleNowPlaying);
       updateTrackInfo(idleTrackInfo);
@@ -815,6 +820,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
     try {
       await control(lms, "seek", seconds);
       updateNowPlaying({ elapsed: seconds });
+      markPendingSeek(seconds, wasPlaying);
       if (wasPlaying && appState.player.id) {
         try {
           await control(lms, "play");
@@ -1298,7 +1304,7 @@ async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force =
       }
       updateStablePlayerStatus(status);
       if (status.connected) {
-        const track = await lms.nowPlaying(status.id);
+        const track = applyPendingSeek(await lms.nowPlaying(status.id));
         const key = trackKey(track);
         const shouldRefreshTrackInfo =
           !skipTrackInfo &&
@@ -1603,6 +1609,40 @@ function markPendingPlayback(track) {
   refreshState.pendingPlaybackAt = Date.now();
 }
 
+function markPendingSeek(seconds, wasPlaying) {
+  const key = trackKey(appState.nowPlaying);
+  if (!key) return;
+  refreshState.pendingSeekKey = key;
+  refreshState.pendingSeekSeconds = seconds;
+  refreshState.pendingSeekAt = Date.now();
+  refreshState.pendingSeekWasPlaying = Boolean(wasPlaying);
+}
+
+function applyPendingSeek(track) {
+  const pendingKey = refreshState.pendingSeekKey;
+  if (!pendingKey) return track;
+  const ageMs = Date.now() - refreshState.pendingSeekAt;
+  const key = trackKey(track);
+  if (ageMs > 2500 || key !== pendingKey) {
+    clearPendingSeek();
+    return track;
+  }
+  const expectedElapsed = refreshState.pendingSeekSeconds + (refreshState.pendingSeekWasPlaying ? ageMs / 1000 : 0);
+  const observedElapsed = Number(track?.elapsed);
+  if (Number.isFinite(observedElapsed) && Math.abs(observedElapsed - expectedElapsed) <= 1) {
+    clearPendingSeek();
+    return track;
+  }
+  return { ...track, elapsed: Math.max(0, expectedElapsed) };
+}
+
+function clearPendingSeek() {
+  refreshState.pendingSeekKey = "";
+  refreshState.pendingSeekSeconds = 0;
+  refreshState.pendingSeekAt = 0;
+  refreshState.pendingSeekWasPlaying = false;
+}
+
 function clearPendingPlayback() {
   refreshState.pendingPlaybackKey = "";
   refreshState.pendingPlaybackAt = 0;
@@ -1692,6 +1732,7 @@ export function resetRefreshStateForTests() {
   refreshState.trackInfoPromise = null;
   refreshState.trackInfoPendingKey = "";
   clearPendingPlayback();
+  clearPendingSeek();
 }
 
 function trackKey(track) {

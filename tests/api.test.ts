@@ -350,6 +350,30 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.nowPlaying.canSeek).toBe(true);
   });
 
+  it("keeps public elapsed near the seek target while LMS catches up", async () => {
+    resetRefreshStateForTests();
+    appState.player = { ...appState.player, id: "player-1", connected: true, online: true, mode: "play" };
+    updateNowPlaying({
+      id: "track-1",
+      title: "Test Song",
+      artist: "Test Artist",
+      album: "Test Album",
+      source: "LMS",
+      duration: 100,
+      elapsed: 20,
+      canSeek: true,
+      art: null
+    });
+
+    const app = createApp({ lms: mockLms });
+    await request(app).post("/api/player/seek").send({ seconds: 42 }).expect(200);
+    const state = await request(app).get("/api/state").expect(200);
+
+    expect(state.body.nowPlaying.title).toBe("Test Song");
+    expect(state.body.nowPlaying.elapsed).toBeGreaterThan(41.9);
+    expect(state.body.nowPlaying.elapsed).toBeLessThan(45);
+  });
+
   it("rejects invalid seek values", async () => {
     await request(createApp({ lms: mockLms })).post("/api/player/seek").send({ seconds: "later" }).expect(400);
   });
