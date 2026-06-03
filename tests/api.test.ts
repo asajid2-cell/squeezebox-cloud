@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createApp, maintainVisiblePlaybackQueueForTests, nextQueueItemForPlayback, resetRefreshStateForTests, shouldNudgePlayback, syncVisibleQueueWithCurrentTrack } from "../server/app.js";
-import { addQueueItem, appState, config, removeQueueItem, updateNowPlaying } from "../server/state.js";
+import { addQueueItem, appState, config, removeQueueItem, updateNowPlaying, updateSpotifyStatus } from "../server/state.js";
 
 const mockLms = {
   async status() {
@@ -95,6 +95,20 @@ describe("Cloud Squeeze API", () => {
       .expect(409);
 
     expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Same Title", "Same Title"]);
+  });
+
+  it("clears the visible queue and disables generated queue modes", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: true, smartQueue: true, lastShuffleRefillAt: 123, lastShuffleSeed: "stale", lastSmartQueueBase: "stale" };
+    addQueueItem({ title: "Manual Leftover", artist: "Tester", path: "/music/test/manual-leftover.mp3", requestedBy: "guest" });
+    addQueueItem({ title: "Generated Leftover", artist: "Tester", uri: "spotify:track:0000000000000000000301", source: "Spotify", requestedBy: "smart shuffle" });
+
+    const response = await request(createApp({ lms: mockLms })).delete("/api/queue").expect(200);
+
+    expect(response.body.removed.map((item: { title: string }) => item.title)).toEqual(["Manual Leftover", "Generated Leftover"]);
+    expect(response.body.queue).toEqual([]);
+    expect(response.body.playback).toMatchObject({ shuffle: false, smartQueue: false, lastShuffleRefillAt: 0, lastShuffleSeed: "", lastSmartQueueBase: "" });
+    expect(appState.queue).toEqual([]);
   });
 
   it("trims queue text fields and rejects whitespace-only titles", async () => {
@@ -728,6 +742,37 @@ describe("Cloud Squeeze API", () => {
 
     expect(response.body.queued).toHaveLength(1);
     expect(response.body.queued[0].uri).toBe("spotify:track:0000000000000000000101");
+  });
+
+  it("keeps a cleared Spotify playlist batch isolated when shuffle is enabled", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    updateSpotifyStatus({ configured: true, reachable: true, detail: "Spotty detected" });
+    addQueueItem({ title: "Stale Local", artist: "Tester", path: "/music/test/stale-local.mp3", requestedBy: "guest" });
+    const playlistTracks = [
+      { id: "spotify:track:0000000000000000000401", title: "Playlist A", artist: "Tester", source: "Spotify", uri: "spotify:track:0000000000000000000401", kind: "track" },
+      { id: "spotify:track:0000000000000000000402", title: "Playlist B", artist: "Tester", source: "Spotify", uri: "spotify:track:0000000000000000000402", kind: "track" },
+      { id: "spotify:track:0000000000000000000403", title: "Playlist C", artist: "Tester", source: "Spotify", uri: "spotify:track:0000000000000000000403", kind: "track" }
+    ];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async spotifyChildren() {
+          return playlistTracks;
+        }
+      }
+    });
+
+    await request(app).get("/api/spotify/children?uri=spotify%3Aplaylist%3A1&kind=playlist").expect(200);
+    await request(app).delete("/api/queue").expect(200);
+    const queued = await request(app).post("/api/player/tracks").send({ action: "add-queue", tracks: playlistTracks }).expect(200);
+    const shuffled = await request(app).post("/api/player/playback").send({ shuffle: true, smartQueue: false }).expect(200);
+
+    const playlistUris = new Set(playlistTracks.map((track) => track.uri));
+    expect(queued.body.accepted).toBe(3);
+    expect(shuffled.body.queued).toEqual([]);
+    expect(shuffled.body.queue).toHaveLength(3);
+    expect(shuffled.body.queue.every((item: { uri?: string; requestedBy?: string }) => playlistUris.has(item.uri || "") && item.requestedBy === "guest")).toBe(true);
+    expect(shuffled.body.queue.some((item: { title: string }) => item.title === "Stale Local")).toBe(false);
   });
 
   it("rejects unknown single-track playback actions", async () => {

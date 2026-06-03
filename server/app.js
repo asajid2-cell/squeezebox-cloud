@@ -257,6 +257,17 @@ export function createApp({ lms = new LmsClient() } = {}) {
     res.json({ ok: true, removed: item, queue: appState.queue });
   });
 
+  app.delete("/api/queue", (_req, res) => {
+    const removed = [];
+    for (const item of [...appState.queue]) {
+      const removedItem = removeQueueItem(item.id);
+      if (removedItem) removed.push(removedItem);
+    }
+    stopGeneratedPlayback();
+    logEvent("queue.clear", { count: removed.length, playback: appState.playback });
+    res.json({ ok: true, removed, queue: appState.queue, playback: appState.playback });
+  });
+
   app.post("/api/queue/:id/move", (req, res) => {
     const direction = req.body?.direction ?? req.body?.index;
     const item = moveQueueItem(req.params.id, direction);
