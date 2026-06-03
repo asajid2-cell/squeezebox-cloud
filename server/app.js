@@ -1362,7 +1362,8 @@ async function buildGeneratedQueue(lms, playerId, seed, mode, count, requestedBy
     mode !== "spotify" ? searchLibrary("", undefined, 500).catch(() => []) : []
   ]);
   const spotifyTracks = uniqueTracks(spotify).filter(isPlayableSpotifyTrack);
-  const localTracks = uniqueTracks([...localFocused, ...shuffle(localWide).slice(0, 180)]).filter((track) => track.path);
+  const localCandidates = mode === "local" ? [...localFocused, ...shuffle(localWide).slice(0, 180)] : localFocused;
+  const localTracks = uniqueTracks(localCandidates).filter((track) => track.path);
   const spotifyPool = shuffle(preferFreshTracks(spotifyTracks, exclude, hardExclude));
   const localPool = shuffle(preferFreshTracks(localTracks, exclude, hardExclude));
   const picks = [];

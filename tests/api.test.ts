@@ -1820,6 +1820,35 @@ describe("Cloud Squeeze API", () => {
     expect(played).toHaveLength(0);
   });
 
+  it("does not add broad unrelated local rows to mixed smart shuffle when the seed only matches Spotify", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-mixed-smart-"));
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "mixed", history: [] };
+    config.musicSourceDir = root;
+    try {
+      await fs.writeFile(path.join(root, "Juice WRLD - Random Local.mp3"), "ID3");
+      const response = await request(createApp({
+        lms: {
+          ...mockLms,
+          async spotifySearch(_playerId: string, term: string) {
+            return [{ id: `spotify:${term}`, title: `${term} Track`, artist: term, source: "Spotify", uri: `spotify:track:${term}`, kind: "track" }];
+          }
+        }
+      }))
+        .post("/api/player/smart-shuffle")
+        .send({ source: "mixed", count: 3, seed: "Aimer" })
+        .expect(200);
+
+      expect(response.body.queued).toEqual(expect.arrayContaining([expect.objectContaining({ artist: "Aimer", source: "Spotify" })]));
+      expect(response.body.queued.every((item: { source: string }) => item.source === "Spotify")).toBe(true);
+      expect(response.body.queue).not.toEqual(expect.arrayContaining([expect.objectContaining({ title: "Random Local" })]));
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not use idle placeholder text as smart-shuffle search terms", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.nowPlaying = {
