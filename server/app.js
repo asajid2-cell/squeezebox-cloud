@@ -2134,7 +2134,7 @@ function preserveKnownNowPlayingMetadata(fresh, requestedTrack = null) {
   if (!known || !tracksSharePlaybackIdentity(fresh, known)) return fresh;
   const art = fresh.art || known.art || null;
   if (!isUploadedTrackPath(fresh.path || known.path)) return { ...fresh, art };
-  return {
+  const preserved = {
     ...fresh,
     title: known.title || fresh.title,
     artist: known.artist || fresh.artist,
@@ -2142,6 +2142,8 @@ function preserveKnownNowPlayingMetadata(fresh, requestedTrack = null) {
     source: known.source || fresh.source,
     art
   };
+  rememberPlaybackMetadata(preserved);
+  return preserved;
 }
 
 function isUploadedTrackPath(value) {
@@ -2152,8 +2154,15 @@ function rememberPlaybackMetadata(track) {
   if (!isTrackInfoCandidate(track)) return;
   const keys = playbackMetadataKeys(track);
   if (keys.length === 0) return;
-  const entry = { track: restorableTrack(track), expiresAt: Date.now() + recentPlaybackMetadataTtlMs };
-  for (const key of keys) recentPlaybackMetadata.set(key, entry);
+  const nextTrack = restorableTrack(track);
+  const entry = { track: nextTrack, expiresAt: Date.now() + recentPlaybackMetadataTtlMs };
+  for (const key of keys) {
+    const existing = recentPlaybackMetadata.get(key);
+    const trackToStore = existing && metadataQualityScore(existing.track) > metadataQualityScore(nextTrack)
+      ? existing.track
+      : nextTrack;
+    recentPlaybackMetadata.set(key, { track: trackToStore, expiresAt: entry.expiresAt });
+  }
   if (recentPlaybackMetadata.size > recentPlaybackMetadataLimit) {
     for (const [key, value] of recentPlaybackMetadata) {
       if (value.expiresAt <= Date.now() || recentPlaybackMetadata.size > recentPlaybackMetadataLimit) {
@@ -2189,6 +2198,21 @@ function playbackMetadataKeys(track) {
     track?.lmsTrackId,
     track?.id
   ].map(normalizeTrackKey).filter(Boolean);
+}
+
+function metadataQualityScore(track) {
+  if (!track) return 0;
+  let score = 0;
+  const title = String(track.title || "").trim();
+  const artist = String(track.artist || "").trim();
+  const album = String(track.album || "").trim();
+  if (title) score += 4;
+  if (artist && !/^uploaded$/i.test(artist)) score += 6;
+  if (album && !/^uploads$/i.test(album)) score += 3;
+  if (track.art) score += 8;
+  if (track.duration) score += 1;
+  if (isUploadedTrackPath(track.path) && title && artist && !/^uploaded$/i.test(artist)) score += 4;
+  return score;
 }
 
 function removeGeneratedQueueItems() {

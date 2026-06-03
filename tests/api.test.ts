@@ -2190,6 +2190,61 @@ describe("Cloud Squeeze API", () => {
     expect(appState.queue).toEqual([]);
   });
 
+  it("preserves uploaded queue metadata after LMS refresh during app-managed advance", async () => {
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = { id: "current", title: "Current", artist: "Tester", album: "", source: "Uploaded", duration: 100, elapsed: 98, canSeek: true, art: null, path: "/music/uploads/Current.mp3" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, previousTracks: [], appManagedPlayback: true };
+    addQueueItem({
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      album: "Haha - Single",
+      source: "Uploaded",
+      path: "/music/uploads/Sleep Paralysis-Jackson Ivy.mp3",
+      art: "https://covers.example/sleep.jpg",
+      requestedBy: "guest"
+    });
+    const lms = {
+      ...mockLms,
+      async playTrack() {
+        return "ok";
+      },
+      async nowPlaying() {
+        return {
+          id: "local-uploaded",
+          title: "Sleep Paralysis Jackson Ivy",
+          artist: "Uploaded",
+          album: "uploads",
+          source: "Uploaded",
+          path: "/music/uploads/Sleep Paralysis-Jackson Ivy.mp3",
+          duration: 158,
+          elapsed: 12,
+          canSeek: true,
+          art: null
+        };
+      }
+    };
+    const app = createApp({ lms });
+
+    const next = await request(app).post("/api/player/next").expect(200);
+    await refreshLmsForTests(lms, { force: true });
+
+    expect(next.body.nowPlaying).toMatchObject({
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      album: "Haha - Single",
+      art: "https://covers.example/sleep.jpg"
+    });
+    expect(appState.nowPlaying).toMatchObject({
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      album: "Haha - Single",
+      art: "https://covers.example/sleep.jpg",
+      elapsed: 12
+    });
+  });
+
   it("uses app history for previous after advancing through visible queued Spotify tracks", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };

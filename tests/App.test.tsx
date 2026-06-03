@@ -166,7 +166,13 @@ describe("Cloud Squeeze UI", () => {
     render(<App />);
     await userEvent.type(await screen.findByLabelText("Search music"), "local");
     await waitFor(() => expect(screen.getByText("Local Test")).toBeInTheDocument());
-    fetchMock.mockImplementationOnce(async () => jsonResponse({ error: "That song is already in the queue" }, 409));
+    const defaultFetch = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (url.includes("/api/player/track") && options?.method === "POST") {
+        return jsonResponse({ error: "That song is already in the queue" }, 409);
+      }
+      return defaultFetch?.(url, options) ?? jsonResponse({ ok: true });
+    });
 
     const row = screen.getByText("Local Test").closest(".result-row");
     expect(row).toBeTruthy();
