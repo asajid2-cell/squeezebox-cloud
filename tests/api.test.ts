@@ -91,6 +91,31 @@ describe("Cloud Squeeze API", () => {
     }
   });
 
+  it("returns bounded LMS artwork enrichment for local search rows", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-art-search-"));
+    config.musicSourceDir = root;
+    try {
+      const trackPath = path.join(root, "Artist - Art Match.mp3");
+      await fs.writeFile(trackPath, "ID3");
+      const response = await request(createApp({
+        lms: {
+          ...mockLms,
+          async enrichLocalArtwork(tracks: Array<{ title: string; path?: string }>) {
+            return tracks.map((track) => ({ ...track, art: "api/artwork/local-cover" }));
+          }
+        }
+      }))
+        .get("/api/library/search?q=art&limit=10&source=local")
+        .expect(200);
+
+      expect(response.body.results[0]).toMatchObject({ title: "Art Match", art: "api/artwork/local-cover" });
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("prewarms the Spotify library tabs exposed in the UI during state refresh", async () => {
     resetRefreshStateForTests();
     const calls: string[] = [];

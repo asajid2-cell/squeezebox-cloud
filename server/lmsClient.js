@@ -252,6 +252,45 @@ export class LmsClient {
     return null;
   }
 
+  async enrichLocalArtwork(tracks, { limit = 40, concurrency = 6 } = {}) {
+    if (!Array.isArray(tracks) || tracks.length === 0) return tracks;
+    const results = tracks.slice();
+    const candidates = tracks
+      .map((track, index) => ({ track, index }))
+      .filter(({ track }) => track?.path && !track?.uri && !track?.art)
+      .slice(0, Math.max(0, Number(limit) || 0));
+
+    for (let offset = 0; offset < candidates.length; offset += concurrency) {
+      await Promise.all(
+        candidates.slice(offset, offset + concurrency).map(async ({ track, index }) => {
+          const cacheKey = `localArt:${normalizePath(track.path)}`;
+          const cached = this.getCached(cacheKey);
+          if (cached) {
+            if (cached.art) results[index] = { ...track, art: cached.art };
+            return;
+          }
+
+          const art = await this.localArtworkForTrack(track).catch(() => null);
+          this.setCached(cacheKey, { art }, 30 * 60 * 1000);
+          if (art) results[index] = { ...track, art };
+        })
+      );
+    }
+
+    return results;
+  }
+
+  async localArtworkForTrack(track) {
+    const title = track?.title || (track?.path ? path.parse(track.path).name : "");
+    if (!title || !track?.path) return null;
+    const response = await this.jsonRequest(["", ["titles", 0, 20, `search:${title}`, "tags:Kcuoal"]]);
+    const loop = response?.result?.titles_loop || [];
+    const normalizedPath = normalizePath(track.path);
+    const match = loop.find((item) => normalizePath(decodeSafe(String(item.url || ""))) === normalizedPath);
+    const coverId = match?.coverid && String(match.coverid) !== "0" ? String(match.coverid) : "";
+    return coverId ? `api/artwork/${encodeURIComponent(coverId)}` : null;
+  }
+
   async resolveTrackIdByUrl(trackPath) {
     const response = await this.jsonRequest(["", ["songinfo", 0, 100, `url:${fileUrl(trackPath)}`]]).catch(() => null);
     const loop = response?.result?.songinfo_loop || [];

@@ -144,6 +144,8 @@ const imageProxyMaxBytes = Number(process.env.IMAGE_PROXY_MAX_BYTES || 8 * 1024 
 const serviceRefreshMs = 60000;
 const trackInfoRefreshMs = 30000;
 const trackInfoBudgetMs = Number(process.env.TRACK_INFO_BUDGET_MS || 1800);
+const localArtworkBudgetMs = Number(process.env.LOCAL_ARTWORK_BUDGET_MS || 700);
+const localArtworkLimit = Number(process.env.LOCAL_ARTWORK_LIMIT || 40);
 const spotifySearchPrewarmTerms = ["drake", "juice wrld", "the weeknd", "travis scott"];
 const refreshState = {
   promise: null,
@@ -515,7 +517,8 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(400).json({ error: "Library search limit must be a positive integer up to 2000" });
       return;
     }
-    res.json({ results: await searchLibrary(String(req.query.q || ""), undefined, limit, source) });
+    const results = await searchLibrary(String(req.query.q || ""), undefined, limit, source);
+    res.json({ results: await enrichLibraryArtwork(lms, results) });
   });
 
   app.get("/api/spotify/search", async (req, res) => {
@@ -647,14 +650,13 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(400).json({ error: "Library collection limit must be a positive integer up to 2000" });
       return;
     }
-    res.json({
-      results: await getCollectionTracks({
-        collection,
-        folder,
-        source,
-        limit
-      })
+    const results = await getCollectionTracks({
+      collection,
+      folder,
+      source,
+      limit
     });
+    res.json({ results: await enrichLibraryArtwork(lms, results) });
   });
 
   app.post("/api/library/rescan", requireAdmin, async (_req, res) => {
@@ -1460,6 +1462,11 @@ function withTimeout(promise, timeoutMs, fallback) {
       timer = setTimeout(() => resolve(fallback), timeoutMs);
     })
   ]).finally(() => clearTimeout(timer));
+}
+
+async function enrichLibraryArtwork(lms, tracks) {
+  if (!Array.isArray(tracks) || tracks.length === 0 || typeof lms.enrichLocalArtwork !== "function") return tracks;
+  return withTimeout(lms.enrichLocalArtwork(tracks, { limit: localArtworkLimit }), localArtworkBudgetMs, tracks);
 }
 
 async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force = false, skipTrackInfo = false, waitForFresh = true } = {}) {

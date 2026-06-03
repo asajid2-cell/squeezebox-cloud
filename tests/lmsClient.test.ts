@@ -79,6 +79,39 @@ describe("LMS client parsing", () => {
     expect(track.art).toBe("api/artwork/-104339503453992");
   });
 
+  it("enriches local library rows with LMS cover ids", async () => {
+    const client = new LmsClient();
+    const requests: unknown[] = [];
+    client.jsonRequest = async (params: unknown) => {
+      requests.push(params);
+      return {
+        result: {
+          titles_loop: [
+            {
+              title: "Wrong Match",
+              url: "file:///music/wrong/Art%20Track.mp3",
+              coverid: "wrong-cover"
+            },
+            {
+              title: "Art Track",
+              url: "file:///music/test/Art%20Track.mp3",
+              coverid: "cover-123"
+            }
+          ]
+        }
+      };
+    };
+
+    const rows = await client.enrichLocalArtwork([
+      { title: "Art Track", path: "/music/test/Art Track.mp3", source: "Local library" },
+      { title: "Spotify Track", uri: "spotify:track:abc", source: "Spotify" }
+    ]);
+
+    expect(rows[0]).toMatchObject({ title: "Art Track", art: "api/artwork/cover-123" });
+    expect(rows[1]).not.toHaveProperty("art");
+    expect(requests).toHaveLength(1);
+  });
+
   it("falls back to rich LMS status when CLI track fields contain command payloads", async () => {
     const payload = encodeURIComponent(
       "xstartprivateparty; set ui_mapname zm_cosmodrome; seta sv_maxclients 1; map zm_cosmodrome"
