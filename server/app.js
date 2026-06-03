@@ -818,7 +818,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
         updatePlayback({ appManagedPlayback: false });
       }
       refreshLms(lms, { force: true }).catch(() => null);
-      res.json({ ok: true, action: played ? "visible-queue-play" : "play", mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying, queue: appState.queue });
+      res.json({ ok: true, action: played ? "visible-queue-play" : "play", mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying, queue: appState.queue, playback: appState.playback });
     } catch (error) {
       res.status(502).json({ error: error.message, mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying, queue: appState.queue });
     }
@@ -878,7 +878,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       if (!stoppedWithEmptyManualQueue && !emptyAppManagedQueue) refreshLms(lms, { force: true }).catch(() => null);
       const resultAction = played ? "visible-queue-next" : (stoppedWithEmptyManualQueue || emptyAppManagedQueue) ? "noop" : "next";
       logEvent("transport.next.result", { action: played ? "visible-queue-next" : (stoppedWithEmptyManualQueue || emptyAppManagedQueue) ? "noop" : "lms-next", played: trackSummary(played), queue: queueSummary(), playback: appState.playback });
-      res.json({ ok: true, action: resultAction, queue: appState.queue, player: appState.player, nowPlaying: appState.nowPlaying });
+      res.json({ ok: true, action: resultAction, queue: appState.queue, player: appState.player, nowPlaying: appState.nowPlaying, playback: appState.playback });
     } catch (error) {
       res.status(502).json({ error: error.message, player: appState.player, nowPlaying: appState.nowPlaying });
     }
@@ -908,7 +908,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       if (previous) refreshLms(lms, { force: true }).catch(() => null);
       const resultAction = previous ? "app-previous" : "noop";
       logEvent("transport.previous.result", { action: resultAction, previous: trackSummary(previous), queue: queueSummary(), playback: appState.playback, nowPlaying: trackSummary(appState.nowPlaying) });
-      res.json({ ok: true, action: resultAction, mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying });
+      res.json({ ok: true, action: resultAction, mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying, queue: appState.queue, playback: appState.playback });
     } catch (error) {
       res.status(502).json({ error: error.message, player: appState.player, nowPlaying: appState.nowPlaying });
     }
