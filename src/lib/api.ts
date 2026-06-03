@@ -2,6 +2,14 @@ import type { AppState, ConnectionGuide, LibraryCollection, Track } from "../typ
 
 const apiBase = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/api`;
 
+async function responseJson<T = any>(response: Response, fallbackMessage: string): Promise<T> {
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data?.error || fallbackMessage);
+  }
+  return data as T;
+}
+
 const fallbackState: AppState = {
   player: { id: "fallback", name: "Squeezebox Cloud Room", connected: false, online: false, mode: "stopped", volume: 68 },
   nowPlaying: {
@@ -116,7 +124,7 @@ export async function postQueue(track: Partial<Track> & { requestedBy?: string }
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(track)
   });
-  return response.json();
+  return responseJson(response, "Queue request failed");
 }
 
 export async function updateQueueItem(id: string, updates: { title?: string; artist?: string; album?: string; requestedBy?: string }) {
@@ -125,12 +133,12 @@ export async function updateQueueItem(id: string, updates: { title?: string; art
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(updates)
   });
-  return response.json();
+  return responseJson(response, "Queue update failed");
 }
 
 export async function removeQueueItem(id: string) {
   const response = await fetch(`${apiBase}/queue/${encodeURIComponent(id)}`, { method: "DELETE" });
-  return response.json();
+  return responseJson(response, "Queue removal failed");
 }
 
 export async function moveQueueItem(id: string, direction: "up" | "down") {
@@ -139,7 +147,7 @@ export async function moveQueueItem(id: string, direction: "up" | "down") {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ direction })
   });
-  return response.json();
+  return responseJson(response, "Queue move failed");
 }
 
 export async function playTrack(action: "play-now" | "play-next" | "add-queue", track: Partial<Track>) {
@@ -148,7 +156,7 @@ export async function playTrack(action: "play-now" | "play-next" | "add-queue", 
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action, track })
   });
-  return response.json();
+  return responseJson(response, "Track playback failed");
 }
 
 export async function playTracks(action: "play-next" | "add-queue", tracks: Partial<Track>[]) {
@@ -157,11 +165,12 @@ export async function playTracks(action: "play-next" | "add-queue", tracks: Part
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action, tracks })
   });
-  return response.json();
+  return responseJson(response, "Batch playback failed");
 }
 
-export async function playerAction(action: "play" | "pause" | "next" | "previous") {
-  await fetch(`${apiBase}/player/${action}`, { method: "POST" });
+export async function playerAction(action: "play" | "pause" | "stop" | "next" | "previous") {
+  const response = await fetch(`${apiBase}/player/${action}`, { method: "POST" });
+  return responseJson(response, "Player control failed");
 }
 
 export async function savePlayback(settings: Partial<AppState["playback"]>) {
@@ -170,7 +179,7 @@ export async function savePlayback(settings: Partial<AppState["playback"]>) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(settings)
   });
-  return response.json();
+  return responseJson(response, "Playback settings failed");
 }
 
 export async function smartShuffle(source: AppState["playback"]["smartShuffleSource"], count = 5) {
@@ -179,23 +188,25 @@ export async function smartShuffle(source: AppState["playback"]["smartShuffleSou
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ source, count })
   });
-  return response.json();
+  return responseJson(response, "Smart shuffle failed");
 }
 
 export async function setPlayerVolume(volume: number) {
-  await fetch(`${apiBase}/player/volume`, {
+  const response = await fetch(`${apiBase}/player/volume`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ volume })
   });
+  return responseJson(response, "Volume control failed");
 }
 
 export async function seekPlayer(seconds: number) {
-  await fetch(`${apiBase}/player/seek`, {
+  const response = await fetch(`${apiBase}/player/seek`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ seconds })
   });
+  return responseJson(response, "Seek failed");
 }
 
 export async function saveAdminSettings(settings: Partial<AppState["admin"]>) {
@@ -204,7 +215,7 @@ export async function saveAdminSettings(settings: Partial<AppState["admin"]>) {
     headers: { "Content-Type": "application/json", ...adminAuthHeader() },
     body: JSON.stringify(settings)
   });
-  return response.json();
+  return responseJson(response, "Admin settings failed");
 }
 
 export async function loginAdmin(password: string) {
