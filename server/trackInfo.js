@@ -28,6 +28,12 @@ export async function enrichTrackInfo(track) {
   return info;
 }
 
+export async function enrichTrackArtwork(track) {
+  if (process.env.VITEST && !process.env.TRACK_INFO_ALLOW_NETWORK_IN_TESTS) return null;
+  const artwork = await fetchArtwork(parseTrack(track));
+  return artwork.art || null;
+}
+
 function fallbackInfo(parsed) {
   return {
     artistBio: `${parsed.artist} is the detected artist for "${parsed.title}".`,

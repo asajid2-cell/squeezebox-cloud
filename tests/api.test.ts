@@ -193,6 +193,57 @@ describe("Cloud Squeeze API", () => {
     }
   });
 
+  it("does not wait for slow Spotify artwork before using external uploaded artwork", async () => {
+    const previousUploadDir = config.uploadDir;
+    const previousAllowNetwork = process.env.TRACK_INFO_ALLOW_NETWORK_IN_TESTS;
+    const previousPlayer = { ...appState.player };
+    const previousSpotify = { ...appState.services.spotify };
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-upload-fast-art-"));
+    config.uploadDir = root;
+    process.env.TRACK_INFO_ALLOW_NETWORK_IN_TESTS = "1";
+    appState.player = { ...appState.player, id: "player-1", connected: true, online: true };
+    updateSpotifyStatus({ configured: true, reachable: true, detail: "Spotty detected" });
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.startsWith("https://itunes.apple.com/search")) {
+        return {
+          ok: true,
+          json: async () => ({
+            results: [{ artworkUrl100: "https://is1-ssl.mzstatic.com/image/thumb/Music/fast/100x100bb.jpg" }]
+          })
+        };
+      }
+      return { ok: false, json: async () => ({}) };
+    }));
+    try {
+      await fs.writeFile(path.join(root, "Jackson Ivy - Sleep Paralysis.mp3"), "ID3");
+      const response = await request(createApp({
+        lms: {
+          ...mockLms,
+          async spotifySearch() {
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            return [{ title: "Sleep Paralysis", artist: "Jackson Ivy", art: "https://i.scdn.co/image/slow", uri: "spotify:track:slow", kind: "track" }];
+          }
+        }
+      }))
+        .get("/api/library/search?q=sleep&limit=10&source=uploaded")
+        .expect(200);
+
+      expect(response.body.results[0]).toMatchObject({
+        title: "Sleep Paralysis",
+        source: "Uploaded",
+        art: "https://is1-ssl.mzstatic.com/image/thumb/Music/fast/600x600bb.jpg"
+      });
+    } finally {
+      config.uploadDir = previousUploadDir;
+      appState.player = previousPlayer;
+      updateSpotifyStatus(previousSpotify);
+      if (previousAllowNetwork === undefined) delete process.env.TRACK_INFO_ALLOW_NETWORK_IN_TESTS;
+      else process.env.TRACK_INFO_ALLOW_NETWORK_IN_TESTS = previousAllowNetwork;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("preserves uploaded artwork and tags when LMS now playing metadata is weaker", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.player = { ...appState.player, id: "player-1", connected: true, online: true, mode: "stop" };

@@ -23,7 +23,7 @@ import {
   updatePlayback
 } from "./state.js";
 import { clearLibraryCaches, getCollections, getCollectionTracks, saveUploadedTrack, scanLibrary, searchLibrary } from "./library.js";
-import { enrichTrackInfo } from "./trackInfo.js";
+import { enrichTrackArtwork, enrichTrackInfo } from "./trackInfo.js";
 
 const requiredText = z.string().trim().min(1);
 const optionalText = z.preprocess(
@@ -1607,14 +1607,33 @@ async function enrichUploadedArtwork(lms, tracks) {
   if (candidates.length === 0) return results;
 
   return withTimeout(Promise.all(candidates.map(async ({ track, index }) => {
-    const spotifyArt = await spotifyArtworkForUploadedTrack(lms, track).catch(() => null);
-    if (spotifyArt) {
-      results[index] = { ...track, art: spotifyArt };
+    const art = await firstResolvedArtwork([
+      spotifyArtworkForUploadedTrack(lms, track),
+      enrichTrackArtwork(track)
+    ]);
+    if (art) results[index] = { ...track, art };
+  })).then(() => results), uploadedArtworkBudgetMs, results);
+}
+
+function firstResolvedArtwork(promises) {
+  return new Promise((resolve) => {
+    let pending = promises.length;
+    if (pending === 0) {
+      resolve(null);
       return;
     }
-    const info = await enrichTrackInfo(track).catch(() => null);
-    if (info?.art) results[index] = { ...track, art: info.art };
-  })).then(() => results), uploadedArtworkBudgetMs, results);
+    for (const promise of promises) {
+      Promise.resolve(promise)
+        .then((art) => {
+          if (art) resolve(art);
+        })
+        .catch(() => null)
+        .finally(() => {
+          pending -= 1;
+          if (pending === 0) resolve(null);
+        });
+    }
+  });
 }
 
 async function spotifyArtworkForUploadedTrack(lms, track) {
