@@ -2321,7 +2321,7 @@ function preserveKnownNowPlayingMetadata(fresh, requestedTrack = null) {
   const known = requestedTrack || (tracksSharePlaybackIdentity(fresh, current) ? current : null) || lookupRecentPlaybackMetadata(fresh);
   if (!known || !tracksSharePlaybackIdentity(fresh, known)) return fresh;
   const art = fresh.art || known.art || null;
-  if (!shouldPreserveKnownTrackMetadata(fresh, known, requestedTrack)) return { ...fresh, art };
+  if (!shouldPreserveKnownTrackMetadata(fresh, known, requestedTrack)) return preserveKnownPlaybackFields({ ...fresh, art }, known);
   const preserved = {
     ...fresh,
     title: known.title || fresh.title,
@@ -2331,8 +2331,22 @@ function preserveKnownNowPlayingMetadata(fresh, requestedTrack = null) {
     path: fresh.path || known.path,
     art
   };
-  rememberPlaybackMetadata(preserved);
-  return preserved;
+  const enriched = preserveKnownPlaybackFields(preserved, known);
+  rememberPlaybackMetadata(enriched);
+  return enriched;
+}
+
+function preserveKnownPlaybackFields(track, known) {
+  if (!known) return track;
+  return {
+    ...track,
+    uri: track.uri || known.uri,
+    path: track.path || known.path,
+    lmsTrackId: track.lmsTrackId || known.lmsTrackId,
+    kind: track.kind || known.kind,
+    uploaded: track.uploaded ?? known.uploaded,
+    requestedBy: track.requestedBy || known.requestedBy
+  };
 }
 
 function shouldPreserveKnownTrackMetadata(fresh, known, requestedTrack = null) {

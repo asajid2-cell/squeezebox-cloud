@@ -1263,6 +1263,45 @@ describe("Cloud Squeeze API", () => {
     ]);
   });
 
+  it("keeps generated ownership after LMS refresh before app previous restores the forward track", async () => {
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = { id: "current", title: "Current", artist: "Tester", album: "", source: "Local library", duration: 100, elapsed: 10, canSeek: true, art: null, path: "/music/current.mp3" };
+    appState.playback = { ...appState.playback, smartQueue: true, shuffle: false, manualShuffle: false, previousTracks: [], appManagedPlayback: true };
+    addQueueItem({ title: "Generated Smart", artist: "Tester", uri: "spotify:track:generated-smart", source: "Spotify", kind: "track", requestedBy: "smart shuffle", art: "api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Fgenerated" });
+    const lms = {
+      ...mockLms,
+      async playTrack() {
+        return "ok";
+      },
+      async nowPlaying() {
+        return {
+          id: "spotify://track:generated-smart",
+          title: "Generated Smart",
+          artist: "Tester",
+          album: "",
+          source: "Spotify",
+          duration: 100,
+          elapsed: 2,
+          canSeek: true,
+          art: null,
+          uri: "spotify:track:generated-smart"
+        };
+      }
+    };
+    const app = createApp({ lms });
+
+    await request(app).post("/api/player/next").expect(200);
+    await refreshLmsForTests(lms, { force: true });
+    expect(appState.nowPlaying).toMatchObject({ title: "Generated Smart", requestedBy: "smart shuffle" });
+    const previous = await request(app).post("/api/player/previous").expect(200);
+
+    expect(previous.body.queue).toEqual([
+      expect.objectContaining({ title: "Generated Smart", uri: "spotify:track:generated-smart", requestedBy: "smart shuffle" })
+    ]);
+  });
+
   it("does not duplicate the forward queue on repeated app previous presses", async () => {
     const played: Array<{ action: string; track: { title?: string; uri?: string } }> = [];
     appState.queue.splice(0, appState.queue.length);
