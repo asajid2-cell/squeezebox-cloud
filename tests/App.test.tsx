@@ -164,6 +164,8 @@ describe("Cloud Squeeze UI", () => {
   it("surfaces failed queue actions", async () => {
     const fetchMock = vi.mocked(fetch);
     render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Library" }));
+    await userEvent.click(screen.getByRole("button", { name: "VPS library" }));
     await userEvent.type(await screen.findByLabelText("Search music"), "local");
     await waitFor(() => expect(screen.getByText("Local Test")).toBeInTheDocument());
     const defaultFetch = fetchMock.getMockImplementation();
@@ -383,6 +385,8 @@ describe("Cloud Squeeze UI", () => {
 
   it("searches local library results", async () => {
     render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Library" }));
+    await userEvent.click(screen.getByRole("button", { name: "VPS library" }));
     await userEvent.type(await screen.findByLabelText("Search music"), "local");
     await waitFor(() => expect(screen.getByText("Local Test")).toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Play now" })).toBeInTheDocument();
@@ -398,6 +402,8 @@ describe("Cloud Squeeze UI", () => {
     });
 
     render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Library" }));
+    await userEvent.click(screen.getByRole("button", { name: "VPS library" }));
     await userEvent.type(await screen.findByLabelText("Search music"), "local");
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Library search failed hard");
@@ -416,6 +422,8 @@ describe("Cloud Squeeze UI", () => {
     });
 
     render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Library" }));
+    await userEvent.click(screen.getByRole("button", { name: "VPS library" }));
     await userEvent.type(await screen.findByLabelText("Search music"), "bad");
     expect(await screen.findByRole("alert")).toHaveTextContent("Library search failed hard");
 
@@ -430,6 +438,8 @@ describe("Cloud Squeeze UI", () => {
   it("uses compact local search limits for default and typed searches", async () => {
     const fetchMock = vi.mocked(fetch);
     render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Library" }));
+    await userEvent.click(screen.getByRole("button", { name: "VPS library" }));
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/library/search") && String(url).includes("limit=60"))).toBe(true);
     });
@@ -444,9 +454,7 @@ describe("Cloud Squeeze UI", () => {
   it("searches Spotify when the Spotify source is selected", async () => {
     const fetchMock = vi.mocked(fetch);
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "Library" }));
-    await userEvent.click(screen.getByRole("button", { name: "Spotify" }));
-    await userEvent.type(screen.getByLabelText("Search music"), "drake");
+    await userEvent.type(await screen.findByLabelText("Search music"), "drake");
     await waitFor(() => expect(screen.getByText("Headlines")).toBeInTheDocument());
     expect(screen.getByText(/Drake - Take Care/)).toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/spotify/search") && String(url).includes("q=drake") && String(url).includes("limit=20"))).toBe(true);

@@ -107,7 +107,7 @@ export default function App() {
   const [activeScreen, setActiveScreen] = useState<PublicScreenName>("Now Playing");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Track[]>([]);
-  const [sourceFilter, setSourceFilter] = useState<"local" | "uploaded" | "spotify" | "playlists">("local");
+  const [sourceFilter, setSourceFilter] = useState<"local" | "uploaded" | "spotify" | "playlists">("spotify");
   const [actionError, setActionError] = useState("");
   const isAdminRoute = window.location.pathname.replace(/\/$/, "").endsWith("/admin");
 
