@@ -2564,6 +2564,10 @@ describe("Cloud Squeeze API", () => {
     const duplicate = await request(app).post("/api/player/track").send({ action: "add-queue", track }).expect(409);
 
     expect(duplicate.body.error).toBe("That song is already in the queue");
+    expect(duplicate.body.playback).toMatchObject({ repeat: "off" });
+    expect(duplicate.body.queue).toEqual([
+      expect.objectContaining({ title: "Duplicate Local Track", path: "/music/test/duplicate-track.mp3" })
+    ]);
     expect(appState.queue.filter((item) => item.path === track.path)).toHaveLength(1);
   });
 
@@ -2649,6 +2653,9 @@ describe("Cloud Squeeze API", () => {
       .expect(429);
     expect(fullBatch.body.accepted).toBe(0);
     expect(fullBatch.body.rejected).toBe(2);
+    expect(fullBatch.body.playback).toMatchObject({ repeat: "off" });
+    expect(fullBatch.body.queue.filter((item) => item.requestedBy === "guest")).toHaveLength(3);
+    expect(fullBatch.body.queue[0]).not.toHaveProperty("album");
 
     await request(app)
       .post("/api/player/track")
@@ -2660,12 +2667,15 @@ describe("Cloud Squeeze API", () => {
       .send({ action: "add-queue", track: { title: "Limit Rejected", path: "/music/test/limit-rejected.mp3", source: "Local library" } })
       .expect(429);
     expect(tooManySingle.body.error).toContain("max 3");
+    expect(tooManySingle.body.playback).toMatchObject({ repeat: "off" });
+    expect(tooManySingle.body.queue.filter((item) => item.requestedBy === "guest")).toHaveLength(3);
 
     const spoofed = await request(app)
       .post("/api/queue")
       .send({ title: "Limit Spoofed", artist: "Tester", requestedBy: "admin" })
       .expect(429);
     expect(spoofed.body.error).toContain("max 3");
+    expect(spoofed.body.playback).toMatchObject({ repeat: "off" });
     expect(appState.queue.filter((item) => item.requestedBy === "guest")).toHaveLength(3);
   });
 

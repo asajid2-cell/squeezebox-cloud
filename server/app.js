@@ -302,11 +302,11 @@ export function createApp({ lms = new LmsClient() } = {}) {
       return;
     }
     if (!publicRequestsOpen()) {
-      res.status(403).json({ error: publicRequestsClosedMessage(), queue: appState.queue });
+      res.status(403).json(queueErrorPayload(publicRequestsClosedMessage()));
       return;
     }
     if (!canQueueMoreGuestTracks(1)) {
-      res.status(429).json({ error: queueLimitMessage(), queue: appState.queue });
+      res.status(429).json(queueErrorPayload(queueLimitMessage()));
       return;
     }
     if (!isPlayableTrackInput(parsed.data)) {
@@ -323,7 +323,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       return;
     }
     if (queuedTrackInputExists(canonicalTrack)) {
-      res.status(409).json({ error: "That song is already in the queue" });
+      res.status(409).json(queueErrorPayload("That song is already in the queue"));
       return;
     }
     if (queueAddStaleAfterClear(clearEpochAtRequest)) {
@@ -451,11 +451,11 @@ export function createApp({ lms = new LmsClient() } = {}) {
       let queued = null;
       if (action === "add-queue") {
         if (queuedTrackInputExists(track)) {
-          res.status(409).json({ error: "That song is already in the queue", queue: appState.queue });
+          res.status(409).json(queueErrorPayload("That song is already in the queue"));
           return;
         }
         if (!canQueueMoreGuestTracks(1)) {
-          res.status(429).json({ error: queueLimitMessage(), queue: appState.queue });
+          res.status(429).json(queueErrorPayload(queueLimitMessage()));
           return;
         }
         if (!(await trackInputsExistOnDisk([track]))) {
@@ -476,11 +476,11 @@ export function createApp({ lms = new LmsClient() } = {}) {
         logEvent("queue.add", { action, queued: trackSummary(queued), queue: queueSummary() });
       } else if (action === "play-next") {
         if (queuedTrackInputExists(track)) {
-          res.status(409).json({ error: "That song is already in the queue", queue: appState.queue });
+          res.status(409).json(queueErrorPayload("That song is already in the queue"));
           return;
         }
         if (!canQueueMoreGuestTracks(1)) {
-          res.status(429).json({ error: queueLimitMessage(), queue: appState.queue });
+          res.status(429).json(queueErrorPayload(queueLimitMessage()));
           return;
         }
         if (!(await trackInputsExistOnDisk([track]))) {
@@ -536,7 +536,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
     }
     const { action, tracks } = parsed.data;
     if (!publicRequestsOpen()) {
-      res.status(403).json({ error: publicRequestsClosedMessage(), queue: appState.queue });
+      res.status(403).json(queueErrorPayload(publicRequestsClosedMessage(), { accepted: 0, rejected: tracks.length }));
       return;
     }
 
@@ -547,12 +547,12 @@ export function createApp({ lms = new LmsClient() } = {}) {
     }
     const uniquePlayable = uniquePlayableInputs(playable);
     if (uniquePlayable.length === 0) {
-      res.status(409).json({ error: "Those songs are already in the queue", queue: appState.queue, accepted: 0, rejected: playable.length });
+      res.status(409).json(queueErrorPayload("Those songs are already in the queue", { accepted: 0, rejected: playable.length }));
       return;
     }
     const availableSlots = Math.max(0, guestQueueLimit() - guestQueueCount());
     if (availableSlots <= 0) {
-      res.status(429).json({ error: queueLimitMessage(), queue: appState.queue, accepted: 0, rejected: playable.length });
+      res.status(429).json(queueErrorPayload(queueLimitMessage(), { accepted: 0, rejected: playable.length }));
       return;
     }
     const acceptedPlayable = uniquePlayable.slice(0, availableSlots);
@@ -1401,6 +1401,30 @@ function queueSummary() {
     requestedBy: item.requestedBy,
     uri: item.uri,
     path: item.path,
+    etaMinutes: item.etaMinutes
+  }));
+}
+
+function queueErrorPayload(error, extra = {}) {
+  return {
+    error,
+    queue: compactQueuePayload(appState.queue),
+    playback: appState.playback,
+    ...extra
+  };
+}
+
+function compactQueuePayload(queue = []) {
+  return queue.map((item) => ({
+    id: item.id,
+    title: item.title,
+    artist: item.artist,
+    source: item.source,
+    uri: item.uri,
+    path: item.path,
+    kind: item.kind,
+    art: item.art,
+    requestedBy: item.requestedBy,
     etaMinutes: item.etaMinutes
   }));
 }
