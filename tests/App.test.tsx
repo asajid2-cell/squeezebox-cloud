@@ -282,6 +282,30 @@ describe("Cloud Squeeze UI", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Library search failed hard");
   });
 
+  it("clears stale search errors after a later successful search", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const defaultFetch = fetchMock.getMockImplementation();
+    let failSearch = true;
+    fetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (url.includes("/api/library/search")) {
+        if (failSearch) return jsonResponse({ error: "Library search failed hard" }, 502);
+        return jsonResponse({ results: [{ id: "s2", title: "Recovered Result", artist: "Downloads", source: "Local library", path: "/music/recovered.mp3" }] });
+      }
+      return defaultFetch?.(url, options) ?? jsonResponse({ ok: true });
+    });
+
+    render(<App />);
+    await userEvent.type(await screen.findByLabelText("Search music"), "bad");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Library search failed hard");
+
+    failSearch = false;
+    await userEvent.clear(screen.getByLabelText("Search music"));
+    await userEvent.type(screen.getByLabelText("Search music"), "good");
+
+    expect(await screen.findByText("Recovered Result")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+  });
+
   it("uses a compact default local search and full limit for typed searches", async () => {
     const fetchMock = vi.mocked(fetch);
     render(<App />);

@@ -149,7 +149,10 @@ export default function App() {
           const localLimit = query.trim() ? fullLibrarySearchLimit : starterLibraryLimit;
           nextResults = sourceFilter === "local" || sourceFilter === "uploaded" ? await searchLibrary(query, localLimit, sourceFilter) : [];
         }
-        if (!cancelled) setResults(nextResults);
+        if (!cancelled) {
+          setResults(nextResults);
+          setActionError("");
+        }
       } catch (error) {
         if (!cancelled) setActionError(error instanceof Error ? error.message : "Search failed");
       }
