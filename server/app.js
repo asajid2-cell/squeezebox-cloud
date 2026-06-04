@@ -687,11 +687,17 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(400).json({ error: "Library collection limit must be a positive integer up to 2000" });
       return;
     }
+    const offset = parseBoundedIntegerParam(req.query.offset, { defaultValue: 0, min: 0, max: 10000 });
+    if (offset === null) {
+      res.status(400).json({ error: "Library collection offset must be a non-negative integer" });
+      return;
+    }
     const results = await getCollectionTracks({
       collection,
       folder,
       source,
-      limit
+      limit,
+      offset
     });
     res.json({ results: await enrichLibraryArtwork(lms, results) });
   });

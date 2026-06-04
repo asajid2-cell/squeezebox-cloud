@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createApp, maintainVisiblePlaybackQueueForTests, nextQueueItemForPlayback, refreshLmsForTests, resetRefreshStateForTests, sameContinuingPlayback, shouldNudgePlayback, syncVisibleQueueWithCurrentTrack } from "../server/app.js";
+import { clearLibraryCaches } from "../server/library.js";
 import { addQueueItem, appState, config, removeQueueItem, updateNowPlaying, updateSpotifyStatus } from "../server/state.js";
 
 const mockLms = {
@@ -3784,6 +3785,38 @@ describe("Cloud Squeeze API", () => {
     } finally {
       appState.services.spotify = previousSpotify;
       appState.playback = previousPlayback;
+    }
+  });
+
+  it("paginates local collection tracks without repeating the first page", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const previousUploadDir = config.uploadDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-collection-page-"));
+    config.musicSourceDir = root;
+    config.uploadDir = path.join(root, "uploads");
+    try {
+      const folder = path.join(root, "collections", "Probe Artist", "Probe Collection", "Probe Folder");
+      await fs.mkdir(folder, { recursive: true });
+      for (let index = 1; index <= 5; index += 1) {
+        await fs.writeFile(path.join(folder, `Track ${index}.mp3`), "ID3");
+      }
+
+      const app = createApp({ lms: mockLms });
+      const collections = await request(app).get("/api/library/collections?source=local").expect(200);
+      const collection = collections.body.collections[0];
+      const params = `source=local&collection=${encodeURIComponent(collection.collection)}&folder=${encodeURIComponent(collection.folder)}`;
+      const first = await request(app).get(`/api/library/collection?${params}&limit=2&offset=0`).expect(200);
+      const second = await request(app).get(`/api/library/collection?${params}&limit=2&offset=2`).expect(200);
+      const invalidOffset = await request(app).get(`/api/library/collection?${params}&offset=-1`).expect(400);
+
+      expect(first.body.results.map((track: { title: string }) => track.title)).toEqual(["Track 1", "Track 2"]);
+      expect(second.body.results.map((track: { title: string }) => track.title)).toEqual(["Track 3", "Track 4"]);
+      expect(invalidOffset.body.error).toContain("offset");
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      config.uploadDir = previousUploadDir;
+      clearLibraryCaches();
+      await fs.rm(root, { recursive: true, force: true });
     }
   });
 

@@ -95,11 +95,12 @@ export async function getCollections(root = undefined, source = "all") {
   return results;
 }
 
-export async function getCollectionTracks({ collection = "", folder = "", source = "all", limit = 1000 } = {}) {
+export async function getCollectionTracks({ collection = "", folder = "", source = "all", limit = 1000, offset = 0 } = {}) {
   const normalizedCollection = normalize(collection);
   const normalizedFolder = normalize(folder);
   const max = Math.max(1, Math.min(2000, Number(limit) || 1000));
-  const cacheKey = `collectionTracks:${source}:${normalizedCollection}:${normalizedFolder}:${max}`;
+  const start = Math.max(0, Math.min(10000, Number(offset) || 0));
+  const cacheKey = `collectionTracks:${source}:${normalizedCollection}:${normalizedFolder}:${max}:${start}`;
   const cached = getCachedResult(cacheKey);
   if (cached) return cached;
   const tracks = await scanLibrary(undefined, 5000, source, { updateStatus: source === "all" });
@@ -110,7 +111,7 @@ export async function getCollectionTracks({ collection = "", folder = "", source
       return (!normalizedCollection || trackCollection === normalizedCollection) && (!normalizedFolder || trackFolder === normalizedFolder);
     })
     .sort((a, b) => String(a.path || a.title).localeCompare(String(b.path || b.title), undefined, { numeric: true }))
-    .slice(0, max);
+    .slice(start, start + max);
   setCachedResult(cacheKey, results);
   return results;
 }
