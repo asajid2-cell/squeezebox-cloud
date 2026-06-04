@@ -4460,6 +4460,43 @@ describe("Cloud Squeeze API", () => {
     }
   });
 
+  it("coalesces concurrent local collection cover enrichment", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const previousUploadDir = config.uploadDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-collection-cache-"));
+    config.musicSourceDir = root;
+    config.uploadDir = path.join(root, "uploads");
+    let enrichCalls = 0;
+    try {
+      const folder = path.join(root, "collections", "Probe Artist", "Probe Collection", "Tracks");
+      await fs.mkdir(folder, { recursive: true });
+      await fs.writeFile(path.join(folder, "Cover Track.mp3"), "ID3");
+      const lms = {
+        ...mockLms,
+        async enrichLocalArtwork(tracks: Array<{ title: string }>) {
+          enrichCalls += 1;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          return tracks.map((track) => ({ ...track, art: "api/artwork/coalesced-cover" }));
+        }
+      };
+      const app = createApp({ lms });
+
+      const [first, second] = await Promise.all([
+        request(app).get("/api/library/collections?source=local").expect(200),
+        request(app).get("/api/library/collections?source=local").expect(200)
+      ]);
+
+      expect(first.body.collections[0].art).toBe("api/artwork/coalesced-cover");
+      expect(second.body.collections[0].art).toBe("api/artwork/coalesced-cover");
+      expect(enrichCalls).toBe(1);
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      config.uploadDir = previousUploadDir;
+      clearLibraryCaches();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("accepts only validated audio uploads", async () => {
     const previousUploadDir = config.uploadDir;
     const previousMusicDir = config.musicSourceDir;

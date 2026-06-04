@@ -732,7 +732,9 @@ export function createApp({ lms = new LmsClient() } = {}) {
     }
     const collections = await getCollections(undefined, source);
     const page = collections.slice(offset, offset + limit);
-    res.json({ collections: await enrichCollectionCovers(lms, page) });
+    const cacheKey = enrichedLibraryResponseCacheKey("collections", { source, limit, offset });
+    const enriched = await cachedEnrichedLibraryResults(cacheKey, () => enrichCollectionCovers(lms, page));
+    res.json({ collections: enriched });
   });
 
   app.get("/api/library/collection", async (req, res) => {
