@@ -5201,7 +5201,7 @@ describe("Cloud Squeeze API", () => {
     expect(controls).not.toContainEqual({ action: "repeat", value: "one" });
   });
 
-  it("manual queueing is non destructive while generated shuffle is active", async () => {
+  it("manual queueing takes over while generated shuffle is active", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = { ...appState.playback, shuffle: true, smartQueue: false, smartShuffleSource: "spotify", repeat: "off", history: [] };
     addQueueItem({ title: "Generated A", artist: "Tester", requestedBy: "shuffle", uri: "spotify:track:generated-a" });
@@ -5222,8 +5222,26 @@ describe("Cloud Squeeze API", () => {
       .send({ action: "play-next", track: { title: "Manual Heavy", artist: "Tester", path: "/music/manual-heavy.mp3" } })
       .expect(200);
 
-    expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Manual Heavy", "Generated A", "Generated B"]);
+    expect(response.body.playback).toMatchObject({ shuffle: false, smartQueue: false });
+    expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Manual Heavy"]);
+    expect(response.body.queue.every((item: { requestedBy: string }) => item.requestedBy === "guest")).toBe(true);
     expect(played).toHaveLength(0);
+  });
+
+  it("manual queueing takes over while smart shuffle is active", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: true, smartShuffleSource: "spotify", repeat: "off", history: [] };
+    addQueueItem({ title: "Smart Generated A", artist: "Tester", requestedBy: "smart shuffle", uri: "spotify:track:smart-generated-a" });
+    addQueueItem({ title: "Smart Generated B", artist: "Tester", requestedBy: "smart shuffle", uri: "spotify:track:smart-generated-b" });
+
+    const response = await request(createApp({ lms: mockLms }))
+      .post("/api/player/track")
+      .send({ action: "add-queue", track: { title: "Manual After Smart", artist: "Tester", path: "/music/manual-after-smart.mp3" } })
+      .expect(200);
+
+    expect(response.body.playback).toMatchObject({ shuffle: false, smartQueue: false });
+    expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Manual After Smart"]);
+    expect(response.body.queue.every((item: { requestedBy: string }) => item.requestedBy === "guest")).toBe(true);
   });
 
   it("manual next disables repeat one before visible queue advance", async () => {

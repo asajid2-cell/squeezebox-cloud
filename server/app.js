@@ -330,6 +330,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(409).json({ error: "Queue was cleared while this request was pending", queue: appState.queue });
       return;
     }
+    if (generatedShufflePlaybackActive()) stopGeneratedPlayback();
     await turnRepeatOffForVisibleQueue(lms);
     if (queueAddStaleAfterClear(clearEpochAtRequest)) {
       res.status(409).json({ error: "Queue was cleared while this request was pending", queue: appState.queue });
@@ -466,6 +467,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
           res.status(409).json({ error: "Queue was cleared while this request was pending", queue: appState.queue, playback: appState.playback });
           return;
         }
+        if (generatedShufflePlaybackActive()) stopGeneratedPlayback();
         await turnRepeatOffForVisibleQueue(lms);
         if (queueAddStaleAfterClear(clearEpochAtRequest)) {
           res.status(409).json({ error: "Queue was cleared while this request was pending", queue: appState.queue, playback: appState.playback });
@@ -491,6 +493,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
           res.status(409).json({ error: "Queue was cleared while this request was pending", queue: appState.queue, playback: appState.playback });
           return;
         }
+        if (generatedShufflePlaybackActive()) stopGeneratedPlayback();
         await turnRepeatOffForVisibleQueue(lms);
         if (queueAddStaleAfterClear(clearEpochAtRequest)) {
           res.status(409).json({ error: "Queue was cleared while this request was pending", queue: appState.queue, playback: appState.playback });
@@ -570,6 +573,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       return;
     }
 
+    if (generatedShufflePlaybackActive()) stopGeneratedPlayback();
     await turnRepeatOffForVisibleQueue(lms);
     if (queueAddStaleAfterClear(clearEpochAtRequest)) {
       res.status(409).json({ error: "Queue was cleared while this request was pending", queue: appState.queue, playback: appState.playback, accepted: 0, rejected: playable.length });
