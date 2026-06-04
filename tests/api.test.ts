@@ -3001,10 +3001,37 @@ describe("Cloud Squeeze API", () => {
 
     expect(first.body.action).toBe("visible-queue-next");
     expect(first.body.nowPlaying.title).toBe("Only Visible Next");
-    expect(second.body.action).toBe("noop");
+    expect(second.body.action).toBe("stop-empty-queue");
+    expect(second.body.player.mode).toBe("stop");
     expect(played).toEqual(["Only Visible Next"]);
     expect(controls).not.toContain("next");
+    expect(controls).toContain("stop");
     expect(appState.queue).toEqual([]);
+  });
+
+  it("stops instead of restarting LMS next when an app-managed queue was cleared", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = { id: "current", title: "Current App Track", artist: "Tester", album: "", source: "Spotify", duration: 100, elapsed: 20, canSeek: true, uri: "spotify:track:current" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, appManagedPlayback: true, previousTracks: [] };
+    const controls: string[] = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string) {
+          controls.push(action);
+          return "ok";
+        }
+      }
+    });
+
+    const response = await request(app).post("/api/player/next").expect(200);
+
+    expect(response.body.action).toBe("stop-empty-queue");
+    expect(response.body.player.mode).toBe("stop");
+    expect(response.body.nowPlaying.title).toBe("No track playing");
+    expect(response.body.playback.appManagedPlayback).toBe(false);
+    expect(controls).toEqual(["stop"]);
   });
 
   it("preserves uploaded queue metadata after LMS refresh during app-managed advance", async () => {

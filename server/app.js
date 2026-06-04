@@ -1016,14 +1016,22 @@ export function createApp({ lms = new LmsClient() } = {}) {
         !appState.playback.shuffle &&
         !appState.playback.smartQueue &&
         (appState.player.mode === "stop" || appState.player.mode === "stopped");
+      const stoppedEmptyAppManagedQueue = emptyAppManagedQueue && appState.player.mode !== "stop" && appState.player.mode !== "stopped";
+      if (stoppedEmptyAppManagedQueue) {
+        await control(lms, "stop");
+        setMode("stop");
+        updatePlayback({ appManagedPlayback: false, previousTracks: [] });
+        updateNowPlaying(idleNowPlaying);
+        updateTrackInfo(idleTrackInfo);
+      }
       if (!played && !stoppedWithEmptyManualQueue && !emptyAppManagedQueue) {
         const currentBeforeNext = appState.nowPlaying;
         await control(lms, "next");
         rememberPreviousTrack(currentBeforeNext);
       }
       if (!stoppedWithEmptyManualQueue && !emptyAppManagedQueue) refreshLms(lms, { force: true }).catch(() => null);
-      const resultAction = played ? "visible-queue-next" : (stoppedWithEmptyManualQueue || emptyAppManagedQueue) ? "noop" : "next";
-      logEvent("transport.next.result", { action: played ? "visible-queue-next" : (stoppedWithEmptyManualQueue || emptyAppManagedQueue) ? "noop" : "lms-next", played: trackSummary(played), queue: queueSummary(), playback: appState.playback });
+      const resultAction = played ? "visible-queue-next" : stoppedEmptyAppManagedQueue ? "stop-empty-queue" : (stoppedWithEmptyManualQueue || emptyAppManagedQueue) ? "noop" : "next";
+      logEvent("transport.next.result", { action: played ? "visible-queue-next" : stoppedEmptyAppManagedQueue ? "stop-empty-queue" : (stoppedWithEmptyManualQueue || emptyAppManagedQueue) ? "noop" : "lms-next", played: trackSummary(played), queue: queueSummary(), playback: appState.playback });
       res.json({ ok: true, action: resultAction, queue: appState.queue, player: appState.player, nowPlaying: appState.nowPlaying, playback: appState.playback });
     } catch (error) {
       res.status(502).json({ error: error.message, player: appState.player, nowPlaying: appState.nowPlaying });
