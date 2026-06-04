@@ -43,10 +43,13 @@ try {
   } else {
     await assertSpotifyContainersOpenToTracks();
     await assertSpotifyLibrarySections();
+    await assertSpotifyPagination();
   }
+  await assertLocalCollectionPagination();
   await assertLocalStream(search.results);
   await assertMalformedStreamRange(search.results);
   await assertBatchQueueAndShuffle();
+  await assertRapidManagedControls();
   await assertSmartShuffleSources({ spotifyReachable });
 
   const slow = latency.filter((row) => row.avgMs > latencyBudgetMs);
@@ -186,6 +189,81 @@ async function assertSmartShuffleSources({ spotifyReachable } = {}) {
   const after = await requestJson("/state");
   const leftovers = (after.queue || []).filter((item) => item.title?.startsWith("Smoke Verify "));
   assert(leftovers.length === 0, "smart shuffle smoke rows were not cleaned up");
+}
+
+async function assertSpotifyPagination() {
+  const library = await requestJson("/spotify/library?type=playlists&limit=8");
+  const playlists = (library.results || []).filter((item) => item.kind === "playlist" && (item.uri || item.browseId));
+  assert(playlists.length > 0, "Spotify pagination check did not find playlist containers");
+  for (const playlist of playlists) {
+    const params = spotifyChildParams(playlist, 3, 0);
+    const first = await requestJson(`/spotify/children?${params.toString()}`);
+    const secondParams = spotifyChildParams(playlist, 3, 3);
+    const second = await requestJson(`/spotify/children?${secondParams.toString()}`);
+    const firstTracks = (first.results || []).filter((item) => !item.kind || item.kind === "track");
+    const secondTracks = (second.results || []).filter((item) => !item.kind || item.kind === "track");
+    if (firstTracks.length === 0 || secondTracks.length === 0) continue;
+    const secondKeys = new Set(secondTracks.map(playableKey).filter(Boolean));
+    const overlap = firstTracks.some((item) => secondKeys.has(playableKey(item)));
+    assert(!overlap, "Spotify playlist pagination returned overlapping tracks");
+    return;
+  }
+  assert(false, "Spotify pagination check could not find two populated playlist pages");
+}
+
+async function assertLocalCollectionPagination() {
+  const body = await requestJson("/library/collections?source=local");
+  const collection = (body.collections || []).find((item) => Number(item.count || 0) >= 6);
+  assert(collection, "local collection pagination check did not find a collection with enough tracks");
+  const firstParams = new URLSearchParams({
+    source: "local",
+    collection: collection.collection || "",
+    folder: collection.folder || "",
+    limit: "3",
+    offset: "0"
+  });
+  const secondParams = new URLSearchParams(firstParams);
+  secondParams.set("offset", "3");
+  const first = await requestJson(`/library/collection?${firstParams.toString()}`);
+  const second = await requestJson(`/library/collection?${secondParams.toString()}`);
+  const firstTracks = first.results || [];
+  const secondTracks = second.results || [];
+  assert(firstTracks.length === 3 && secondTracks.length === 3, "local collection pagination did not return full pages");
+  const secondKeys = new Set(secondTracks.map(playableKey).filter(Boolean));
+  const overlap = firstTracks.some((item) => secondKeys.has(playableKey(item)));
+  assert(!overlap, "local collection pagination returned overlapping tracks");
+}
+
+async function assertRapidManagedControls() {
+  await resetPublicPlayback();
+  const tracks = await localSmokeTracks(4);
+  await requestJson("/player/track", {
+    method: "POST",
+    body: { action: "play-now", track: smokeTrack(tracks[0], "Smoke Verify Control One") }
+  });
+  await requestJson("/player/tracks", {
+    method: "POST",
+    body: {
+      action: "add-queue",
+      tracks: [
+        smokeTrack(tracks[1], "Smoke Verify Control Two"),
+        smokeTrack(tracks[2], "Smoke Verify Control Three"),
+        smokeTrack(tracks[3], "Smoke Verify Control Four")
+      ]
+    }
+  });
+  await delay(600);
+  const responses = [];
+  for (const path of ["/player/next", "/player/next", "/player/previous", "/player/next"]) {
+    responses.push(await requestJson(path, { method: "POST", body: {} }));
+  }
+  const actions = responses.map((item) => item.action);
+  assert(actions.join("|") === "visible-queue-next|visible-queue-next|app-previous|visible-queue-next", `rapid controls returned unexpected actions: ${actions.join("|")}`);
+  const state = await requestJson("/state");
+  assert(state.nowPlaying?.title === "Smoke Verify Control Three", "rapid controls ended on the wrong song");
+  assert((state.queue || []).map((item) => item.title).join("|") === "Smoke Verify Control Four", "rapid controls left the wrong visible queue");
+  assert(state.playback?.appManagedPlayback === true, "rapid controls dropped app-managed playback");
+  await resetPublicPlayback();
 }
 
 async function assertQueueCrud() {
@@ -391,6 +469,17 @@ async function cleanupQueue() {
   }
 }
 
+async function resetPublicPlayback() {
+  await requestJson("/player/playback", {
+    method: "POST",
+    body: { shuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "mixed" }
+  }).catch(() => null);
+  await requestJson("/queue", { method: "DELETE" }).catch(() => null);
+  await requestJson("/player/stop", { method: "POST", body: {} }).catch(() => null);
+  createdQueueIds.splice(0, createdQueueIds.length);
+  await delay(400);
+}
+
 async function measureLatency(paths) {
   const rows = [];
   for (const path of paths) {
@@ -451,6 +540,25 @@ function smokeTrack(track, title) {
     artist: "CloudSqueeze",
     source: track.source || "Local library"
   };
+}
+
+function spotifyChildParams(playlist, limit, offset) {
+  const params = new URLSearchParams();
+  if (playlist.browseId) params.set("browseId", String(playlist.browseId));
+  if (playlist.uri) params.set("uri", String(playlist.uri));
+  params.set("kind", "playlist");
+  if (playlist.title) params.set("title", String(playlist.title));
+  params.set("limit", String(limit));
+  params.set("offset", String(offset));
+  return params;
+}
+
+function playableKey(track) {
+  return String(track?.uri || track?.path || track?.lmsTrackId || track?.id || `${track?.title || ""}:${track?.artist || ""}`).toLowerCase();
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function normalizeBaseUrl(value) {
