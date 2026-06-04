@@ -951,7 +951,6 @@ export function createApp({ lms = new LmsClient() } = {}) {
         await lms.playTrack(playerId, previous, "play-now");
         popPreviousTrack();
         restoreCurrentTrackAfterPrevious(currentBeforePrevious);
-        rememberPreviousTrack(currentBeforePrevious);
         updatePlayback({ appManagedPlayback: true });
         setMode("play");
         markPendingPlayback(previous);

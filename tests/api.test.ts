@@ -1177,7 +1177,7 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.nowPlaying.title).toBe("Previous Track");
     expect(played).toEqual([{ action: "play-now", track: expect.objectContaining({ title: "Previous Track", path: "/music/previous.mp3" }) }]);
     expect(controls).not.toContainEqual({ action: "previous" });
-    expect(appState.playback.previousTracks[0]).toMatchObject({ title: "Current Track", path: "/music/current.mp3" });
+    expect(appState.playback.previousTracks).toEqual([]);
   });
 
   it("restores the forward track after app previous so next can return to it", async () => {
@@ -1226,6 +1226,54 @@ describe("Cloud Squeeze API", () => {
     expect(played).toEqual([
       { action: "play-now", track: expect.objectContaining({ title: "Previous Track", uri: "spotify:track:previous" }) },
       { action: "play-now", track: expect.objectContaining({ title: "Current Forward", uri: "spotify:track:current" }) }
+    ]);
+  });
+
+  it("does not duplicate the forward queue on repeated app previous presses", async () => {
+    const played: Array<{ action: string; track: { title?: string; uri?: string } }> = [];
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = {
+      id: "spotify://track:current",
+      title: "Current Forward",
+      artist: "Tester",
+      album: "",
+      source: "Spotify",
+      duration: 100,
+      elapsed: 10,
+      canSeek: true,
+      art: null,
+      uri: "spotify:track:current"
+    };
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      manualShuffle: true,
+      smartQueue: false,
+      appManagedPlayback: true,
+      previousTracks: [{ title: "Previous Track", artist: "Tester", uri: "spotify:track:previous", source: "Spotify", kind: "track" }]
+    };
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string; uri?: string }, action: string) {
+        played.push({ action, track });
+        return "ok";
+      },
+      async nowPlaying() {
+        return appState.nowPlaying;
+      }
+    };
+    const app = createApp({ lms });
+
+    const previous = await request(app).post("/api/player/previous").expect(200);
+    const repeatedPrevious = await request(app).post("/api/player/previous").expect(200);
+
+    expect(previous.body.action).toBe("app-previous");
+    expect(repeatedPrevious.body.action).toBe("noop");
+    expect(appState.queue).toEqual([expect.objectContaining({ title: "Current Forward", uri: "spotify:track:current" })]);
+    expect(appState.playback.previousTracks).toEqual([]);
+    expect(played).toEqual([
+      { action: "play-now", track: expect.objectContaining({ title: "Previous Track", uri: "spotify:track:previous" }) }
     ]);
   });
 
@@ -1359,7 +1407,8 @@ describe("Cloud Squeeze API", () => {
     expect(previous.body.action).toBe("app-previous");
     expect(played).toEqual([{ action: "play-now", track: expect.objectContaining({ title: "Track A", path: "/music/a.mp3" }) }]);
     expect(controls).not.toContainEqual({ action: "previous" });
-    expect(appState.playback.previousTracks[0]).toMatchObject({ title: "Track B", path: "/music/b.mp3" });
+    expect(appState.playback.previousTracks).toEqual([]);
+    expect(appState.queue[0]).toMatchObject({ title: "Track B", path: "/music/b.mp3" });
   });
 
   it("keeps manual queue previous and next out of generated shuffle history", async () => {
@@ -2719,11 +2768,7 @@ describe("Cloud Squeeze API", () => {
       album: "Haha - Single",
       art: "https://covers.example/sleep.jpg"
     });
-    expect(previous.body.playback.previousTracks[0]).toMatchObject({
-      title: "Sleep Paralysis",
-      artist: "Jackson Ivy",
-      art: "https://covers.example/sleep.jpg"
-    });
+    expect(previous.body.playback.previousTracks).toEqual([]);
 
     const forward = await request(app).post("/api/player/next").expect(200);
 
