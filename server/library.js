@@ -242,6 +242,7 @@ export async function saveUploadedTrack({ originalName, bytes }) {
   const targetName = ext === "mp3" ? safe : `${path.parse(safe).name}.mp3`;
   const target = await uniqueUploadPath(path.join(config.uploadDir, targetName));
   if (ext === "mp3") {
+    await verifyUploadedAudio(safe, bytes);
     await fs.writeFile(target, bytes, { flag: "wx", mode: 0o644 });
   } else {
     await transcodeUploadToMp3(safe, bytes, target);
@@ -292,6 +293,29 @@ async function transcodeUploadToMp3(safeName, bytes, target) {
   } catch (error) {
     await fs.rm(target, { force: true }).catch(() => null);
     throw new Error(`Upload audio conversion failed: ${error.message}`);
+  } finally {
+    await fs.rm(tempSource, { force: true }).catch(() => null);
+  }
+}
+
+async function verifyUploadedAudio(safeName, bytes) {
+  const tempSource = await uniqueUploadPath(path.join(config.uploadDir, `.probe-${Date.now()}-${safeName}`));
+  await fs.writeFile(tempSource, bytes, { flag: "wx", mode: 0o600 });
+  try {
+    const { stdout } = await execFileAsync("ffprobe", [
+      "-v",
+      "error",
+      "-show_entries",
+      "format=duration",
+      "-of",
+      "json",
+      tempSource
+    ], { timeout: 3500, windowsHide: true });
+    const parsed = JSON.parse(stdout || "{}");
+    const duration = Number(parsed?.format?.duration);
+    if (!Number.isFinite(duration) || duration <= 0) throw new Error("missing duration");
+  } catch (error) {
+    throw new Error(`Upload audio validation failed: ${error.message}`);
   } finally {
     await fs.rm(tempSource, { force: true }).catch(() => null);
   }

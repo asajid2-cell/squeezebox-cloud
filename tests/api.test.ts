@@ -7,6 +7,11 @@ import { createApp, maintainVisiblePlaybackQueueForTests, nextQueueItemForPlayba
 import { clearLibraryCaches } from "../server/library.js";
 import { addQueueItem, appState, config, removeQueueItem, updateNowPlaying, updateSpotifyStatus } from "../server/state.js";
 
+const tinyMp3 = Buffer.from(
+  "SUQzBAAAAAAAIlRTU0UAAAAOAAADTGF2ZjYyLjMuMTAwAAAAAAAAAAAAAAD/+0DAAAAAAAAAAAAAAAAAAAAAAABJbmZvAAAADwAAAAUAAAK+AGhoaGhoaGhoaGhoaGhoaGhoaGiOjo6Ojo6Ojo6Ojo6Ojo6Ojo6OjrS0tLS0tLS0tLS0tLS0tLS0tLS02tra2tra2tra2tra2tra2tra2tr//////////////////////////wAAAABMYXZjNjIuMTEAAAAAAAAAAAAAAAAkAwYAAAAAAAACvhC6F/0AAAAAAP/7EMQAA8AAAaQAAAAgAAA0gAAABExBTUUzLjEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//sQxCmDwAABpAAAACAAADSAAAAEVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVX/+xDEUwPAAAGkAAAAIAAANIAAAARVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVf/7EMR8g8AAAaQAAAAgAAA0gAAABFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//sQxKYDwAABpAAAACAAADSAAAAEVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU=",
+  "base64"
+);
+
 const mockLms = {
   async status() {
     return {
@@ -4421,10 +4426,18 @@ describe("Cloud Squeeze API", () => {
         .expect(415);
       expect(wrongType.body.error).toContain("application/octet-stream");
 
+      const invalidMp3 = await request(app)
+        .post("/api/library/upload?filename=probe-invalid-upload.mp3")
+        .set("content-type", "application/octet-stream")
+        .send(Buffer.from("ID3tiny-invalid"))
+        .expect(400);
+      expect(invalidMp3.body.error).toContain("Upload audio validation failed");
+      await expect(fs.access(path.join(config.uploadDir, "probe-invalid-upload.mp3"))).rejects.toThrow();
+
       const uploaded = await request(app)
         .post("/api/library/upload?filename=test.mp3")
         .set("content-type", "application/octet-stream")
-        .send(Buffer.concat([Buffer.from("ID3"), Buffer.alloc(32)]))
+        .send(tinyMp3)
         .expect(201);
 
       expect(uploaded.body.track.source).toBe("Uploaded");
