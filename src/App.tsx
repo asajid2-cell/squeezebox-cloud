@@ -439,10 +439,11 @@ function PlaybackOptions({ state, disabled, onRefresh, onAction }: { state: AppS
 
 function AlbumArt({ track }: { track: Track }) {
   const empty = track.id === "idle";
+  const art = track.art || track.artwork;
   return (
     <div className={`album-art ${empty ? "is-empty" : ""}`}>
-      {track.art ? (
-        <img src={track.art} alt={`${track.album || track.title} cover`} />
+      {art ? (
+        <img src={art} alt={`${track.album || track.title} cover`} />
       ) : (
         <>
           <div className="album-noise" />
@@ -587,7 +588,7 @@ function QueuePanel({ queue, onRefresh, onAction }: { queue: AppState["queue"]; 
         {queue.slice(0, 12).map((item, index) => (
           <div className={`queue-row ${editingId === item.id ? "is-editing" : ""}`} key={item.id}>
             <div className="mini-art">
-              {item.art ? <img src={item.art} alt="" /> : <Music2 size={18} />}
+              {item.art || item.artwork ? <img src={item.art || item.artwork || ""} alt="" /> : <Music2 size={18} />}
             </div>
             {editingId === item.id ? (
               <div className="queue-edit-fields">
@@ -779,9 +780,10 @@ function SearchPanel({
 
 function SearchResultRow({ track, onRefresh, onAction }: { track: Track; onRefresh: () => void; onAction: ActionRunner }) {
   const playable = !track.kind || track.kind === "track" || Boolean(track.path || track.lmsTrackId);
+  const art = track.art || track.artwork;
   return (
     <div className="result-row">
-      <div className="cover-thumb">{track.art && <img src={track.art} alt="" />}</div>
+      <div className="cover-thumb">{art && <img src={art} alt="" />}</div>
       <div>
         <strong>{track.title}</strong>
         <small>

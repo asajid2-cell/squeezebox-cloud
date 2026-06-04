@@ -10,6 +10,7 @@ export type Track = {
   elapsed?: number;
   canSeek?: boolean;
   art?: string | null;
+  artwork?: string | null;
   path?: string;
   uri?: string;
   lmsTrackId?: string | number;
