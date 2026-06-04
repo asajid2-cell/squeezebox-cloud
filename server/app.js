@@ -890,7 +890,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(4000) });
       if (!response.ok) {
-        res.status(response.status).json({ error: "Image unavailable" });
+        res.status(204).set("Cache-Control", "public, max-age=3600").end();
         return;
       }
       const contentType = response.headers.get("content-type") || "image/jpeg";

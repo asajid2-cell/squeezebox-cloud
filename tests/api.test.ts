@@ -1962,6 +1962,9 @@ describe("Cloud Squeeze API", () => {
       if (url.includes("not-image")) {
         return new Response("<html></html>", { status: 200, headers: { "content-type": "text/html" } });
       }
+      if (url.includes("missing")) {
+        return new Response("missing", { status: 404, headers: { "content-type": "text/plain" } });
+      }
       return new Response(imageBytes, { status: 200, headers: { "content-type": "image/jpeg", "content-length": String(imageBytes.length) } });
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -1975,9 +1978,11 @@ describe("Cloud Squeeze API", () => {
     await request(app).get("/api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Fnot-image").expect(415);
     await request(app).get("/api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Ftoo-large-header").expect(413);
     await request(app).get("/api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Ftoo-large-body").expect(413);
+    const missing = await request(app).get("/api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Fmissing").expect(204);
 
     expect(ok.headers["content-type"]).toContain("image/jpeg");
     expect(ok.headers["cache-control"]).toContain("immutable");
+    expect(missing.headers["cache-control"]).toContain("max-age=3600");
     expect(ok.body.toString()).toBe("fake-image");
     expect(cachedOk.body.toString()).toBe("fake-image");
     expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("/ok"))).toHaveLength(1);
