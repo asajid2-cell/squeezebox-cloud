@@ -1195,6 +1195,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
         if (manualQueueCount() > 0) {
           shuffleVisibleQueue();
           updatePlayback({ manualShuffle: true });
+          queued = [...appState.queue];
         } else if (!appState.playback.manualShuffle) {
           queued = await activateGeneratedQueue(lms, playerId, { shuffle: true, mode: appState.playback.smartShuffleSource, controlsReady: true });
         }

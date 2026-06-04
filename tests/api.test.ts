@@ -2053,6 +2053,60 @@ describe("Cloud Squeeze API", () => {
     expect(played[0]).toMatchObject({ title: "Headlines", artist: "Drake", uri: "spotify:track:0000000000000000000101" });
   });
 
+  it("keeps duplicate Spotify search results distinct by selected URI", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const played: Array<{ title?: string; artist?: string; uri?: string }> = [];
+    const duplicateOne = {
+      id: "spotify:track:1111111111111111111111",
+      title: "Same Song",
+      artist: "Same Artist",
+      source: "Spotify",
+      uri: "spotify:track:1111111111111111111111",
+      kind: "track"
+    };
+    const duplicateTwo = {
+      id: "spotify:track:2222222222222222222222",
+      title: "Same Song",
+      artist: "Same Artist",
+      source: "Spotify",
+      uri: "spotify:track:2222222222222222222222",
+      kind: "track"
+    };
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async spotifySearch() {
+          return [duplicateOne, duplicateTwo];
+        },
+        async playTrack(_playerId: string, track: { title?: string; artist?: string; uri?: string }) {
+          played.push(track);
+          return "ok";
+        }
+      }
+    });
+    const search = await request(app).get("/api/spotify/search?q=same").expect(200);
+    const selected = search.body.results[1];
+
+    const queued = await request(app)
+      .post("/api/player/track")
+      .send({ action: "add-queue", track: selected })
+      .expect(200);
+
+    expect(queued.body.queued).toMatchObject({
+      title: "Same Song",
+      artist: "Same Artist",
+      uri: "spotify:track:2222222222222222222222"
+    });
+    appState.queue.splice(0, appState.queue.length);
+
+    await request(app)
+      .post("/api/player/track")
+      .send({ action: "play-now", track: selected })
+      .expect(200);
+
+    expect(played).toEqual([expect.objectContaining({ uri: "spotify:track:2222222222222222222222" })]);
+  });
+
   it("preserves Spotify track URI case while canonicalizing metadata", async () => {
     appState.queue.splice(0, appState.queue.length);
     const app = createApp({
@@ -2246,9 +2300,10 @@ describe("Cloud Squeeze API", () => {
 
     const playlistUris = new Set(playlistTracks.map((track) => track.uri));
     expect(queued.body.accepted).toBe(3);
-    expect(shuffled.body.queued).toEqual([]);
+    expect(shuffled.body.queued).toHaveLength(3);
     expect(shuffled.body.playback).toMatchObject({ shuffle: true, manualShuffle: true, smartQueue: false });
     expect(shuffled.body.queue).toHaveLength(3);
+    expect(shuffled.body.queued.map((item: { uri?: string }) => item.uri)).toEqual(shuffled.body.queue.map((item: { uri?: string }) => item.uri));
     expect(shuffled.body.queue.every((item: { uri?: string; requestedBy?: string }) => playlistUris.has(item.uri || "") && item.requestedBy === "guest")).toBe(true);
     expect(shuffled.body.queue.some((item: { title: string }) => item.title === "Stale Local")).toBe(false);
   });
@@ -4118,8 +4173,8 @@ describe("Cloud Squeeze API", () => {
         .expect(200);
 
       expect(response.body.playback).toMatchObject({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" });
-      expect(response.body.queued).toEqual([]);
       expect(response.body.queue).toHaveLength(2);
+      expect(response.body.queued.map((item: { title: string }) => item.title)).toEqual(response.body.queue.map((item: { title: string }) => item.title));
       expect(response.body.queue.every((item: { requestedBy: string }) => item.requestedBy === "guest")).toBe(true);
     } finally {
       appState.services.spotify = previousSpotify;
@@ -4395,7 +4450,8 @@ describe("Cloud Squeeze API", () => {
       .expect(200);
 
     expect(shuffled.body.playback).toMatchObject({ shuffle: true, manualShuffle: true, smartQueue: false, appManagedPlayback: true });
-    expect(shuffled.body.queued).toEqual([]);
+    expect(shuffled.body.queued).toHaveLength(2);
+    expect(shuffled.body.queued.map((item: { title: string }) => item.title)).toEqual(shuffled.body.queue.map((item: { title: string }) => item.title));
     expect(shuffled.body.queue).toHaveLength(2);
     expect(searches).toEqual([]);
 
@@ -4660,7 +4716,7 @@ describe("Cloud Squeeze API", () => {
 
     expect(response.body.playback).toMatchObject({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" });
     expect(response.body.queue.map((item: { requestedBy: string }) => item.requestedBy)).toEqual(["guest", "guest"]);
-    expect(response.body.queued).toHaveLength(0);
+    expect(response.body.queued.map((item: { title: string }) => item.title)).toEqual(response.body.queue.map((item: { title: string }) => item.title));
     expect(response.body.playback.repeat).toBe("off");
   });
 
