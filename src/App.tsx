@@ -60,7 +60,7 @@ import "./styles.css";
 const spotifyRecommendationQuery = "drake";
 const spotifySuggestionTerms = ["drake", "juice wrld", "the weeknd", "travis scott"];
 const starterLibraryLimit = 60;
-const fullLibrarySearchLimit = 2000;
+const typedLibrarySearchLimit = 200;
 
 const navItems = [
   { label: "Now Playing", icon: Music2 },
@@ -146,7 +146,7 @@ export default function App() {
         if (sourceFilter === "spotify") {
           nextResults = await searchSpotify(query.trim() || spotifyRecommendationQuery, 50);
         } else {
-          const localLimit = query.trim() ? fullLibrarySearchLimit : starterLibraryLimit;
+          const localLimit = query.trim() ? typedLibrarySearchLimit : starterLibraryLimit;
           nextResults = sourceFilter === "local" || sourceFilter === "uploaded" ? await searchLibrary(query, localLimit, sourceFilter) : [];
         }
         if (!cancelled) {

@@ -306,7 +306,7 @@ describe("Cloud Squeeze UI", () => {
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
   });
 
-  it("uses a compact default local search and full limit for typed searches", async () => {
+  it("uses compact local search limits for default and typed searches", async () => {
     const fetchMock = vi.mocked(fetch);
     render(<App />);
     await waitFor(() => {
@@ -316,7 +316,7 @@ describe("Cloud Squeeze UI", () => {
     await userEvent.type(screen.getByLabelText("Search music"), "local");
 
     await waitFor(() => {
-      expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/library/search") && String(url).includes("q=local") && String(url).includes("limit=2000"))).toBe(true);
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/library/search") && String(url).includes("q=local") && String(url).includes("limit=200"))).toBe(true);
     });
   });
 
