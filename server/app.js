@@ -2231,10 +2231,20 @@ function preserveKnownNowPlayingMetadata(fresh, requestedTrack = null) {
 }
 
 function shouldPreserveKnownTrackMetadata(fresh, known, requestedTrack = null) {
-  if (isUploadedTrackPath(fresh.path || known.path)) return true;
+  if (tracksShareLocalFilePlaybackIdentity(fresh, known)) return true;
   if (requestedTrack && isPlayableSpotifyTrack(known)) return true;
   if (isPlayableSpotifyTrack(fresh) && isPlayableSpotifyTrack(known)) return true;
   return false;
+}
+
+function tracksShareLocalFilePlaybackIdentity(fresh, known) {
+  const freshLocalKeys = new Set(playbackMetadataKeys(fresh).filter(isLocalFileTrackPath));
+  return playbackMetadataKeys(known).filter(isLocalFileTrackPath).some((key) => freshLocalKeys.has(key));
+}
+
+function isLocalFileTrackPath(value) {
+  const normalized = normalizeTrackKey(value);
+  return Boolean(normalized && (normalized.includes("/music/") || normalized.startsWith("file:") || /^[a-z]:[\\/]/.test(normalized)));
 }
 
 function isUploadedTrackPath(value) {
@@ -2496,6 +2506,7 @@ function richRestorableTrack(track) {
   const restorable = restorableTrack(track);
   const known = lookupRecentPlaybackMetadata(restorable);
   if (!known || !tracksSharePlaybackIdentity(restorable, known)) return restorable;
+  if (tracksHaveDifferentLocalFileIdentities(restorable, known)) return restorable;
   if (metadataQualityScore(known) < metadataQualityScore(restorable)) return restorable;
   return {
     ...restorable,
@@ -2504,6 +2515,14 @@ function richRestorableTrack(track) {
     elapsed: restorable.elapsed,
     canSeek: restorable.canSeek
   };
+}
+
+function tracksHaveDifferentLocalFileIdentities(left, right) {
+  const leftLocalKeys = playbackMetadataKeys(left).filter(isLocalFileTrackPath);
+  const rightLocalKeys = playbackMetadataKeys(right).filter(isLocalFileTrackPath);
+  if (leftLocalKeys.length === 0 || rightLocalKeys.length === 0) return false;
+  const rightSet = new Set(rightLocalKeys);
+  return !leftLocalKeys.some((key) => rightSet.has(key));
 }
 
 function spotifyTrackId(track) {
