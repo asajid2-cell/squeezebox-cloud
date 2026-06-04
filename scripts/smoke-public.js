@@ -9,6 +9,8 @@ try {
     "/speaker/status",
     "/spotify/status",
     "/library/search?limit=20",
+    "/library/search?q=the&source=local&limit=200",
+    "/spotify/search?q=drake&limit=20",
     "/spotify/library?type=playlists&limit=8",
     "/spotify/library?type=albums&limit=5",
     "/spotify/library?type=home&limit=5"
