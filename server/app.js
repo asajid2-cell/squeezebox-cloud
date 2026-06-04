@@ -903,7 +903,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       const played = shouldPlayVisibleQueue ? await playNextVisibleQueueItem(lms, playerId) : null;
       if (!played) {
         await control(lms, "play");
-        updatePlayback({ appManagedPlayback: false });
+        updatePlayback({ appManagedPlayback: Boolean(appState.playback.appManagedPlayback && appState.queue.length > 0) });
       }
       refreshLms(lms, { force: true }).catch(() => null);
       res.json({ ok: true, action: played ? "visible-queue-play" : "play", mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying, queue: appState.queue, playback: appState.playback });

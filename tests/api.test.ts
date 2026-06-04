@@ -804,6 +804,33 @@ describe("Cloud Squeeze API", () => {
     expect(controls).toEqual(["pause"]);
   });
 
+  it("keeps app-managed playback when resuming a paused visible queue", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "pause" };
+    appState.playback = { ...appState.playback, appManagedPlayback: true, shuffle: false, smartQueue: false };
+    addQueueItem({ title: "Visible Next", artist: "Tester", requestedBy: "guest", path: "/music/visible-next.mp3" });
+    const controls: string[] = [];
+
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string) {
+          controls.push(action);
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/play")
+      .send({})
+      .expect(200);
+
+    expect(response.body.action).toBe("play");
+    expect(response.body.queue).toEqual([expect.objectContaining({ title: "Visible Next" })]);
+    expect(response.body.playback.appManagedPlayback).toBe(true);
+    expect(controls).toEqual(["play"]);
+    appState.queue.splice(0, appState.queue.length);
+  });
+
   it("rejects non-json transport control bodies", async () => {
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
     const controls: string[] = [];
