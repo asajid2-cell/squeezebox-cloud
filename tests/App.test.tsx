@@ -319,16 +319,19 @@ describe("Cloud Squeeze UI", () => {
   });
 
   it("opens local and Spotify playlists before queueing individual tracks", async () => {
+    const fetchMock = vi.mocked(fetch);
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Playlists" }));
     await userEvent.click(await screen.findByText("Goodbye ERA"));
     expect(await screen.findByText("First Leak")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Queue all" })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/library/collection") && String(url).includes("limit=100"))).toBe(true);
 
     await userEvent.click(screen.getByRole("button", { name: "Back" }));
     await userEvent.click(screen.getByRole("button", { name: "Spotify" }));
     await userEvent.click(await screen.findByText("Drake Mix"));
     expect(await screen.findByText("Playlist Child")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/spotify/children") && String(url).includes("limit=100"))).toBe(true);
   });
 
   it("opens saved Spotify tracks without queueing them until an explicit action", async () => {

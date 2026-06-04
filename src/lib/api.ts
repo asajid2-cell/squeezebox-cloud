@@ -90,13 +90,14 @@ export async function fetchSpotifyLibrary(type: "playlists" | "albums" | "artist
   return data.results || [];
 }
 
-export async function fetchSpotifyChildren(track: Partial<Track>, limit = 200): Promise<Track[]> {
+export async function fetchSpotifyChildren(track: Partial<Track>, limit = 200, offset = 0): Promise<Track[]> {
   const params = new URLSearchParams();
   if (track.browseId) params.set("browseId", String(track.browseId));
   if (track.uri) params.set("uri", String(track.uri));
   if (track.kind) params.set("kind", String(track.kind));
   if (track.title) params.set("title", String(track.title));
   params.set("limit", String(limit));
+  if (offset > 0) params.set("offset", String(offset));
   const response = await fetch(`${apiBase}/spotify/children?${params.toString()}`);
   const data = await responseJson<{ results?: Track[] }>(response, "Spotify playlist failed");
   return data.results || [];
@@ -108,8 +109,9 @@ export async function fetchCollections(source = "all"): Promise<LibraryCollectio
   return data.collections || [];
 }
 
-export async function fetchCollectionTracks(collection: string, folder: string, source = "all", limit = 1000): Promise<Track[]> {
+export async function fetchCollectionTracks(collection: string, folder: string, source = "all", limit = 1000, offset = 0): Promise<Track[]> {
   const params = new URLSearchParams({ collection, folder, source, limit: String(limit) });
+  if (offset > 0) params.set("offset", String(offset));
   const response = await fetch(`${apiBase}/library/collection?${params.toString()}`);
   const data = await responseJson<{ results?: Track[] }>(response, "Library collection failed");
   return data.results || [];

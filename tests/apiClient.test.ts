@@ -90,6 +90,19 @@ describe("API client mutating requests", () => {
     await expect(fetchCollectionTracks("Collection", "Folder")).rejects.toThrow("Provider failed");
   });
 
+  it("sends offsets for paged playlist detail requests", async () => {
+    const fetchMock = vi.fn(async () => mockJsonResponse(200, { results: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchSpotifyChildren({ title: "Mix", uri: "spotify:playlist:1", kind: "playlist" }, 100, 200);
+    await fetchCollectionTracks("Collection", "Folder", "all", 100, 300);
+
+    expect(fetchMock.mock.calls[0][0]).toContain("limit=100");
+    expect(fetchMock.mock.calls[0][0]).toContain("offset=200");
+    expect(fetchMock.mock.calls[1][0]).toContain("limit=100");
+    expect(fetchMock.mock.calls[1][0]).toContain("offset=300");
+  });
+
   it("throws backend errors for failed volume and seek controls", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => mockJsonResponse(502, { error: "LMS refused control" })));
 

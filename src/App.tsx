@@ -804,6 +804,8 @@ function PlaylistsPanel({ onRefresh, onAction }: { onRefresh: () => void; onActi
   const [selectedSpotify, setSelectedSpotify] = useState<Track | null>(null);
   const [detailTracks, setDetailTracks] = useState<Track[]>([]);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [hasMoreDetail, setHasMoreDetail] = useState(false);
+  const detailPageSize = 100;
 
   useEffect(() => {
     onAction(async () => {
@@ -822,10 +824,15 @@ function PlaylistsPanel({ onRefresh, onAction }: { onRefresh: () => void; onActi
   async function openLocal(collection: LibraryCollection) {
     setSelectedSpotify(null);
     setSelectedLocal(collection);
+    setDetailTracks([]);
+    setHasMoreDetail(false);
     setLoadingDetail(true);
     try {
-      const tracks = await onAction(() => fetchCollectionTracks(collection.collection, collection.folder, "all", 1500));
-      if (tracks) setDetailTracks(tracks);
+      const tracks = await onAction(() => fetchCollectionTracks(collection.collection, collection.folder, "all", detailPageSize, 0));
+      if (tracks) {
+        setDetailTracks(tracks);
+        setHasMoreDetail(tracks.length === detailPageSize && tracks.length < collection.count);
+      }
     } finally {
       setLoadingDetail(false);
     }
@@ -836,15 +843,39 @@ function PlaylistsPanel({ onRefresh, onAction }: { onRefresh: () => void; onActi
       setSelectedLocal(null);
       setSelectedSpotify(track);
       setDetailTracks([track]);
+      setHasMoreDetail(false);
       setLoadingDetail(false);
       return;
     }
     setSelectedLocal(null);
     setSelectedSpotify(track);
+    setDetailTracks([]);
+    setHasMoreDetail(false);
     setLoadingDetail(true);
     try {
-      const tracks = await onAction(() => fetchSpotifyChildren(track, 250));
-      if (tracks) setDetailTracks(tracks);
+      const tracks = await onAction(() => fetchSpotifyChildren(track, detailPageSize, 0));
+      if (tracks) {
+        setDetailTracks(tracks);
+        setHasMoreDetail(tracks.length === detailPageSize);
+      }
+    } finally {
+      setLoadingDetail(false);
+    }
+  }
+
+  async function loadMoreDetail() {
+    if (!selectedLocal && !selectedSpotify) return;
+    setLoadingDetail(true);
+    try {
+      const offset = detailTracks.length;
+      const tracks = selectedLocal
+        ? await onAction(() => fetchCollectionTracks(selectedLocal.collection, selectedLocal.folder, "all", detailPageSize, offset))
+        : await onAction(() => fetchSpotifyChildren(selectedSpotify || {}, detailPageSize, offset));
+      if (tracks) {
+        setDetailTracks((current) => [...current, ...tracks]);
+        const totalLoaded = offset + tracks.length;
+        setHasMoreDetail(tracks.length === detailPageSize && (!selectedLocal || totalLoaded < selectedLocal.count));
+      }
     } finally {
       setLoadingDetail(false);
     }
@@ -867,6 +898,7 @@ function PlaylistsPanel({ onRefresh, onAction }: { onRefresh: () => void; onActi
               setSelectedLocal(null);
               setSelectedSpotify(null);
               setDetailTracks([]);
+              setHasMoreDetail(false);
             }}
           >
             Back
@@ -895,6 +927,8 @@ function PlaylistsPanel({ onRefresh, onAction }: { onRefresh: () => void; onActi
           title={selectedTitle}
           tracks={detailTracks}
           loading={loadingDetail}
+          hasMore={hasMoreDetail}
+          onLoadMore={loadMoreDetail}
           onRefresh={onRefresh}
           onAction={onAction}
         />
@@ -939,12 +973,16 @@ function PlaylistTracks({
   title,
   tracks,
   loading,
+  hasMore,
+  onLoadMore,
   onRefresh,
   onAction
 }: {
   title: string;
   tracks: Track[];
   loading: boolean;
+  hasMore: boolean;
+  onLoadMore: () => void;
   onRefresh: () => void;
   onAction: ActionRunner;
 }) {
@@ -990,6 +1028,11 @@ function PlaylistTracks({
           </div>
         ))}
       </div>
+      {hasMore && (
+        <button className="ghost-add load-more" disabled={loading} onClick={onLoadMore}>
+          Load more
+        </button>
+      )}
     </div>
   );
 }
