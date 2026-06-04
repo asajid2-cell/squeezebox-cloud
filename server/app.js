@@ -177,6 +177,7 @@ const libraryRescanState = { promise: null };
 const transportLockState = { tail: Promise.resolve() };
 const queueMutationLockState = { tail: Promise.resolve() };
 const visibleQueueCancelState = { epoch: 0 };
+const queueClearState = { epoch: 0 };
 const knownSpotifyTracks = new Map();
 const knownSpotifyTrackTtlMs = 30 * 60 * 1000;
 const knownSpotifyTrackLimit = 1500;
@@ -287,7 +288,9 @@ export function createApp({ lms = new LmsClient() } = {}) {
     });
   });
 
-  app.post("/api/queue", async (req, res) => withQueueMutationLock(async () => {
+  app.post("/api/queue", async (req, res) => {
+    const clearEpochAtRequest = queueClearState.epoch;
+    return withQueueMutationLock(async () => {
     const parsed = queueSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "Invalid queue item", issues: parsed.error.issues });
@@ -318,11 +321,20 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(409).json({ error: "That song is already in the queue" });
       return;
     }
+    if (queueAddStaleAfterClear(clearEpochAtRequest)) {
+      res.status(409).json({ error: "Queue was cleared while this request was pending", queue: appState.queue });
+      return;
+    }
     await turnRepeatOffForVisibleQueue(lms);
+    if (queueAddStaleAfterClear(clearEpochAtRequest)) {
+      res.status(409).json({ error: "Queue was cleared while this request was pending", queue: appState.queue });
+      return;
+    }
     const queued = addQueueItem({ ...canonicalTrack, requestedBy: "guest" });
     markQueueManagedPlayback();
     res.status(201).json(queued);
-  }));
+    });
+  });
 
   app.patch("/api/queue/:id", (req, res) => withQueueMutationLock(async () => {
     const parsed = queueUpdateSchema.safeParse(req.body);
@@ -370,6 +382,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       return;
     }
     cancelPendingVisibleQueueAdvance();
+    markQueueCleared();
     return withQueueMutationLock(async () => {
       const removed = [];
       for (const item of [...appState.queue]) {
@@ -405,7 +418,9 @@ export function createApp({ lms = new LmsClient() } = {}) {
     res.json({ ok: true, item, queue: appState.queue });
   }));
 
-  app.post("/api/player/track", async (req, res) => withQueueMutationLock(async () => {
+  app.post("/api/player/track", async (req, res) => {
+    const clearEpochAtRequest = queueClearState.epoch;
+    return withQueueMutationLock(async () => {
     const parsed = playbackTrackSchema.safeParse(req.body || {});
     if (!parsed.success) {
       res.status(400).json({ error: "Track playback supports add-queue, play-next, or play-now", issues: parsed.error.issues, queue: appState.queue, playback: appState.playback });
@@ -442,7 +457,15 @@ export function createApp({ lms = new LmsClient() } = {}) {
           res.status(400).json({ error: "Local tracks must come from the Cloud Squeeze library or uploads" });
           return;
         }
+        if (queueAddStaleAfterClear(clearEpochAtRequest)) {
+          res.status(409).json({ error: "Queue was cleared while this request was pending", queue: appState.queue, playback: appState.playback });
+          return;
+        }
         await turnRepeatOffForVisibleQueue(lms);
+        if (queueAddStaleAfterClear(clearEpochAtRequest)) {
+          res.status(409).json({ error: "Queue was cleared while this request was pending", queue: appState.queue, playback: appState.playback });
+          return;
+        }
         queued = addQueueItem({ ...track, requestedBy: "guest" });
         markQueueManagedPlayback();
         logEvent("queue.add", { action, queued: trackSummary(queued), queue: queueSummary() });
@@ -459,7 +482,15 @@ export function createApp({ lms = new LmsClient() } = {}) {
           res.status(400).json({ error: "Local tracks must come from the Cloud Squeeze library or uploads" });
           return;
         }
+        if (queueAddStaleAfterClear(clearEpochAtRequest)) {
+          res.status(409).json({ error: "Queue was cleared while this request was pending", queue: appState.queue, playback: appState.playback });
+          return;
+        }
         await turnRepeatOffForVisibleQueue(lms);
+        if (queueAddStaleAfterClear(clearEpochAtRequest)) {
+          res.status(409).json({ error: "Queue was cleared while this request was pending", queue: appState.queue, playback: appState.playback });
+          return;
+        }
         queued = addQueueItemNext({ ...track, requestedBy: "guest" });
         markQueueManagedPlayback();
         logEvent("queue.add-next", { action, queued: trackSummary(queued), queue: queueSummary() });
@@ -487,9 +518,12 @@ export function createApp({ lms = new LmsClient() } = {}) {
     } catch (error) {
       res.status(502).json({ error: error.message });
     }
-  }));
+    });
+  });
 
-  app.post("/api/player/tracks", async (req, res) => withQueueMutationLock(async () => {
+  app.post("/api/player/tracks", async (req, res) => {
+    const clearEpochAtRequest = queueClearState.epoch;
+    return withQueueMutationLock(async () => {
     const parsed = playbackTracksSchema.safeParse(req.body || {});
     if (!parsed.success) {
       res.status(400).json({ error: "At least one track is required" });
@@ -526,8 +560,16 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(400).json({ error: "Local tracks must come from the Cloud Squeeze library or uploads" });
       return;
     }
+    if (queueAddStaleAfterClear(clearEpochAtRequest)) {
+      res.status(409).json({ error: "Queue was cleared while this request was pending", queue: appState.queue, playback: appState.playback, accepted: 0, rejected: playable.length });
+      return;
+    }
 
     await turnRepeatOffForVisibleQueue(lms);
+    if (queueAddStaleAfterClear(clearEpochAtRequest)) {
+      res.status(409).json({ error: "Queue was cleared while this request was pending", queue: appState.queue, playback: appState.playback, accepted: 0, rejected: playable.length });
+      return;
+    }
     const queued = [];
     const ordered = action === "play-next" ? [...canonicalAccepted].reverse() : canonicalAccepted;
     for (const track of ordered) {
@@ -541,7 +583,8 @@ export function createApp({ lms = new LmsClient() } = {}) {
     const rejected = Math.max(0, tracks.length - queued.length);
     logEvent("queue.batch", { action, count: queued.length, requested: tracks.length, playable: playable.length, deduped: uniquePlayable.length, rejected, queued: queued.map(trackSummary), queue: queueSummary() });
     res.json({ ok: true, action, queued, queue: appState.queue, playback: appState.playback, accepted: queued.length, rejected });
-  }));
+    });
+  });
 
   app.get("/api/library/search", async (req, res) => {
     const source = parseLibrarySource(req.query.source);
@@ -2093,6 +2136,14 @@ async function playNextVisibleQueueItem(lms, playerId, { generatedOnly = false, 
 
 function cancelPendingVisibleQueueAdvance() {
   visibleQueueCancelState.epoch += 1;
+}
+
+function markQueueCleared() {
+  queueClearState.epoch += 1;
+}
+
+function queueAddStaleAfterClear(clearEpochAtRequest) {
+  return queueClearState.epoch !== clearEpochAtRequest;
 }
 
 function visibleQueueAdvanceCanceled(queueAdvanceEpoch) {

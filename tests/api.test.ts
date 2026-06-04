@@ -3067,6 +3067,70 @@ describe("Cloud Squeeze API", () => {
     expect(appState.queue.filter((item: { path: string }) => item.path === "/music/test/delete-race.mp3")).toHaveLength(addResponse.status === 200 ? 1 : 0);
   });
 
+  it("keeps the queue empty when a clear races around a pending batch add", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.admin = { ...appState.admin, maxQueuePerUser: 3 };
+    addQueueItem({ title: "Clear Add Clear Existing", path: "/music/test/clear-add-clear-existing.mp3", requestedBy: "guest" });
+    const app = createApp({ lms: mockLms });
+    const tracks = [
+      { title: "Clear Add Clear One", path: "/music/test/clear-add-clear-one.mp3", source: "Local library" },
+      { title: "Clear Add Clear Two", path: "/music/test/clear-add-clear-two.mp3", source: "Local library" }
+    ];
+
+    const [firstClear, batch, finalClear] = await Promise.all([
+      request(app).delete("/api/queue"),
+      request(app).post("/api/player/tracks").send({ action: "add-queue", tracks }),
+      request(app).delete("/api/queue")
+    ]);
+
+    expect(firstClear.status).toBe(200);
+    expect([200, 409]).toContain(batch.status);
+    expect(finalClear.status).toBe(200);
+    expect(appState.queue).toEqual([]);
+  });
+
+  it("discards a pending batch add when a clear request arrives during validation", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.admin = { ...appState.admin, maxQueuePerUser: 3 };
+    appState.playback = { ...appState.playback, repeat: "one" };
+    let releaseRepeat: () => void = () => {};
+    let repeatStarted: () => void = () => {};
+    const repeatStartedPromise = new Promise<void>((resolve) => {
+      repeatStarted = resolve;
+    });
+    const repeatReleasePromise = new Promise<void>((resolve) => {
+      releaseRepeat = resolve;
+    });
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string) {
+          if (action === "repeat") {
+            repeatStarted();
+            await repeatReleasePromise;
+          }
+          return "ok";
+        }
+      }
+    });
+    const tracks = [
+      { title: "Pending Clear One", path: "/music/test/pending-clear-one.mp3", source: "Local library" },
+      { title: "Pending Clear Two", path: "/music/test/pending-clear-two.mp3", source: "Local library" }
+    ];
+
+    const batchPromise = request(app).post("/api/player/tracks").send({ action: "add-queue", tracks }).then((response) => response);
+    await repeatStartedPromise;
+    const clearPromise = request(app).delete("/api/queue").then((response) => response);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    releaseRepeat();
+    const [batch, clear] = await Promise.all([batchPromise, clearPromise]);
+
+    expect(batch.status).toBe(409);
+    expect(batch.body.accepted).toBe(0);
+    expect(clear.status).toBe(200);
+    expect(appState.queue).toEqual([]);
+  });
+
   it("serializes generated playback activation with queue clear", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "spotify", history: [] };
