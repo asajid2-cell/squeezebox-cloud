@@ -1718,7 +1718,7 @@ async function enrichLibraryArtwork(lms, tracks) {
     : tracks;
   const grouped = inheritGroupedLocalArtwork(localEnriched);
   const localFallbackEnriched = await enrichMissingLocalArtwork(lms, grouped);
-  return enrichUploadedArtwork(lms, localFallbackEnriched);
+  return enrichUploadedArtwork(lms, inheritGroupedLocalArtwork(localFallbackEnriched));
 }
 
 export async function prewarmLibraryCaches(lms) {

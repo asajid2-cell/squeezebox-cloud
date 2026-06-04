@@ -265,6 +265,47 @@ describe("Cloud Squeeze API", () => {
     }
   });
 
+  it("inherits fallback local artwork across tracks in the same folder", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const previousPlayer = { ...appState.player };
+    const previousSpotify = { ...appState.services.spotify };
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-local-fallback-inherit-"));
+    config.musicSourceDir = root;
+    appState.player = { ...appState.player, id: "player-1", connected: true, online: true };
+    updateSpotifyStatus({ configured: true, reachable: true, detail: "Spotty detected" });
+    try {
+      const albumDir = path.join(root, "Collection", "Shared Fallback");
+      await fs.mkdir(albumDir, { recursive: true });
+      await fs.writeFile(path.join(albumDir, "Artist - Fallback Source.mp3"), "ID3");
+      await fs.writeFile(path.join(albumDir, "Artist - Fallback Mate.mp3"), "ID3");
+      const response = await request(createApp({
+        lms: {
+          ...mockLms,
+          async enrichLocalArtwork(tracks: Array<{ title: string }>) {
+            return tracks;
+          },
+          async spotifySearch(_playerId: string, query: string) {
+            return query.toLowerCase().includes("fallback source")
+              ? [{ title: "Fallback Source", artist: "Artist", art: "https://i.scdn.co/image/fallback", uri: "spotify:track:fallback", kind: "track" }]
+              : [];
+          }
+        }
+      }))
+        .get("/api/library/search?q=fallback&limit=10&source=local")
+        .expect(200);
+
+      expect(response.body.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({ title: "Fallback Source", art: "https://i.scdn.co/image/fallback" }),
+        expect.objectContaining({ title: "Fallback Mate", art: "https://i.scdn.co/image/fallback" })
+      ]));
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      appState.player = previousPlayer;
+      updateSpotifyStatus(previousSpotify);
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not wait for slow Spotify artwork before using external uploaded artwork", async () => {
     const previousUploadDir = config.uploadDir;
     const previousAllowNetwork = process.env.TRACK_INFO_ALLOW_NETWORK_IN_TESTS;
