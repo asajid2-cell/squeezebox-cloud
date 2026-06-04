@@ -176,6 +176,7 @@ const spotifyLibraryPrewarmState = { playerId: "", at: 0 };
 const libraryRescanState = { promise: null };
 const transportLockState = { tail: Promise.resolve() };
 const queueMutationLockState = { tail: Promise.resolve() };
+const visibleQueueCancelState = { epoch: 0 };
 const knownSpotifyTracks = new Map();
 const knownSpotifyTrackTtlMs = 30 * 60 * 1000;
 const knownSpotifyTrackLimit = 1500;
@@ -363,20 +364,23 @@ export function createApp({ lms = new LmsClient() } = {}) {
     res.json({ ok: true, removed: item, queue: appState.queue });
   }));
 
-  app.delete("/api/queue", (_req, res) => withQueueMutationLock(async () => {
+  app.delete("/api/queue", (_req, res) => {
     if (!publicRequestsOpen()) {
       res.status(403).json({ error: publicRequestsClosedMessage(), queue: appState.queue, playback: appState.playback });
       return;
     }
-    const removed = [];
-    for (const item of [...appState.queue]) {
-      const removedItem = removeQueueItem(item.id);
-      if (removedItem) removed.push(removedItem);
-    }
-    stopGeneratedPlayback();
-    logEvent("queue.clear", { count: removed.length, playback: appState.playback });
-    res.json({ ok: true, removed, queue: appState.queue, playback: appState.playback });
-  }));
+    cancelPendingVisibleQueueAdvance();
+    return withQueueMutationLock(async () => {
+      const removed = [];
+      for (const item of [...appState.queue]) {
+        const removedItem = removeQueueItem(item.id);
+        if (removedItem) removed.push(removedItem);
+      }
+      stopGeneratedPlayback();
+      logEvent("queue.clear", { count: removed.length, playback: appState.playback });
+      res.json({ ok: true, removed, queue: appState.queue, playback: appState.playback });
+    });
+  });
 
   app.post("/api/queue/:id/move", (req, res) => withQueueMutationLock(async () => {
     const parsed = queueMoveSchema.safeParse(req.body || {});
@@ -1647,7 +1651,7 @@ async function spotifyArtworkForUploadedTrack(lms, track) {
   return exact?.art || null;
 }
 
-async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force = false, skipTrackInfo = false, waitForFresh = true } = {}) {
+async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force = false, skipTrackInfo = false, waitForFresh = true, queueAdvanceEpoch = visibleQueueCancelState.epoch } = {}) {
   const now = Date.now();
   if (!force && refreshState.promise) return waitForFresh ? refreshState.promise : appState.player;
   if (!force && minAgeMs > 0 && now - refreshState.updatedAt < minAgeMs) return appState.player;
@@ -1682,7 +1686,7 @@ async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force =
           prewarmShuffleCandidates(lms, status.id, track);
           prewarmSpotifyLibrary(lms, status.id);
         }
-        if (maintainPlayback) await maintainVisiblePlaybackQueue(lms, status, track, { observedTrackChanged });
+        if (maintainPlayback) await maintainVisiblePlaybackQueue(lms, status, track, { observedTrackChanged, queueAdvanceEpoch });
         const waitingForVisibleQueueAdvance =
           appState.playback.appManagedPlayback &&
           appState.queue.length > 0;
@@ -1927,7 +1931,7 @@ async function maintainSmartShuffle(lms, status, track, { observedTrackChanged =
   }
 }
 
-async function maintainVisiblePlaybackQueue(lms, status, track, { observedTrackChanged = false } = {}) {
+async function maintainVisiblePlaybackQueue(lms, status, track, { observedTrackChanged = false, queueAdvanceEpoch = visibleQueueCancelState.epoch } = {}) {
   if (!status?.id) return;
   syncVisibleQueueWithCurrentTrack(track, { includeManual: observedTrackChanged });
   if (appState.playback.smartQueue || appState.playback.shuffle) {
@@ -1946,10 +1950,10 @@ async function maintainVisiblePlaybackQueue(lms, status, track, { observedTrackC
     appState.queue.length > 0;
   if (needsPlaybackNudge && appState.queue.length > 0) {
     logEvent("queue.auto-advance", { reason: "near-track-end", queue: queueSummary(), nowPlaying: trackSummary(track) });
-    await playNextVisibleQueueItem(lms, status.id, { generatedOnly: appState.playback.smartQueue });
+    await playNextVisibleQueueItem(lms, status.id, { generatedOnly: appState.playback.smartQueue, queueAdvanceEpoch });
   } else if (missedEndedTrack) {
     logEvent("queue.auto-advance", { reason: "stopped-with-visible-queue", queue: queueSummary(), nowPlaying: trackSummary(track) });
-    await playNextVisibleQueueItem(lms, status.id, { generatedOnly: appState.playback.smartQueue });
+    await playNextVisibleQueueItem(lms, status.id, { generatedOnly: appState.playback.smartQueue, queueAdvanceEpoch });
   }
 }
 
@@ -2011,13 +2015,21 @@ function generatedRequestActive(requestedBy) {
   return true;
 }
 
-async function playNextVisibleQueueItem(lms, playerId, { generatedOnly = false } = {}) {
+async function playNextVisibleQueueItem(lms, playerId, { generatedOnly = false, queueAdvanceEpoch = null } = {}) {
   if (appState.playback.smartQueue || appState.playback.shuffle) {
     await lms.control(playerId, "shuffle", false);
   }
   const next = nextQueueItemForPlayback(appState.queue, { generatedOnly });
   if (next) {
+    if (visibleQueueAdvanceCanceled(queueAdvanceEpoch)) {
+      logEvent("queue.next-canceled", { reason: "queue-changed", item: trackSummary(next), queue: queueSummary() });
+      return null;
+    }
     await turnRepeatOffForVisibleQueue(lms, playerId);
+    if (visibleQueueAdvanceCanceled(queueAdvanceEpoch)) {
+      logEvent("queue.next-canceled", { reason: "queue-changed-after-repeat", item: trackSummary(next), queue: queueSummary() });
+      return null;
+    }
     const played = await playQueuedItem(lms, playerId, next);
     scheduleGeneratedTopOff(lms, playerId, played);
     return played;
@@ -2025,7 +2037,15 @@ async function playNextVisibleQueueItem(lms, playerId, { generatedOnly = false }
   await topOffGeneratedQueue(lms, playerId);
   const refilled = nextQueueItemForPlayback(appState.queue, { generatedOnly });
   if (refilled) {
+    if (visibleQueueAdvanceCanceled(queueAdvanceEpoch)) {
+      logEvent("queue.next-canceled", { reason: "queue-changed-after-refill", item: trackSummary(refilled), queue: queueSummary() });
+      return null;
+    }
     await turnRepeatOffForVisibleQueue(lms, playerId);
+    if (visibleQueueAdvanceCanceled(queueAdvanceEpoch)) {
+      logEvent("queue.next-canceled", { reason: "queue-changed-after-refill-repeat", item: trackSummary(refilled), queue: queueSummary() });
+      return null;
+    }
     return playQueuedItem(lms, playerId, refilled);
   }
   await ensureSmartShuffleQueue(lms, playerId, { force: true });
@@ -2034,8 +2054,24 @@ async function playNextVisibleQueueItem(lms, playerId, { generatedOnly = false }
     logEvent("queue.next-empty", { playback: appState.playback, queue: queueSummary() });
     return null;
   }
+  if (visibleQueueAdvanceCanceled(queueAdvanceEpoch)) {
+    logEvent("queue.next-canceled", { reason: "queue-changed-after-ensure", item: trackSummary(ensured), queue: queueSummary() });
+    return null;
+  }
   await turnRepeatOffForVisibleQueue(lms, playerId);
+  if (visibleQueueAdvanceCanceled(queueAdvanceEpoch)) {
+    logEvent("queue.next-canceled", { reason: "queue-changed-after-ensure-repeat", item: trackSummary(ensured), queue: queueSummary() });
+    return null;
+  }
   return playQueuedItem(lms, playerId, ensured);
+}
+
+function cancelPendingVisibleQueueAdvance() {
+  visibleQueueCancelState.epoch += 1;
+}
+
+function visibleQueueAdvanceCanceled(queueAdvanceEpoch) {
+  return queueAdvanceEpoch !== null && queueAdvanceEpoch !== visibleQueueCancelState.epoch;
 }
 
 function scheduleGeneratedTopOff(lms, playerId, played) {

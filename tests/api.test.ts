@@ -3057,6 +3057,71 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.playback.appManagedPlayback).toBe(true);
   });
 
+  it("does not auto-advance a visible queue after a concurrent queue clear", async () => {
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, history: [], previousTracks: [], appManagedPlayback: true };
+    appState.nowPlaying = {
+      id: "current",
+      title: "Ending Track",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 99,
+      canSeek: true,
+      art: null,
+      path: "/music/ending-track.mp3"
+    };
+    addQueueItem({ title: "Cleared Before Advance", artist: "Tester", requestedBy: "guest", path: "/music/cleared-before-advance.mp3" });
+    const played: string[] = [];
+    let releaseNowPlaying: (() => void) | null = null;
+    let nowPlayingStarted: (() => void) | null = null;
+    const nowPlayingReached = new Promise<void>((resolve) => {
+      nowPlayingStarted = resolve;
+    });
+    const releaseNowPlayingPromise = new Promise<void>((resolve) => {
+      releaseNowPlaying = resolve;
+    });
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async status() {
+          return { id: "player-1", name: "Test Speaker", connected: true, online: true, mode: "stop", volume: 44, detail: "stopped" };
+        },
+        async nowPlaying() {
+          nowPlayingStarted?.();
+          await releaseNowPlayingPromise;
+          return { id: "idle", title: "No track playing", artist: "Connect a player or request a song", album: "", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null };
+        },
+        async control() {
+          return "ok";
+        },
+        async playTrack(_playerId: string, track: { title?: string }) {
+          played.push(String(track.title || ""));
+          return "ok";
+        }
+      }
+    });
+
+    const stateRequest = new Promise<any>((resolve, reject) => {
+      request(app).get("/api/state").end((error, response) => {
+        if (error) reject(error);
+        else resolve(response);
+      });
+    });
+    await nowPlayingReached;
+    await request(app).delete("/api/queue").expect(200);
+    releaseNowPlaying?.();
+    const response = await stateRequest;
+    expect(response.status).toBe(200);
+
+    expect(played).toEqual([]);
+    expect(response.body.nowPlaying.title).toBe("No track playing");
+    expect(response.body.queue).toEqual([]);
+    expect(response.body.playback).toMatchObject({ appManagedPlayback: false, history: [], previousTracks: [] });
+  });
+
   it("keeps app-managed state during idle polling while a visible queue is waiting", async () => {
     resetRefreshStateForTests();
     appState.queue.splice(0, appState.queue.length);
