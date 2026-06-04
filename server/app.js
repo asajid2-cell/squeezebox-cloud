@@ -1378,7 +1378,11 @@ function optimisticTrack(track) {
     canSeek: false,
     art: track.art || null,
     uri: track.uri,
-    path: track.path
+    path: track.path,
+    requestedBy: track.requestedBy,
+    kind: track.kind,
+    uploaded: track.uploaded,
+    lmsTrackId: track.lmsTrackId
   };
 }
 
@@ -1555,7 +1559,7 @@ function restoreCurrentTrackAfterPrevious(track) {
   if (!isRestorablePreviousTrack(track)) return null;
   const item = richRestorableTrack(track);
   if (queuedTrackInputExists(item)) return null;
-  return addQueueItemNext({ ...item, requestedBy: "guest" });
+  return addQueueItemNext({ ...item, requestedBy: item.requestedBy || "guest" });
 }
 
 function guestQueueLimit() {
@@ -1949,8 +1953,9 @@ async function buildGeneratedQueue(lms, playerId, seed, mode, count, requestedBy
     const pick = pool.shift() || fallbackPool.shift();
     if (pick && !picks.some((item) => trackKey(item) === trackKey(pick) || sameTitleArtist(item, pick))) picks.push(pick);
   }
+  const enrichedPicks = await enrichGeneratedQueuePicks(lms, picks);
   const queued = [];
-  for (const track of picks) {
+  for (const track of enrichedPicks) {
     if (!generatedRequestActive(requestedBy)) break;
     const item = addGeneratedQueueItem(track, mode, requestedBy);
     if (item) {
@@ -1959,6 +1964,20 @@ async function buildGeneratedQueue(lms, playerId, seed, mode, count, requestedBy
     }
   }
   return queued;
+}
+
+async function enrichGeneratedQueuePicks(lms, tracks) {
+  if (!Array.isArray(tracks) || tracks.length === 0) return tracks;
+  const localIndexes = tracks
+    .map((track, index) => ({ track, index }))
+    .filter(({ track }) => track?.path && !track?.uri && !track?.art);
+  if (localIndexes.length === 0) return tracks;
+  const enrichedLocal = await enrichLibraryArtwork(lms, localIndexes.map(({ track }) => track));
+  const next = tracks.slice();
+  localIndexes.forEach(({ index }, enrichedIndex) => {
+    next[index] = enrichedLocal[enrichedIndex] || next[index];
+  });
+  return next;
 }
 
 async function spotifyShuffleCandidates(lms, playerId, seed, count = 5) {
@@ -2596,7 +2615,8 @@ function restorableTrack(track) {
     path: decodedPath,
     lmsTrackId: track.lmsTrackId,
     kind: track.kind,
-    uploaded: track.uploaded
+    uploaded: track.uploaded,
+    requestedBy: track.requestedBy
   };
 }
 

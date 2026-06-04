@@ -1230,6 +1230,39 @@ describe("Cloud Squeeze API", () => {
     ]);
   });
 
+  it("preserves generated queue ownership when app previous restores the forward track", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = {
+      id: "spotify://track:current-smart",
+      title: "Current Smart",
+      artist: "Tester",
+      album: "",
+      source: "Spotify",
+      duration: 100,
+      elapsed: 10,
+      canSeek: true,
+      art: null,
+      uri: "spotify:track:current-smart",
+      requestedBy: "smart shuffle"
+    };
+    appState.playback = {
+      ...appState.playback,
+      smartQueue: true,
+      shuffle: false,
+      manualShuffle: false,
+      appManagedPlayback: true,
+      previousTracks: [{ title: "Previous Track", artist: "Tester", uri: "spotify:track:previous", source: "Spotify", kind: "track" }]
+    };
+
+    const previous = await request(createApp({ lms: mockLms })).post("/api/player/previous").expect(200);
+
+    expect(previous.body.action).toBe("app-previous");
+    expect(previous.body.queue).toEqual([
+      expect.objectContaining({ title: "Current Smart", uri: "spotify:track:current-smart", requestedBy: "smart shuffle" })
+    ]);
+  });
+
   it("does not duplicate the forward queue on repeated app previous presses", async () => {
     const played: Array<{ action: string; track: { title?: string; uri?: string } }> = [];
     appState.queue.splice(0, appState.queue.length);
@@ -4561,6 +4594,36 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.playback.smartQueue).toBe(true);
     expect(response.body.playback.smartShuffleSource).toBe("spotify");
     expect(played).toHaveLength(0);
+  });
+
+  it("enriches generated local smart shuffle rows with artwork", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-generated-art-"));
+    config.musicSourceDir = root;
+    try {
+      await fs.writeFile(path.join(root, "Artist - Generated Art.mp3"), "ID3");
+      const response = await request(createApp({
+        lms: {
+          ...mockLms,
+          async enrichLocalArtwork(tracks: Array<{ title: string; path?: string }>) {
+            return tracks.map((track) => ({ ...track, art: "api/artwork/generated-cover" }));
+          }
+        }
+      }))
+        .post("/api/player/smart-shuffle")
+        .send({ source: "local", seed: "Generated", count: 1 })
+        .expect(200);
+
+      expect(response.body.queued).toEqual([
+        expect.objectContaining({ title: "Generated Art", requestedBy: "smart shuffle", art: "api/artwork/generated-cover" })
+      ]);
+      expect(response.body.queue).toEqual([
+        expect.objectContaining({ title: "Generated Art", requestedBy: "smart shuffle", art: "api/artwork/generated-cover" })
+      ]);
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("rejects explicit smart shuffle while requested songs are queued", async () => {
