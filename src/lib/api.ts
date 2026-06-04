@@ -34,7 +34,7 @@ const fallbackState: AppState = {
     { title: "Be respectful", detail: "No hate speech or harassment" },
     { title: "No spam", detail: "Do not add duplicates or floods" },
     { title: "Keep it clean", detail: "No explicit or offensive content" },
-    { title: "Max 3 in queue", detail: "Per person at a time" }
+    { title: "Max 25 in queue", detail: "Per person at a time" }
   ],
   services: {
     spotify: { configured: false, reachable: false, detail: "Not checked yet" },
@@ -47,7 +47,7 @@ const fallbackState: AppState = {
     lyrics: "Lyrics will appear when available."
   },
   playback: { shuffle: false, manualShuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "mixed", lastShuffleRefillAt: 0, lastShuffleSeed: "", lastSmartQueueBase: "", history: [], previousTracks: [] },
-  admin: { publicRequests: true, maxQueuePerUser: 3, moderation: "basic", scheduleEnabled: true }
+  admin: { publicRequests: true, maxQueuePerUser: 25, moderation: "basic", scheduleEnabled: true }
 };
 
 export async function fetchState(): Promise<AppState> {

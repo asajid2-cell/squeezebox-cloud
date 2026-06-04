@@ -9,7 +9,7 @@ export const config = {
   publicLmsHttpUrl: process.env.PUBLIC_LMS_HTTP_URL || "http://23.17.17.81:9000",
   musicSourceDir: expandPath(process.env.MUSIC_SOURCE_DIR || "%USERPROFILE%\\Downloads"),
   uploadDir: expandPath(process.env.UPLOAD_DIR || "/music/uploads"),
-  publicQueueMaxPerUser: Number(process.env.PUBLIC_QUEUE_MAX_PER_USER || 3)
+  publicQueueMaxPerUser: Number(process.env.PUBLIC_QUEUE_MAX_PER_USER || 25)
 };
 
 export const appState = {
@@ -43,7 +43,7 @@ export const appState = {
     { title: "Be respectful", detail: "No hate speech or harassment" },
     { title: "No spam", detail: "Do not add duplicates or floods" },
     { title: "Keep it clean", detail: "No explicit or offensive content" },
-    { title: "Max 3 in queue", detail: "Per person at a time" }
+    { title: "Max 25 in queue", detail: "Per person at a time" }
   ],
   services: {
     spotify: { configured: false, reachable: false, detail: "Not checked yet" },
