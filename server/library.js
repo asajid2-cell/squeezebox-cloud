@@ -9,6 +9,7 @@ const extensions = ["mp3", "flac", "m4a", "wav", "ogg", "aac"];
 const maxUploadBytes = Number(process.env.MAX_UPLOAD_BYTES || 80 * 1024 * 1024);
 const execFileAsync = promisify(execFile);
 const scanCache = new Map();
+const scanInflight = new Map();
 const resultCache = new Map();
 const scanCacheMs = Number(process.env.LIBRARY_SCAN_CACHE_MS || 5 * 60 * 1000);
 const resultCacheMs = Number(process.env.LIBRARY_RESULT_CACHE_MS || 2 * 60 * 1000);
@@ -21,10 +22,16 @@ export async function scanLibrary(root = null, limit = 5000, source = "all", { u
     if (updateStatus) updateLibraryStatus(cached.status);
     return cached.tracks.slice(0, limit);
   }
+  const inflight = scanInflight.get(cacheKey);
+  if (inflight) {
+    const pending = await inflight;
+    if (updateStatus) updateLibraryStatus(pending.status);
+    return pending.tracks.slice(0, limit);
+  }
   const isUploadRoot = normalizeFsPath(root) === normalizeFsPath(config.uploadDir);
   const scanExtensions = isUploadRoot ? ["mp3"] : extensions;
   const patterns = scanExtensions.map((ext) => `**/*.${ext}`);
-  try {
+  const scan = (async () => {
     const ignore = nestedUploadIgnore(root, isUploadRoot);
     const files = await fg(patterns, {
       cwd: root,
@@ -42,11 +49,19 @@ export async function scanLibrary(root = null, limit = 5000, source = "all", { u
       : sortedFiles.map(fileToTrack);
     const status = { root, reachable: true, trackCount: files.length };
     scanCache.set(cacheKey, { tracks, status, createdAt: Date.now() });
-    if (updateStatus) updateLibraryStatus(status);
-    return tracks.slice(0, limit);
+    return { tracks, status };
+  })();
+  scanInflight.set(cacheKey, scan);
+  try {
+    const result = await scan;
+    if (updateStatus) updateLibraryStatus(result.status);
+    return result.tracks.slice(0, limit);
   } catch (error) {
-    if (updateStatus) updateLibraryStatus({ root, reachable: false, trackCount: 0, error: error.message });
+    const status = { root, reachable: false, trackCount: 0, error: error.message };
+    if (updateStatus) updateLibraryStatus(status);
     return [];
+  } finally {
+    if (scanInflight.get(cacheKey) === scan) scanInflight.delete(cacheKey);
   }
 }
 
@@ -251,6 +266,7 @@ function setCachedResult(key, value) {
 
 export function clearLibraryCaches() {
   scanCache.clear();
+  scanInflight.clear();
   resultCache.clear();
 }
 
