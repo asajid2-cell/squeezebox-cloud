@@ -1718,9 +1718,14 @@ function parseByteRange(value, size) {
 
 function requireAdmin(req, res, next) {
   const header = req.get("authorization") || "";
-  const token = header.replace(/^Bearer\s+/i, "");
-  if (token !== adminToken) {
+  const match = header.match(/^Bearer\s+(.+)$/i);
+  if (!match) {
     res.status(401).json({ error: "Admin login required" });
+    return;
+  }
+  const token = match[1];
+  if (token !== adminToken) {
+    res.status(403).json({ error: "Invalid admin token" });
     return;
   }
   next();

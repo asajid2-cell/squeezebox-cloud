@@ -5959,6 +5959,16 @@ describe("Cloud Squeeze API", () => {
   it("requires admin login for settings changes", async () => {
     const app = createApp({ lms: mockLms });
     await request(app).post("/api/admin/settings").send({ publicRequests: false }).expect(401);
+    await request(app)
+      .post("/api/admin/settings")
+      .set("Authorization", "Token wrong")
+      .send({ publicRequests: false })
+      .expect(401);
+    await request(app)
+      .post("/api/admin/settings")
+      .set("Authorization", "Bearer wrong")
+      .send({ publicRequests: false })
+      .expect(403);
     const login = await request(app).post("/api/admin/login").send({ password: "admin" }).expect(200);
     await request(app)
       .post("/api/admin/settings")
