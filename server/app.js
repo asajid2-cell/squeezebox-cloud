@@ -233,7 +233,6 @@ export function createApp({ lms = new LmsClient() } = {}) {
       refreshLms(lms, { force: true, skipTrackInfo: true }).catch(() => null);
     }, 250);
     startupRefresh.unref?.();
-    prewarmLibraryCaches(lms).catch(() => null);
   }
 
   app.get("/api/health", (_req, res) => {
@@ -1699,7 +1698,7 @@ async function enrichLibraryArtwork(lms, tracks) {
   return enrichUploadedArtwork(lms, inheritGroupedLocalArtwork(localEnriched));
 }
 
-async function prewarmLibraryCaches(lms) {
+export async function prewarmLibraryCaches(lms) {
   await scanLibrary(undefined, 5000, "all");
   const [compact, typedLocal] = await Promise.all([
     searchLibrary("", undefined, 20, "all"),

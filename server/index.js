@@ -1,10 +1,13 @@
-import { createApp } from "./app.js";
+import { createApp, prewarmLibraryCaches } from "./app.js";
+import { LmsClient } from "./lmsClient.js";
 import { config } from "./state.js";
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const app = createApp();
+const lms = new LmsClient();
+await prewarmLibraryCaches(lms).catch(() => null);
+const app = createApp({ lms });
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.resolve(__dirname, "../dist");
 
