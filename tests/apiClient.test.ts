@@ -70,6 +70,55 @@ describe("API client mutating requests", () => {
     });
   });
 
+  it("sends compact playback track payloads", async () => {
+    const fetchMock = vi.fn(async () => mockJsonResponse(200, { ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await playTrack("add-queue", {
+      id: "local:one",
+      title: "One",
+      artist: "Tester",
+      album: "Album",
+      source: "Local library",
+      path: "/music/one.mp3",
+      duration: 120,
+      art: "api/artwork/large-cover",
+      artwork: "https://example.test/cover.jpg",
+      elapsed: 10,
+      canSeek: true
+    });
+    await playTracks("add-queue", [
+      {
+        id: "local:two",
+        title: "Two",
+        artist: "Tester",
+        source: "Local library",
+        path: "/music/two.mp3",
+        collection: "Collection",
+        folder: "Folder",
+        art: "api/artwork/another-large-cover",
+        artwork: "https://example.test/another.jpg"
+      }
+    ]);
+
+    const singleBody = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    const batchBody = JSON.parse(String(fetchMock.mock.calls[1][1]?.body));
+    expect(singleBody.track).toEqual({
+      title: "One",
+      artist: "Tester",
+      album: "Album",
+      source: "Local library",
+      path: "/music/one.mp3",
+      duration: 120
+    });
+    expect(batchBody.tracks[0]).toEqual({
+      title: "Two",
+      artist: "Tester",
+      source: "Local library",
+      path: "/music/two.mp3"
+    });
+  });
+
   it("skips Spotify search requests for blank queries", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

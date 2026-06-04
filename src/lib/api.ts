@@ -164,7 +164,7 @@ export async function playTrack(action: "play-now" | "play-next" | "add-queue", 
   const response = await fetch(`${apiBase}/player/track`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, track })
+    body: JSON.stringify({ action, track: compactPlayableTrack(track) })
   });
   return responseJson(response, "Track playback failed");
 }
@@ -173,9 +173,18 @@ export async function playTracks(action: "play-next" | "add-queue", tracks: Part
   const response = await fetch(`${apiBase}/player/tracks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, tracks })
+    body: JSON.stringify({ action, tracks: tracks.map(compactPlayableTrack) })
   });
   return responseJson(response, "Batch playback failed");
+}
+
+function compactPlayableTrack(track: Partial<Track>) {
+  const compact: Partial<Track> = {};
+  for (const key of ["title", "artist", "album", "source", "path", "uri", "kind", "lmsTrackId", "uploaded", "duration"] as const) {
+    const value = track[key];
+    if (value !== undefined && value !== null && value !== "") compact[key] = value as never;
+  }
+  return compact;
 }
 
 export async function playerAction(action: "play" | "pause" | "stop" | "next" | "previous") {
