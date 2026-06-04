@@ -1035,6 +1035,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
         const currentBeforePrevious = appState.nowPlaying;
         await lms.playTrack(playerId, previous, "play-now");
         popPreviousTrackForCurrent(currentBeforePrevious);
+        removeQueuedPlaybackMatch(previous);
         restoreCurrentTrackAfterPrevious(currentBeforePrevious);
         updatePlayback({ appManagedPlayback: true });
         setMode("play");
@@ -1625,6 +1626,12 @@ function restoreCurrentTrackAfterPrevious(track) {
   const item = richRestorableTrack(track);
   if (queuedTrackInputExists(item)) return null;
   return addQueueItemNext({ ...item, requestedBy: item.requestedBy || "guest" });
+}
+
+function removeQueuedPlaybackMatch(track) {
+  const item = appState.queue.find((candidate) => tracksSharePlaybackIdentity(candidate, track) || playableTrackInputKey(candidate) === playableTrackInputKey(track));
+  if (!item) return null;
+  return removeQueueItem(item.id);
 }
 
 function guestQueueLimit() {

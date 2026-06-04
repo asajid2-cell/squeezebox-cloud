@@ -1431,6 +1431,45 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.playback.previousTracks).toEqual([]);
   });
 
+  it("consumes queued previous target before requeueing the forward track", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = {
+      id: "sleep",
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      album: "",
+      source: "Uploaded",
+      duration: 100,
+      elapsed: 12,
+      canSeek: true,
+      art: null,
+      path: "/music/uploads/Sleep Paralysis-Jackson Ivy.mp3"
+    };
+    addQueueItem({ title: "Shabang", artist: "Drake", path: "/music/uploads/Drake - Shabang.mp3", source: "Uploaded", requestedBy: "guest" });
+    appState.playback = {
+      ...appState.playback,
+      appManagedPlayback: true,
+      previousTracks: [{ title: "Shabang", artist: "Drake", path: "/music/uploads/Drake - Shabang.mp3", source: "Uploaded" }]
+    };
+    const played: Array<{ action: string; title?: string; path?: string }> = [];
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string; path?: string }, action: string) {
+        played.push({ action, title: track.title, path: track.path });
+        return "ok";
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/previous").expect(200);
+
+    expect(response.body.action).toBe("app-previous");
+    expect(response.body.nowPlaying).toMatchObject({ title: "Shabang", path: "/music/uploads/Drake - Shabang.mp3" });
+    expect(played).toEqual([{ action: "play-now", title: "Shabang", path: "/music/uploads/Drake - Shabang.mp3" }]);
+    expect(response.body.queue).toEqual([expect.objectContaining({ title: "Sleep Paralysis", path: "/music/uploads/Sleep Paralysis-Jackson Ivy.mp3" })]);
+    expect(response.body.queue).toHaveLength(1);
+  });
+
   it("no-ops previous instead of restarting the current track when history only contains self entries", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
