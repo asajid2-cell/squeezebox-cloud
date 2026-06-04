@@ -5426,7 +5426,8 @@ describe("Cloud Squeeze API", () => {
     appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "mixed" };
     const app = createApp({ lms: mockLms });
 
-    await request(app).post("/api/player/smart-shuffle").send({ source: "bad", count: 1 }).expect(400);
+    const malformed = await request(app).post("/api/player/smart-shuffle").send({ source: "bad", count: 1 }).expect(400);
+    expect(malformed.body).toMatchObject({ error: "Invalid smart shuffle request", queued: [], queue: [], playback: expect.objectContaining({ smartQueue: false }) });
     await request(app).post("/api/player/smart-shuffle").send({ source: "local", count: [] }).expect(400);
     await request(app).post("/api/player/smart-shuffle").send({ source: "local", count: "1" }).expect(400);
     await request(app).post("/api/player/smart-shuffle").send({ source: "local", count: 9 }).expect(400);

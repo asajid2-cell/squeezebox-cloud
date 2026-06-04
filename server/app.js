@@ -1274,11 +1274,11 @@ export function createApp({ lms = new LmsClient() } = {}) {
     try {
       const parsed = smartShuffleSchema.safeParse(req.body || {});
       if (!parsed.success) {
-        res.status(400).json({ error: "Invalid smart shuffle request", issues: parsed.error.issues, queued: [], playback: appState.playback });
+        res.status(400).json({ error: "Invalid smart shuffle request", issues: parsed.error.issues, queued: [], playback: appState.playback, queue: compactQueuePayload(appState.queue) });
         return;
       }
       if (!publicRequestsOpen()) {
-        res.status(403).json({ error: publicRequestsClosedMessage(), queued: [], playback: appState.playback });
+        res.status(403).json({ error: publicRequestsClosedMessage(), queued: [], playback: appState.playback, queue: compactQueuePayload(appState.queue) });
         return;
       }
       if (manualQueueCount() > 0) {
@@ -1294,7 +1294,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       const body = parsed.data;
       const mode = body.source || appState.playback.smartShuffleSource;
       if (mode === "spotify" && !spotifyBrowsingAvailable()) {
-        res.status(503).json({ error: spotifyUnavailableMessage(), queued: [], playback: appState.playback });
+        res.status(503).json({ error: spotifyUnavailableMessage(), queued: [], playback: appState.playback, queue: compactQueuePayload(appState.queue) });
         return;
       }
       const count = body.count || 5;
