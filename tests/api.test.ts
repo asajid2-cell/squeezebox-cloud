@@ -1809,13 +1809,17 @@ describe("Cloud Squeeze API", () => {
     const app = createApp({ lms: mockLms });
 
     const ok = await request(app).get("/api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Fok").expect(200);
+    const cachedOk = await request(app).get("/api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Fok").expect(200);
     await request(app).get("/api/image-proxy?url=https%3A%2F%2Fevil.example%2Fcover.jpg").expect(400);
     await request(app).get("/api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Fnot-image").expect(415);
     await request(app).get("/api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Ftoo-large-header").expect(413);
     await request(app).get("/api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Ftoo-large-body").expect(413);
 
     expect(ok.headers["content-type"]).toContain("image/jpeg");
+    expect(ok.headers["cache-control"]).toContain("immutable");
     expect(ok.body.toString()).toBe("fake-image");
+    expect(cachedOk.body.toString()).toBe("fake-image");
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("/ok"))).toHaveLength(1);
     expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining("evil.example"), expect.anything());
   });
 

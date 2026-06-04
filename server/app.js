@@ -141,6 +141,8 @@ const adminSettingsSchema = z.object({
 const adminPassword = process.env.CLOUD_SQUEEZE_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD || "admin";
 const adminToken = process.env.CLOUD_SQUEEZE_ADMIN_TOKEN || "cloud-squeeze-admin";
 const imageProxyMaxBytes = Number(process.env.IMAGE_PROXY_MAX_BYTES || 8 * 1024 * 1024);
+const imageProxyCacheTtlMs = Number(process.env.IMAGE_PROXY_CACHE_TTL_MS || 6 * 60 * 60 * 1000);
+const imageProxyCacheLimit = Number(process.env.IMAGE_PROXY_CACHE_LIMIT || 200);
 const serviceRefreshMs = 60000;
 const trackInfoRefreshMs = 30000;
 const trackInfoBudgetMs = Number(process.env.TRACK_INFO_BUDGET_MS || 1800);
@@ -184,6 +186,7 @@ const knownSpotifyTrackLimit = 1500;
 const recentPlaybackMetadata = new Map();
 const recentPlaybackMetadataTtlMs = 5 * 60 * 1000;
 const recentPlaybackMetadataLimit = 100;
+const imageProxyCache = new Map();
 const debugLog = [];
 const debugLogLimit = 500;
 const debugLogPath = process.env.CLOUD_SQUEEZE_LOG_PATH || "/tmp/cloud-squeeze-events.jsonl";
@@ -854,6 +857,13 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(400).json({ error: "Unsupported image host" });
       return;
     }
+    const cached = getCachedProxyImage(url);
+    if (cached) {
+      res.type(cached.contentType);
+      res.set("Cache-Control", "public, max-age=86400, immutable");
+      res.send(cached.bytes);
+      return;
+    }
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(4000) });
       if (!response.ok) {
@@ -875,8 +885,9 @@ export function createApp({ lms = new LmsClient() } = {}) {
         res.status(413).json({ error: "Image is too large" });
         return;
       }
+      setCachedProxyImage(url, contentType, bytes);
       res.type(contentType);
-      res.set("Cache-Control", "public, max-age=86400");
+      res.set("Cache-Control", "public, max-age=86400, immutable");
       res.send(bytes);
     } catch (error) {
       res.status(502).json({ error: error.message });
@@ -2444,6 +2455,26 @@ function lookupRecentPlaybackMetadata(track) {
     return entry.track;
   }
   return null;
+}
+
+function getCachedProxyImage(url) {
+  const entry = imageProxyCache.get(url);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) {
+    imageProxyCache.delete(url);
+    return null;
+  }
+  return entry;
+}
+
+function setCachedProxyImage(url, contentType, bytes) {
+  if (!url || !bytes?.length) return;
+  imageProxyCache.set(url, { contentType, bytes, expiresAt: Date.now() + imageProxyCacheTtlMs });
+  if (imageProxyCache.size <= imageProxyCacheLimit) return;
+  for (const [key, value] of imageProxyCache) {
+    if (value.expiresAt <= Date.now() || imageProxyCache.size > imageProxyCacheLimit) imageProxyCache.delete(key);
+    if (imageProxyCache.size <= imageProxyCacheLimit) break;
+  }
 }
 
 function tracksSharePlaybackIdentity(left, right) {
