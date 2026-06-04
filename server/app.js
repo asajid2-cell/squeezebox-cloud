@@ -1180,6 +1180,9 @@ export function createApp({ lms = new LmsClient() } = {}) {
       if (queueModeForcesRepeatOff) {
         await lms.control(playerId, "repeat", "off");
       }
+      const generatedQueueRollback = sourceChanged && finalSmartQueue && appState.playback.smartQueue && generatedQueueCount() > 0
+        ? { queue: appState.queue.map((item) => ({ ...item })), playback: { ...appState.playback } }
+        : null;
       if (queueModeChanged && (next.smartQueue === false || next.shuffle === false || next.shuffle === true || sourceChanged)) {
         removeGeneratedQueueItems();
       }
@@ -1191,6 +1194,17 @@ export function createApp({ lms = new LmsClient() } = {}) {
       let queued = [];
       if (queueModeChanged && appState.playback.smartQueue) {
         queued = await activateGeneratedQueue(lms, playerId, { smart: true, mode: appState.playback.smartShuffleSource, controlsReady: true });
+        if (generatedQueueRollback && queued.length === 0) {
+          appState.queue.splice(0, appState.queue.length, ...generatedQueueRollback.queue);
+          updatePlayback(generatedQueueRollback.playback);
+          res.status(409).json({
+            error: `No ${requestedSource} smart shuffle tracks were found. Keeping the current generated queue.`,
+            playback: appState.playback,
+            queued: [],
+            queue: appState.queue
+          });
+          return;
+        }
       } else if (queueModeChanged && appState.playback.shuffle) {
         if (manualQueueCount() > 0) {
           shuffleVisibleQueue();
@@ -1611,6 +1625,10 @@ function guestQueueCount() {
 
 function manualQueueCount() {
   return appState.queue.filter((item) => !isGeneratedQueueItem(item)).length;
+}
+
+function generatedQueueCount() {
+  return appState.queue.filter(isGeneratedQueueItem).length;
 }
 
 function canQueueMoreGuestTracks(count = 1) {

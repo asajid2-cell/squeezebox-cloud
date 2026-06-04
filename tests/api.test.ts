@@ -5425,6 +5425,36 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.queue.filter((item: { requestedBy: string; uri?: string }) => item.requestedBy === "smart shuffle").every((item: { uri?: string }) => item.uri?.startsWith("spotify:track:"))).toBe(true);
   });
 
+  it("keeps the current smart queue when source switching finds no replacement rows", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.nowPlaying = { id: "current", title: "Current", artist: "Aimer", album: "", source: "Spotify", duration: 100, elapsed: 10, canSeek: true, art: null, uri: "spotify:track:current" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: true, smartShuffleSource: "local", lastShuffleSeed: "Aimer", lastSmartQueueBase: "spotify:track:current", history: ["old"] };
+    addQueueItem({ title: "Existing Smart One", artist: "Tester", requestedBy: "smart shuffle", uri: "spotify:track:existing-one", source: "Spotify" });
+    addQueueItem({ title: "Existing Smart Two", artist: "Tester", requestedBy: "smart shuffle", uri: "spotify:track:existing-two", source: "Spotify" });
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async control() {
+          return "ok";
+        },
+        async spotifySearch() {
+          return [];
+        }
+      }
+    });
+
+    const response = await request(app)
+      .post("/api/player/playback")
+      .send({ smartQueue: true, smartShuffleSource: "spotify" })
+      .expect(409);
+
+    expect(response.body.error).toContain("No spotify smart shuffle tracks were found");
+    expect(response.body.playback).toMatchObject({ smartQueue: true, smartShuffleSource: "local", lastShuffleSeed: "Aimer" });
+    expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Existing Smart One", "Existing Smart Two"]);
+    expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Existing Smart One", "Existing Smart Two"]);
+    expect(appState.playback).toMatchObject({ smartQueue: true, smartShuffleSource: "local", history: ["old"] });
+  });
+
   it("turns off smart queue without removing user requested songs", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = {
