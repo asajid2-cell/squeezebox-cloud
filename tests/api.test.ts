@@ -225,6 +225,46 @@ describe("Cloud Squeeze API", () => {
     }
   });
 
+  it("uses exact Spotify artwork matches for local search rows missing LMS art", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const previousPlayer = { ...appState.player };
+    const previousSpotify = { ...appState.services.spotify };
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-local-spotify-art-"));
+    config.musicSourceDir = root;
+    appState.player = { ...appState.player, id: "player-1", connected: true, online: true };
+    updateSpotifyStatus({ configured: true, reachable: true, detail: "Spotty detected" });
+    try {
+      await fs.writeFile(path.join(root, "Juice WRLD - Lucid Dreams.mp3"), "ID3");
+      const response = await request(createApp({
+        lms: {
+          ...mockLms,
+          async enrichLocalArtwork(tracks: Array<{ title: string }>) {
+            return tracks;
+          },
+          async spotifySearch() {
+            return [
+              { title: "Wrong Song", artist: "Juice WRLD", art: "https://i.scdn.co/image/wrong", uri: "spotify:track:wrong", kind: "track" },
+              { title: "Lucid Dreams", artist: "Juice WRLD", art: "https://i.scdn.co/image/right", uri: "spotify:track:right", kind: "track" }
+            ];
+          }
+        }
+      }))
+        .get("/api/library/search?q=lucid&limit=10&source=local")
+        .expect(200);
+
+      expect(response.body.results[0]).toMatchObject({
+        title: "Lucid Dreams",
+        source: "Local library",
+        art: "https://i.scdn.co/image/right"
+      });
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      appState.player = previousPlayer;
+      updateSpotifyStatus(previousSpotify);
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not wait for slow Spotify artwork before using external uploaded artwork", async () => {
     const previousUploadDir = config.uploadDir;
     const previousAllowNetwork = process.env.TRACK_INFO_ALLOW_NETWORK_IN_TESTS;

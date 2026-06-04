@@ -148,6 +148,8 @@ const trackInfoRefreshMs = 30000;
 const trackInfoBudgetMs = Number(process.env.TRACK_INFO_BUDGET_MS || 1800);
 const localArtworkBudgetMs = Number(process.env.LOCAL_ARTWORK_BUDGET_MS || 300);
 const localArtworkLimit = Number(process.env.LOCAL_ARTWORK_LIMIT || 60);
+const localFallbackArtworkBudgetMs = Number(process.env.LOCAL_FALLBACK_ARTWORK_BUDGET_MS || 900);
+const localFallbackArtworkLimit = Number(process.env.LOCAL_FALLBACK_ARTWORK_LIMIT || 24);
 const uploadedArtworkBudgetMs = Number(process.env.UPLOADED_ARTWORK_BUDGET_MS || 900);
 const uploadedArtworkLimit = Number(process.env.UPLOADED_ARTWORK_LIMIT || 8);
 const spotifySearchPrewarmTerms = ["drake", "juice wrld", "the weeknd", "travis scott"];
@@ -1714,7 +1716,9 @@ async function enrichLibraryArtwork(lms, tracks) {
   const localEnriched = typeof lms.enrichLocalArtwork === "function"
     ? await withTimeout(lms.enrichLocalArtwork(tracks, { limit: localArtworkLimit, deadlineMs: Math.max(100, localArtworkBudgetMs - 50) }), localArtworkBudgetMs, tracks)
     : tracks;
-  return enrichUploadedArtwork(lms, inheritGroupedLocalArtwork(localEnriched));
+  const grouped = inheritGroupedLocalArtwork(localEnriched);
+  const localFallbackEnriched = await enrichMissingLocalArtwork(lms, grouped);
+  return enrichUploadedArtwork(lms, localFallbackEnriched);
 }
 
 export async function prewarmLibraryCaches(lms) {
@@ -1764,12 +1768,30 @@ async function enrichUploadedArtwork(lms, tracks) {
   if (candidates.length === 0) return results;
 
   return withTimeout(Promise.all(candidates.map(async ({ track, index }) => {
-    const art = await firstResolvedArtwork([
-      spotifyArtworkForUploadedTrack(lms, track),
-      enrichTrackArtwork(track)
-    ]);
+    const art = await fallbackArtworkForTrack(lms, track);
     if (art) results[index] = { ...track, art };
   })).then(() => results), uploadedArtworkBudgetMs, results);
+}
+
+async function enrichMissingLocalArtwork(lms, tracks) {
+  const results = tracks.slice();
+  const candidates = results
+    .map((track, index) => ({ track, index }))
+    .filter(({ track }) => track?.path && !track?.uri && !track?.art && !(track.uploaded || track.source === "Uploaded"))
+    .slice(0, Math.max(0, Number(localFallbackArtworkLimit) || 0));
+  if (candidates.length === 0) return results;
+
+  return withTimeout(Promise.all(candidates.map(async ({ track, index }) => {
+    const art = await fallbackArtworkForTrack(lms, track);
+    if (art) results[index] = { ...track, art };
+  })).then(() => results), localFallbackArtworkBudgetMs, results);
+}
+
+async function fallbackArtworkForTrack(lms, track) {
+  return firstResolvedArtwork([
+    spotifyArtworkForTrack(lms, track),
+    enrichTrackArtwork(track)
+  ]);
 }
 
 function firstResolvedArtwork(promises) {
@@ -1793,7 +1815,7 @@ function firstResolvedArtwork(promises) {
   });
 }
 
-async function spotifyArtworkForUploadedTrack(lms, track) {
+async function spotifyArtworkForTrack(lms, track) {
   if (!spotifyBrowsingAvailable() || typeof lms.spotifySearch !== "function") return null;
   const playerId = appState.player.id;
   if (!playerId || playerId === "mock-player") return null;
