@@ -852,7 +852,7 @@ function spotifyItemToTrack(item) {
     source: kind === "track" ? "Spotify" : `Spotify ${kind}`,
     uri,
     browseId: item.actions?.go?.params?.item_id || item.presetParams.item_id || item.params?.item_id || uri,
-    art: item.presetParams.icon || item.icon || null,
+    art: spotifyArtworkUrl(item.presetParams.icon || item.icon),
     duration: null,
     kind
   };
@@ -862,6 +862,10 @@ function spotifyPlayableItems(items, kind = "track") {
   return items
     .filter((item) => item.presetParams?.favorites_url)
     .map((item) => ({ ...item, resultKind: spotifyKind(item.presetParams.favorites_url, item.presetParams.favorites_type, kind) }));
+}
+
+function spotifyArtworkUrl(value) {
+  return proxiedArtworkUrl(value) || value || null;
 }
 
 function hasSpottyNavigationAction(item) {

@@ -632,7 +632,8 @@ describe("LMS client parsing", () => {
       artist: "Drake",
       album: "Take Care (Deluxe)",
       uri: "spotify:track:abc123",
-      source: "Spotify"
+      source: "Spotify",
+      art: "api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Ftest"
     });
   });
 
