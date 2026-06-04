@@ -839,6 +839,13 @@ describe("Cloud Squeeze API", () => {
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
     appState.playback = {
       ...appState.playback,
+      shuffle: true,
+      manualShuffle: false,
+      smartQueue: false,
+      repeat: "off",
+      lastShuffleRefillAt: 12345,
+      lastShuffleSeed: "drake",
+      lastSmartQueueBase: "idle",
       appManagedPlayback: true,
       history: ["spotify:track:stale-history"],
       previousTracks: [{ title: "Previous Track", artist: "Tester", path: "/music/previous.mp3", source: "Local library" }]
@@ -864,8 +871,30 @@ describe("Cloud Squeeze API", () => {
     expect(appState.nowPlaying).toMatchObject({ id: "idle", title: "No track playing", elapsed: 0, canSeek: false });
     expect(appState.queue).toEqual([]);
     expect(response.body.queue).toEqual([]);
-    expect(appState.playback).toMatchObject({ appManagedPlayback: false, history: [], previousTracks: [] });
-    expect(response.body.playback).toMatchObject({ appManagedPlayback: false, history: [], previousTracks: [] });
+    expect(appState.playback).toMatchObject({
+      shuffle: false,
+      manualShuffle: false,
+      smartQueue: false,
+      repeat: "off",
+      lastShuffleRefillAt: 0,
+      lastShuffleSeed: "",
+      lastSmartQueueBase: "",
+      appManagedPlayback: false,
+      history: [],
+      previousTracks: []
+    });
+    expect(response.body.playback).toMatchObject({
+      shuffle: false,
+      manualShuffle: false,
+      smartQueue: false,
+      repeat: "off",
+      lastShuffleRefillAt: 0,
+      lastShuffleSeed: "",
+      lastSmartQueueBase: "",
+      appManagedPlayback: false,
+      history: [],
+      previousTracks: []
+    });
   });
 
   it("clears stale manual shuffle when a manually shuffled queue ends", async () => {

@@ -887,7 +887,18 @@ export function createApp({ lms = new LmsClient() } = {}) {
       }
       clearPendingPlayback();
       clearPendingSeek();
-      updatePlayback({ history: [], previousTracks: [], appManagedPlayback: false });
+      updatePlayback({
+        shuffle: false,
+        manualShuffle: false,
+        smartQueue: false,
+        repeat: "off",
+        lastShuffleRefillAt: 0,
+        lastShuffleSeed: "",
+        lastSmartQueueBase: "",
+        history: [],
+        previousTracks: [],
+        appManagedPlayback: false
+      });
       updateNowPlaying(idleNowPlaying);
       updateTrackInfo(idleTrackInfo);
       res.json({ ok: true, mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying, queue: appState.queue, playback: appState.playback });
