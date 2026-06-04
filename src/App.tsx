@@ -586,54 +586,87 @@ function QueuePanel({ queue, onRefresh, onAction }: { queue: AppState["queue"]; 
       <div className="queue-list">
         {queue.length === 0 && <EmptyState title="Queue is empty" detail="Requests will appear here after someone adds a real local or Spotify track." />}
         {queue.slice(0, 12).map((item, index) => (
-          <div className={`queue-row ${editingId === item.id ? "is-editing" : ""}`} key={item.id}>
-            <div className="mini-art">
-              {item.art || item.artwork ? <img src={item.art || item.artwork || ""} alt="" /> : <Music2 size={18} />}
-            </div>
-            {editingId === item.id ? (
-              <div className="queue-edit-fields">
-                <small>Editing queue item</small>
-                <input aria-label="Queue title" value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.currentTarget.value })} />
-                <input aria-label="Queue artist" value={draft.artist} onChange={(event) => setDraft({ ...draft, artist: event.currentTarget.value })} />
-              </div>
-            ) : (
-              <div>
-                <strong>{item.title}</strong>
-                <small>{item.artist}</small>
-              </div>
-            )}
-            <span>{item.requestedBy}</span>
-            <span>~{item.etaMinutes} min</span>
-            <div className="queue-actions">
-              <button aria-label={`Move ${item.title} up`} title="Move earlier in queue" data-tooltip="Move earlier" className="icon-button" disabled={index === 0} onClick={() => onAction(async () => { await moveQueueItem(item.id, "up"); await onRefresh(); })}>
-                <ChevronUp size={16} />
-              </button>
-              <button aria-label={`Move ${item.title} down`} title="Move later in queue" data-tooltip="Move later" className="icon-button" disabled={index === queue.length - 1} onClick={() => onAction(async () => { await moveQueueItem(item.id, "down"); await onRefresh(); })}>
-                <ChevronDown size={16} />
-              </button>
-              {editingId === item.id ? (
-                <button aria-label={`Save ${item.title}`} title="Save queue edits" data-tooltip="Save edits" className="icon-button" onClick={() => saveEdit(item.id)}>
-                  <Check size={16} />
-                </button>
-              ) : (
-                <button aria-label={`Edit ${item.title}`} title="Edit title and artist" data-tooltip="Edit details" className="icon-button" onClick={() => beginEdit(item)}>
-                  <SlidersHorizontal size={16} />
-                </button>
-              )}
-              {editingId === item.id && (
-                <button aria-label={`Cancel editing ${item.title}`} title="Cancel editing" data-tooltip="Cancel" className="icon-button" onClick={() => setEditingId(null)}>
-                  <XCircle size={16} />
-                </button>
-              )}
-              <button aria-label={`Remove ${item.title}`} title="Remove from queue" data-tooltip="Remove" className="icon-button danger" onClick={() => onAction(async () => { await removeQueueItem(item.id); await onRefresh(); })}>
-                <XCircle size={16} />
-              </button>
-            </div>
-          </div>
+          <QueueRow key={item.id} item={item} index={index} queueLength={queue.length} editingId={editingId} draft={draft} setDraft={setDraft} beginEdit={beginEdit} saveEdit={saveEdit} cancelEdit={() => setEditingId(null)} onRefresh={onRefresh} onAction={onAction} />
         ))}
       </div>
       <p className="quiet-note">{queue.length} songs - ~{queue.at(-1)?.etaMinutes || 0} min total</p>
     </section>
+  );
+}
+
+function QueueRow({
+  item,
+  index,
+  queueLength,
+  editingId,
+  draft,
+  setDraft,
+  beginEdit,
+  saveEdit,
+  cancelEdit,
+  onRefresh,
+  onAction
+}: {
+  item: AppState["queue"][number];
+  index: number;
+  queueLength: number;
+  editingId: string | null;
+  draft: { title: string; artist: string };
+  setDraft: (draft: { title: string; artist: string }) => void;
+  beginEdit: (item: AppState["queue"][number]) => void;
+  saveEdit: (id: string) => void;
+  cancelEdit: () => void;
+  onRefresh: () => void;
+  onAction: ActionRunner;
+}) {
+  const isEditing = editingId === item.id;
+  const editable = !item.uri && item.requestedBy !== "shuffle" && item.requestedBy !== "smart shuffle";
+
+  return (
+    <div className={`queue-row ${isEditing ? "is-editing" : ""}`}>
+      <div className="mini-art">
+        {item.art || item.artwork ? <img src={item.art || item.artwork || ""} alt="" /> : <Music2 size={18} />}
+      </div>
+      {isEditing ? (
+        <div className="queue-edit-fields">
+          <small>Editing queue item</small>
+          <input aria-label="Queue title" value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.currentTarget.value })} />
+          <input aria-label="Queue artist" value={draft.artist} onChange={(event) => setDraft({ ...draft, artist: event.currentTarget.value })} />
+        </div>
+      ) : (
+        <div>
+          <strong>{item.title}</strong>
+          <small>{item.artist}</small>
+        </div>
+      )}
+      <span>{item.requestedBy}</span>
+      <span>~{item.etaMinutes} min</span>
+      <div className="queue-actions">
+        <button aria-label={`Move ${item.title} up`} title="Move earlier in queue" data-tooltip="Move earlier" className="icon-button" disabled={index === 0} onClick={() => onAction(async () => { await moveQueueItem(item.id, "up"); await onRefresh(); })}>
+          <ChevronUp size={16} />
+        </button>
+        <button aria-label={`Move ${item.title} down`} title="Move later in queue" data-tooltip="Move later" className="icon-button" disabled={index === queueLength - 1} onClick={() => onAction(async () => { await moveQueueItem(item.id, "down"); await onRefresh(); })}>
+          <ChevronDown size={16} />
+        </button>
+        {isEditing ? (
+          <button aria-label={`Save ${item.title}`} title="Save queue edits" data-tooltip="Save edits" className="icon-button" onClick={() => saveEdit(item.id)}>
+            <Check size={16} />
+          </button>
+        ) : editable ? (
+          <button aria-label={`Edit ${item.title}`} title="Edit title and artist" data-tooltip="Edit details" className="icon-button" onClick={() => beginEdit(item)}>
+            <SlidersHorizontal size={16} />
+          </button>
+        ) : null}
+        {isEditing && (
+          <button aria-label={`Cancel editing ${item.title}`} title="Cancel editing" data-tooltip="Cancel" className="icon-button" onClick={cancelEdit}>
+            <XCircle size={16} />
+          </button>
+        )}
+        <button aria-label={`Remove ${item.title}`} title="Remove from queue" data-tooltip="Remove" className="icon-button danger" onClick={() => onAction(async () => { await removeQueueItem(item.id); await onRefresh(); })}>
+          <XCircle size={16} />
+        </button>
+      </div>
+    </div>
   );
 }
 
