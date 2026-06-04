@@ -1122,7 +1122,14 @@ export function createApp({ lms = new LmsClient() } = {}) {
       }
       const finalShuffle = typeof next.shuffle === "boolean" ? next.shuffle : appState.playback.shuffle;
       const finalSmartQueue = typeof next.smartQueue === "boolean" ? next.smartQueue : appState.playback.smartQueue;
-      const queueModeChanged = sourceChanged || shuffleChanged || smartQueueChanged;
+      const manualQueuePresent = manualQueueCount() > 0;
+      const finalManualShuffle = finalShuffle && !finalSmartQueue && (
+        (shuffleChanged || smartQueueChanged)
+          ? manualQueuePresent
+          : Boolean(next.manualShuffle ?? appState.playback.manualShuffle)
+      );
+      const sourceChangesGeneratedQueue = Boolean(sourceChanged && (finalSmartQueue || (finalShuffle && !finalManualShuffle)));
+      const queueModeChanged = shuffleChanged || smartQueueChanged || sourceChangesGeneratedQueue;
       const visibleQueueForcesRepeatOff = Boolean(body.repeat && body.repeat !== "off" && appState.queue.length > 0);
       const queueModeForcesRepeatOff = ((finalShuffle || finalSmartQueue) && (queueModeChanged || Boolean(body.repeat))) || visibleQueueForcesRepeatOff;
       if (queueModeForcesRepeatOff) {
@@ -1134,20 +1141,15 @@ export function createApp({ lms = new LmsClient() } = {}) {
         next.lastSmartQueueBase = "";
         next.history = [];
       }
-      if (sourceChanged && (finalShuffle || finalSmartQueue)) {
+      if (sourceChangesGeneratedQueue) {
         next.lastShuffleRefillAt = 0;
         next.lastSmartQueueBase = "";
         next.history = [];
       }
       const requestedSource = next.smartShuffleSource || appState.playback.smartShuffleSource;
-      const finalManualShuffle = finalShuffle && !finalSmartQueue && (
-        queueModeChanged
-          ? manualQueueCount() > 0
-          : Boolean(next.manualShuffle ?? appState.playback.manualShuffle)
-      );
       if (finalManualShuffle) next.manualShuffle = true;
       if (!finalShuffle || finalSmartQueue) next.manualShuffle = false;
-      const needsGeneratedQueue = finalSmartQueue || (finalShuffle && !finalManualShuffle && manualQueueCount() === 0);
+      const needsGeneratedQueue = finalSmartQueue || (finalShuffle && !finalManualShuffle && !manualQueuePresent);
       const spotifyGeneratedRequested =
         requestedSource === "spotify" &&
         needsGeneratedQueue &&

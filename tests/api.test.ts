@@ -4322,6 +4322,58 @@ describe("Cloud Squeeze API", () => {
     expect(appState.playback).toMatchObject({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" });
   });
 
+  it("does not reshuffle a manual queue when only the smart-shuffle source changes", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      manualShuffle: true,
+      smartQueue: false,
+      repeat: "off",
+      smartShuffleSource: "spotify",
+      lastShuffleRefillAt: 12345,
+      lastShuffleSeed: "playlist",
+      lastSmartQueueBase: "playlist-base",
+      history: ["old"]
+    };
+    addQueueItem({ title: "Playlist A", artist: "Tester", uri: "spotify:track:playlist-a", source: "Spotify", requestedBy: "guest" });
+    addQueueItem({ title: "Playlist B", artist: "Tester", uri: "spotify:track:playlist-b", source: "Spotify", requestedBy: "guest" });
+    const controls: string[] = [];
+    const searches: string[] = [];
+
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string) {
+          controls.push(action);
+          return "ok";
+        },
+        async spotifySearch(_playerId: string, term: string) {
+          searches.push(term);
+          return [{ title: "Generated", artist: "Tester", source: "Spotify", uri: "spotify:track:generated", kind: "track" }];
+        }
+      }
+    }))
+      .post("/api/player/playback")
+      .send({ smartShuffleSource: "local" })
+      .expect(200);
+
+    expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Playlist A", "Playlist B"]);
+    expect(response.body.queued).toEqual([]);
+    expect(response.body.playback).toMatchObject({
+      shuffle: true,
+      manualShuffle: true,
+      smartQueue: false,
+      smartShuffleSource: "local",
+      lastShuffleRefillAt: 12345,
+      lastShuffleSeed: "playlist",
+      lastSmartQueueBase: "playlist-base",
+      history: ["old"]
+    });
+    expect(controls).toEqual([]);
+    expect(searches).toEqual([]);
+  });
+
   it("requires admin access for recent queue and playback debug events", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "spotify", history: [] };
