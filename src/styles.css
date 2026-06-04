@@ -1020,7 +1020,8 @@ input[type="range"] {
     border-right: 0;
     border-bottom: 1px solid var(--line);
   }
-  nav { grid-template-columns: repeat(3, 1fr); }
+  nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  nav button { min-width: 0; padding: 0 12px; }
   .recent-picks { display: none; }
   .main { height: auto; padding: 24px 18px; }
   .hero-row, .top-actions { align-items: stretch; flex-direction: column; }
