@@ -1556,7 +1556,6 @@ function publicRequestsClosedMessage() {
 }
 
 function markQueueManagedPlayback() {
-  if (appState.player.mode !== "play") return;
   if (!isTrackInfoCandidate(appState.nowPlaying)) return;
   updatePlayback({ appManagedPlayback: true });
 }

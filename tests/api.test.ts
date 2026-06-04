@@ -4261,6 +4261,87 @@ describe("Cloud Squeeze API", () => {
     expect(controls).toContainEqual({ action: "repeat", value: "off" });
   });
 
+  it("keeps a stale-mode visible queue app-managed so shuffled rows auto-advance", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
+    appState.nowPlaying = {
+      id: "current",
+      title: "Current Visible",
+      artist: "Tester",
+      album: "",
+      source: "Spotify",
+      duration: 100,
+      elapsed: 40,
+      canSeek: true,
+      art: null,
+      uri: "spotify:track:current-visible"
+    };
+    appState.playback = { ...appState.playback, shuffle: false, manualShuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "spotify", appManagedPlayback: false, history: [] };
+    const searches: string[] = [];
+    const played: string[] = [];
+
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async control() {
+          return "ok";
+        },
+        async spotifySearch(_playerId: string, term: string) {
+          searches.push(term);
+          return [{ title: "Unrelated Generated", artist: "Tester", uri: "spotify:track:unrelated", kind: "track", source: "Spotify" }];
+        },
+        async playTrack(_playerId: string, track: { title?: string }) {
+          played.push(String(track.title || ""));
+          return "ok";
+        }
+      }
+    });
+
+    await request(app)
+      .post("/api/player/track")
+      .send({ action: "add-queue", track: { title: "Queued One", artist: "Tester", path: "/music/test/queued-one.mp3", source: "Local library", kind: "track" } })
+      .expect(200);
+    await request(app)
+      .post("/api/player/track")
+      .send({ action: "add-queue", track: { title: "Queued Two", artist: "Tester", path: "/music/test/queued-two.mp3", source: "Local library", kind: "track" } })
+      .expect(200);
+
+    const shuffled = await request(app)
+      .post("/api/player/playback")
+      .send({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" })
+      .expect(200);
+
+    expect(shuffled.body.playback).toMatchObject({ shuffle: true, manualShuffle: true, smartQueue: false, appManagedPlayback: true });
+    expect(shuffled.body.queued).toEqual([]);
+    expect(shuffled.body.queue).toHaveLength(2);
+    expect(searches).toEqual([]);
+
+    await maintainVisiblePlaybackQueueForTests(
+      {
+        ...mockLms,
+        async control() {
+          return "ok";
+        },
+        async spotifySearch(_playerId: string, term: string) {
+          searches.push(term);
+          return [{ title: "Unrelated Generated", artist: "Tester", uri: "spotify:track:unrelated", kind: "track", source: "Spotify" }];
+        },
+        async playTrack(_playerId: string, track: { title?: string }) {
+          played.push(String(track.title || ""));
+          return "ok";
+        }
+      },
+      { id: "player-1", mode: "stop" },
+      { id: "idle", title: "No track playing", artist: "Connect a player or request a song", source: "LMS", duration: 0, elapsed: 0 }
+    );
+
+    expect(played).toHaveLength(1);
+    expect(["Queued One", "Queued Two"]).toContain(played[0]);
+    expect(searches).toEqual([]);
+    expect(appState.queue).toHaveLength(1);
+    expect(appState.playback).toMatchObject({ shuffle: true, manualShuffle: true, smartQueue: false, appManagedPlayback: true });
+  });
+
   it("turns repeat off before adding visible queue rows", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
