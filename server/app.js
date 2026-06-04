@@ -864,7 +864,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
 
   app.get("/api/image-proxy", async (req, res) => {
     const url = String(req.query.url || "");
-    if (!/^https?:\/\/(i\.scdn\.co|mosaic\.scdn\.co|image-cdn-[a-z]+\.spotifycdn\.com|pickasso\.spotifycdn\.com|is\d+-ssl\.mzstatic\.com|coverartarchive\.org)\//i.test(url)) {
+    if (!/^https?:\/\/(i\.scdn\.co|mosaic\.scdn\.co|image-cdn-[a-z]+\.spotifycdn\.com|pickasso\.spotifycdn\.com|blend-playlist-covers\.spotifycdn\.com|seed-mix-image\.spotifycdn\.com|is\d+-ssl\.mzstatic\.com|coverartarchive\.org)\//i.test(url)) {
       res.status(400).json({ error: "Unsupported image host" });
       return;
     }

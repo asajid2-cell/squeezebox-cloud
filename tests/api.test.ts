@@ -1925,6 +1925,8 @@ describe("Cloud Squeeze API", () => {
 
     const ok = await request(app).get("/api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Fok").expect(200);
     const cachedOk = await request(app).get("/api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Fok").expect(200);
+    await request(app).get("/api/image-proxy?url=https%3A%2F%2Fblend-playlist-covers.spotifycdn.com%2Fv2%2Fblend_DEFAULT-gold-yellow-en.jpg").expect(200);
+    await request(app).get("/api/image-proxy?url=https%3A%2F%2Fseed-mix-image.spotifycdn.com%2Fv6%2Fimg%2Fdesc%2FAlternative%2520Indie%2Fen%2Fdefault").expect(200);
     await request(app).get("/api/image-proxy?url=https%3A%2F%2Fevil.example%2Fcover.jpg").expect(400);
     await request(app).get("/api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Fnot-image").expect(415);
     await request(app).get("/api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Ftoo-large-header").expect(413);
