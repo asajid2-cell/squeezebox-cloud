@@ -881,6 +881,17 @@ function PlaylistsPanel({ onRefresh, onAction }: { onRefresh: () => void; onActi
     }
   }
 
+  async function queueableDetailTracks() {
+    const queueLimit = 200;
+    if (selectedLocal) {
+      return fetchCollectionTracks(selectedLocal.collection, selectedLocal.folder, "all", queueLimit, 0);
+    }
+    if (selectedSpotify && selectedSpotify.kind !== "track") {
+      return fetchSpotifyChildren(selectedSpotify, queueLimit, 0);
+    }
+    return detailTracks;
+  }
+
   const selectedTitle = selectedLocal?.folder || selectedSpotify?.title || "";
   const selectedSubtitle = selectedLocal?.collection || selectedSpotify?.artist || selectedSpotify?.source || "";
 
@@ -929,6 +940,7 @@ function PlaylistsPanel({ onRefresh, onAction }: { onRefresh: () => void; onActi
           loading={loadingDetail}
           hasMore={hasMoreDetail}
           onLoadMore={loadMoreDetail}
+          getQueueTracks={queueableDetailTracks}
           onRefresh={onRefresh}
           onAction={onAction}
         />
@@ -975,6 +987,7 @@ function PlaylistTracks({
   loading,
   hasMore,
   onLoadMore,
+  getQueueTracks,
   onRefresh,
   onAction
 }: {
@@ -983,12 +996,14 @@ function PlaylistTracks({
   loading: boolean;
   hasMore: boolean;
   onLoadMore: () => void;
+  getQueueTracks: () => Promise<Track[] | undefined>;
   onRefresh: () => void;
   onAction: ActionRunner;
 }) {
   async function queueAll(action: "add-queue" | "play-next") {
     await onAction(async () => {
-      const playableTracks = tracks.filter((item) => !item.kind || item.kind === "track").slice(0, 200);
+      const queueTracks = await getQueueTracks();
+      const playableTracks = (queueTracks || tracks).filter((item) => !item.kind || item.kind === "track").slice(0, 200);
       const result = await playTracks(action, playableTracks);
       await onRefresh();
       if (result?.rejected > 0) {

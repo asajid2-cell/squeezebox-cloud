@@ -356,11 +356,13 @@ describe("Cloud Squeeze UI", () => {
   });
 
   it("surfaces partial playlist batch queue acceptance", async () => {
+    const fetchMock = vi.mocked(fetch);
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Playlists" }));
     await userEvent.click(await screen.findByText("Goodbye ERA"));
     await userEvent.click(await screen.findByRole("button", { name: "Queue all" }));
 
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/library/collection") && String(url).includes("limit=200"))).toBe(true);
     expect(await screen.findByRole("alert")).toHaveTextContent("Queued 1 of 2 tracks; 1 skipped because of the queue limit or duplicates.");
   });
 });
