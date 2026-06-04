@@ -4290,6 +4290,51 @@ describe("Cloud Squeeze API", () => {
     expect([...response.body.playback.history].sort()).toEqual(["spotify:track:aimer-one", "spotify:track:aimer-two"]);
   });
 
+  it("clears regular generated shuffle history when source changes through playback settings", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-source-history-"));
+    appState.queue.splice(0, appState.queue.length);
+    appState.nowPlaying = {
+      id: "idle",
+      title: "No track playing",
+      artist: "Connect a player or request a song",
+      album: "",
+      source: "LMS",
+      duration: 0,
+      elapsed: 0,
+      canSeek: false,
+      art: null
+    };
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      manualShuffle: false,
+      smartQueue: false,
+      smartShuffleSource: "spotify",
+      lastShuffleSeed: "Drake",
+      history: ["spotify:track:stale-one", "spotify:track:stale-two"]
+    };
+    addQueueItem({ title: "Old Spotify Generated", artist: "Drake", requestedBy: "shuffle", uri: "spotify:track:old", source: "Spotify" });
+    config.musicSourceDir = root;
+    try {
+      await fs.writeFile(path.join(root, "Drake - Local Fresh.mp3"), "ID3");
+      const response = await request(createApp({ lms: mockLms }))
+        .post("/api/player/playback")
+        .send({ smartShuffleSource: "local" })
+        .expect(200);
+
+      expect(response.body.queue).toEqual([expect.objectContaining({ title: "Local Fresh", requestedBy: "shuffle" })]);
+      expect(response.body.queue).not.toEqual(expect.arrayContaining([expect.objectContaining({ title: "Old Spotify Generated" })]));
+      expect(response.body.playback.history).toEqual([
+        expect.stringContaining("/drake - local fresh.mp3")
+      ]);
+      expect(response.body.playback.history).not.toEqual(expect.arrayContaining(["spotify:track:stale-one", "spotify:track:stale-two"]));
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not use idle placeholder text as smart-shuffle search terms", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.nowPlaying = {

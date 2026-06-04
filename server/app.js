@@ -1071,6 +1071,11 @@ export function createApp({ lms = new LmsClient() } = {}) {
         next.lastSmartQueueBase = "";
         next.history = [];
       }
+      if (sourceChanged && (finalShuffle || finalSmartQueue)) {
+        next.lastShuffleRefillAt = 0;
+        next.lastSmartQueueBase = "";
+        next.history = [];
+      }
       const requestedSource = next.smartShuffleSource || appState.playback.smartShuffleSource;
       const finalManualShuffle = finalShuffle && !finalSmartQueue && (
         queueModeChanged
