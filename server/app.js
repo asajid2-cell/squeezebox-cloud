@@ -881,12 +881,16 @@ export function createApp({ lms = new LmsClient() } = {}) {
     return withTransportLock(res, async () => {
     try {
       await control(lms, "stop");
+      cancelPendingVisibleQueueAdvance();
+      for (const item of [...appState.queue]) {
+        removeQueueItem(item.id);
+      }
       clearPendingPlayback();
       clearPendingSeek();
       updatePlayback({ history: [], previousTracks: [], appManagedPlayback: false });
       updateNowPlaying(idleNowPlaying);
       updateTrackInfo(idleTrackInfo);
-      res.json({ ok: true, mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying, playback: appState.playback });
+      res.json({ ok: true, mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying, queue: appState.queue, playback: appState.playback });
     } catch (error) {
       res.status(502).json({ error: error.message, mode: appState.player.mode, player: appState.player });
     }
