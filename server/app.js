@@ -189,6 +189,9 @@ const recentPlaybackMetadata = new Map();
 const recentPlaybackMetadataTtlMs = 5 * 60 * 1000;
 const recentPlaybackMetadataLimit = 100;
 const imageProxyCache = new Map();
+const enrichedLibraryResponseCache = new Map();
+const enrichedLibraryResponseCacheTtlMs = Number(process.env.ENRICHED_LIBRARY_RESPONSE_CACHE_TTL_MS || 15000);
+const enrichedLibraryResponseCacheLimit = 80;
 const debugLog = [];
 const debugLogLimit = 500;
 const debugLogPath = process.env.CLOUD_SQUEEZE_LOG_PATH || "/tmp/cloud-squeeze-events.jsonl";
@@ -598,8 +601,13 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(400).json({ error: "Library search limit must be a positive integer up to 2000" });
       return;
     }
-    const results = await searchLibrary(String(req.query.q || ""), undefined, limit, source);
-    res.json({ results: await enrichLibraryArtwork(lms, results) });
+    const query = String(req.query.q || "");
+    const cacheKey = enrichedLibraryResponseCacheKey("search", { query, limit, source });
+    const results = await cachedEnrichedLibraryResults(cacheKey, async () => {
+      const libraryResults = await searchLibrary(query, undefined, limit, source);
+      return enrichLibraryArtwork(lms, libraryResults);
+    });
+    res.json({ results });
   });
 
   app.get("/api/spotify/search", async (req, res) => {
@@ -736,14 +744,18 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(400).json({ error: "Library collection offset must be a non-negative integer" });
       return;
     }
-    const results = await getCollectionTracks({
-      collection,
-      folder,
-      source,
-      limit,
-      offset
+    const cacheKey = enrichedLibraryResponseCacheKey("collection", { collection, folder, source, limit, offset });
+    const results = await cachedEnrichedLibraryResults(cacheKey, async () => {
+      const collectionResults = await getCollectionTracks({
+        collection,
+        folder,
+        source,
+        limit,
+        offset
+      });
+      return enrichLibraryArtwork(lms, collectionResults);
     });
-    res.json({ results: await enrichLibraryArtwork(lms, results) });
+    res.json({ results });
   });
 
   app.post("/api/library/rescan", requireAdmin, async (_req, res) => {
@@ -763,6 +775,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       }
       const originalName = String(req.query.filename || req.get("x-upload-filename") || "");
       const track = await saveUploadedTrack({ originalName, bytes: req.body });
+      clearEnrichedLibraryResponseCache();
       const tracks = await scanLibrary(undefined, 5000, "all");
       const lmsRescan = await lms.rescanLibrary?.().then(() => true).catch(() => false);
       res.status(201).json({ ok: true, track, trackCount: tracks.length, status: appState.services.localLibrary, lmsRescan });
@@ -1397,6 +1410,7 @@ async function rescanLibraryOnce() {
   if (!libraryRescanState.promise) {
     libraryRescanState.promise = (async () => {
       clearLibraryCaches();
+      clearEnrichedLibraryResponseCache();
       const tracks = await scanLibrary(undefined, 5000, "all");
       return { trackCount: tracks.length, sample: tracks.slice(0, 5), status: appState.services.localLibrary };
     })().finally(() => {
@@ -1719,6 +1733,58 @@ async function enrichLibraryArtwork(lms, tracks) {
   const grouped = inheritGroupedLocalArtwork(localEnriched);
   const localFallbackEnriched = await enrichMissingLocalArtwork(lms, grouped);
   return enrichUploadedArtwork(lms, inheritGroupedLocalArtwork(localFallbackEnriched));
+}
+
+async function cachedEnrichedLibraryResults(key, loader) {
+  const now = Date.now();
+  const cached = enrichedLibraryResponseCache.get(key);
+  if (cached?.results && cached.expiresAt > now) return structuredClone(cached.results);
+  if (cached?.promise) return structuredClone(await cached.promise);
+  const promise = Promise.resolve()
+    .then(loader)
+    .then((results) => {
+      const safeResults = Array.isArray(results) ? results : [];
+      enrichedLibraryResponseCache.set(key, {
+        results: safeResults,
+        expiresAt: Date.now() + enrichedLibraryResponseCacheTtlMs
+      });
+      pruneEnrichedLibraryResponseCache();
+      return safeResults;
+    })
+    .catch((error) => {
+      enrichedLibraryResponseCache.delete(key);
+      throw error;
+    });
+  enrichedLibraryResponseCache.set(key, { promise, expiresAt: now + enrichedLibraryResponseCacheTtlMs });
+  return structuredClone(await promise);
+}
+
+function enrichedLibraryResponseCacheKey(type, params = {}) {
+  const stableParams = Object.entries(params)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join("&");
+  return [
+    type,
+    config.musicSourceDir,
+    config.uploadDir,
+    stableParams
+  ].join("|");
+}
+
+function clearEnrichedLibraryResponseCache() {
+  enrichedLibraryResponseCache.clear();
+}
+
+function pruneEnrichedLibraryResponseCache() {
+  if (enrichedLibraryResponseCache.size <= enrichedLibraryResponseCacheLimit) return;
+  const now = Date.now();
+  for (const [key, value] of enrichedLibraryResponseCache) {
+    if (value.expiresAt <= now || enrichedLibraryResponseCache.size > enrichedLibraryResponseCacheLimit) {
+      enrichedLibraryResponseCache.delete(key);
+    }
+    if (enrichedLibraryResponseCache.size <= enrichedLibraryResponseCacheLimit) break;
+  }
 }
 
 export async function prewarmLibraryCaches(lms) {

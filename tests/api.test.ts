@@ -121,6 +121,39 @@ describe("Cloud Squeeze API", () => {
     }
   });
 
+  it("shares in-flight enriched local search results across identical requests", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-enriched-search-cache-"));
+    config.musicSourceDir = root;
+    try {
+      await fs.writeFile(path.join(root, "Artist - Cached Art.mp3"), "ID3");
+      let enrichCalls = 0;
+      const app = createApp({
+        lms: {
+          ...mockLms,
+          async enrichLocalArtwork(tracks: Array<{ title: string; path?: string }>) {
+            enrichCalls += 1;
+            await new Promise((resolve) => setTimeout(resolve, 25));
+            return tracks.map((track) => ({ ...track, art: "api/artwork/cached-cover" }));
+          }
+        }
+      });
+      const [first, second, third] = await Promise.all([
+        request(app).get("/api/library/search?q=cached&limit=10&source=local").expect(200),
+        request(app).get("/api/library/search?q=cached&limit=10&source=local").expect(200),
+        request(app).get("/api/library/search?q=cached&limit=10&source=local").expect(200)
+      ]);
+
+      expect(enrichCalls).toBe(1);
+      for (const response of [first, second, third]) {
+        expect(response.body.results[0]).toMatchObject({ title: "Cached Art", art: "api/artwork/cached-cover" });
+      }
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("inherits local artwork across tracks in the same folder", async () => {
     const previousMusicDir = config.musicSourceDir;
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-art-inherit-"));
