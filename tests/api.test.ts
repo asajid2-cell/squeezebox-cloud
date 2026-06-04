@@ -2172,6 +2172,7 @@ describe("Cloud Squeeze API", () => {
 
   it("keeps duplicate Spotify search results distinct by selected URI", async () => {
     appState.queue.splice(0, appState.queue.length);
+    updateSpotifyStatus({ configured: true, reachable: true, detail: "Spotty detected" });
     const played: Array<{ title?: string; artist?: string; uri?: string }> = [];
     const duplicateOne = {
       id: "spotify:track:1111111111111111111111",
@@ -5025,6 +5026,7 @@ describe("Cloud Squeeze API", () => {
   it("requires admin access for recent queue and playback debug events", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "spotify", history: [] };
+    updateSpotifyStatus({ configured: true, reachable: true, detail: "Spotty detected" });
     const app = createApp({ lms: mockLms });
 
     await request(app).get("/api/debug/logs?limit=10").expect(401);
