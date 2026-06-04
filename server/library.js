@@ -99,7 +99,8 @@ export async function getCollections(root = undefined, source = "all") {
       collection: track.collection || "Local library",
       folder: track.folder || track.album || "Ungrouped",
       count: 0,
-      sample: []
+      sample: [],
+      coverTrack: track
     };
     group.count += 1;
     if (group.sample.length < 3) group.sample.push(track.title);

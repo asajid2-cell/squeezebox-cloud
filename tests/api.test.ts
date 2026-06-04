@@ -4365,6 +4365,41 @@ describe("Cloud Squeeze API", () => {
     }
   });
 
+  it("adds representative artwork to local collection rows", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const previousUploadDir = config.uploadDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-collection-art-"));
+    config.musicSourceDir = root;
+    config.uploadDir = path.join(root, "uploads");
+    try {
+      const folder = path.join(root, "collections", "Probe Artist", "Probe Collection", "Tracks");
+      await fs.mkdir(folder, { recursive: true });
+      await fs.writeFile(path.join(folder, "Cover Track.mp3"), "ID3");
+      const lms = {
+        ...mockLms,
+        async enrichLocalArtwork(tracks: Array<{ title: string }>) {
+          return tracks.map((track) => ({ ...track, art: "api/artwork/collection-cover" }));
+        }
+      };
+
+      const response = await request(createApp({ lms }))
+        .get("/api/library/collections?source=local")
+        .expect(200);
+
+      expect(response.body.collections[0]).toMatchObject({
+        collection: "Probe Artist / Probe Collection",
+        folder: "Tracks",
+        art: "api/artwork/collection-cover"
+      });
+      expect(response.body.collections[0].coverTrack).toBeUndefined();
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      config.uploadDir = previousUploadDir;
+      clearLibraryCaches();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("accepts only validated audio uploads", async () => {
     const previousUploadDir = config.uploadDir;
     const previousMusicDir = config.musicSourceDir;

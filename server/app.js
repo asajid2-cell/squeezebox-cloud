@@ -730,7 +730,8 @@ export function createApp({ lms = new LmsClient() } = {}) {
       return;
     }
     const collections = await getCollections(undefined, source);
-    res.json({ collections: collections.slice(offset, offset + limit) });
+    const page = collections.slice(offset, offset + limit);
+    res.json({ collections: await enrichCollectionCovers(lms, page) });
   });
 
   app.get("/api/library/collection", async (req, res) => {
@@ -1749,6 +1750,17 @@ async function enrichLibraryArtwork(lms, tracks) {
   const grouped = inheritGroupedLocalArtwork(localEnriched);
   const localFallbackEnriched = await enrichMissingLocalArtwork(lms, grouped);
   return enrichUploadedArtwork(lms, inheritGroupedLocalArtwork(localFallbackEnriched));
+}
+
+async function enrichCollectionCovers(lms, collections) {
+  if (!Array.isArray(collections) || collections.length === 0) return [];
+  const coverTracks = collections.map((collection) => collection.coverTrack).filter(Boolean);
+  const enriched = await enrichLibraryArtwork(lms, coverTracks);
+  const coverArtByPath = new Map(enriched.map((track) => [track?.path, track?.art || track?.artwork || null]).filter(([path, art]) => path && art));
+  return collections.map(({ coverTrack, ...collection }) => {
+    const art = coverTrack?.art || coverTrack?.artwork || coverArtByPath.get(coverTrack?.path) || null;
+    return art ? { ...collection, art } : collection;
+  });
 }
 
 async function cachedEnrichedLibraryResults(key, loader) {

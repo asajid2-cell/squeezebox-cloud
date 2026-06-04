@@ -993,6 +993,7 @@ function PlaylistsPanel({ onRefresh, onAction }: { onRefresh: () => void; onActi
       {!selectedTitle && source === "local" && <div className="collection-list">
         {collections.map((item) => (
           <button className="collection-row" key={`${item.collection}-${item.folder}`} onClick={() => openLocal(item)}>
+            <div className="cover-thumb">{item.art && <img src={item.art} alt="" />}</div>
             <div>
               <strong>{item.folder}</strong>
               <small>{item.collection}</small>

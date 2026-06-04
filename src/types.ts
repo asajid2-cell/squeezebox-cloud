@@ -88,4 +88,5 @@ export type LibraryCollection = {
   folder: string;
   count: number;
   sample: string[];
+  art?: string | null;
 };
