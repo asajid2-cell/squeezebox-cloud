@@ -245,21 +245,24 @@ async function assertPlayableDuplicateRejection() {
 
 async function assertQueueLimit() {
   await cleanupQueue();
-  const sourceTracks = await localSmokeTracks(4);
+  const state = await requestJson("/state");
+  const limit = Number(state.admin?.maxQueuePerUser || 3);
+  assert(Number.isInteger(limit) && limit > 0, "state did not expose a valid queue limit");
+  const sourceTracks = await localSmokeTracks(limit + 1);
   const tracks = sourceTracks.map((track, index) => smokeTrack(track, `Smoke Verify Limit ${index + 1}`));
   const limited = await requestJson("/player/tracks", {
     method: "POST",
     body: { action: "add-queue", tracks }
   });
   for (const item of limited.queued || []) createdQueueIds.push(item.id);
-  assert((limited.queued || []).length === 3, "queue limit did not accept exactly three rows from a four-row batch");
-  assert(limited.accepted === 3 && limited.rejected === 1, "queue limit did not report partial batch acceptance");
+  assert((limited.queued || []).length === limit, `queue limit did not accept exactly ${limit} rows from an over-limit batch`);
+  assert(limited.accepted === limit && limited.rejected === 1, "queue limit did not report partial batch acceptance");
 
   const spoofed = await requestJson("/queue", {
     method: "POST",
     body: { title: "Smoke Verify Limit Spoof", artist: "CloudSqueeze", requestedBy: "admin" }
   }, { expectedStatus: 429 });
-  assert(String(spoofed.error || "").includes("max 3"), "queue endpoint allowed requestedBy spoofing past the limit");
+  assert(String(spoofed.error || "").includes(`max ${limit}`), "queue endpoint allowed requestedBy spoofing past the limit");
   await cleanupQueue();
 }
 
