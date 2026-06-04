@@ -268,6 +268,53 @@ describe("Cloud Squeeze UI", () => {
     });
   });
 
+  it("renders shuffled queue from playback response before the next poll", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const defaultFetch = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (url.includes("/api/state")) {
+        return jsonResponse({
+          player: { id: "p1", name: "Test Speaker", connected: true, online: true, mode: "stop", volume: 68 },
+          nowPlaying: { id: "", title: "", artist: "", album: "", source: "LMS", duration: 0, elapsed: 0, canSeek: false },
+          queue: [
+            { id: "q1", title: "Shabang", artist: "Drake", source: "Uploaded", requestedBy: "guest", etaMinutes: 7 },
+            { id: "q2", title: "Sleep Paralysis", artist: "Jackson Ivy", source: "Uploaded", requestedBy: "guest", etaMinutes: 14 }
+          ],
+          recentPicks: [],
+          schedule: { current: { name: "Open Queue", until: "10:00 PM", requestsPaused: false }, next: { name: "Quiet Hours", time: "10:00 PM - 8:00 AM", requestsPaused: true } },
+          rules: [],
+          services: {
+            spotify: { configured: true, reachable: true, detail: "ok" },
+            localLibrary: { root: "Downloads", reachable: true, trackCount: 2 },
+            musicInfo: { configured: true, reachable: true, detail: "Plugin ready" }
+          },
+          trackInfo: { artistBio: "", albumReview: "", lyrics: "" },
+          playback: { shuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "mixed" },
+          admin: { publicRequests: true, maxQueuePerUser: 3, moderation: "basic", scheduleEnabled: true }
+        });
+      }
+      if (url.includes("/api/player/playback") && options?.method === "POST") {
+        return jsonResponse({
+          ok: true,
+          playback: { shuffle: true, manualShuffle: true, smartQueue: false, repeat: "off", smartShuffleSource: "mixed" },
+          queue: [
+            { id: "q2", title: "Sleep Paralysis", artist: "Jackson Ivy", source: "Uploaded", requestedBy: "guest", etaMinutes: 7 },
+            { id: "q1", title: "Shabang", artist: "Drake", source: "Uploaded", requestedBy: "guest", etaMinutes: 14 }
+          ]
+        });
+      }
+      return defaultFetch?.(url, options) ?? jsonResponse({ ok: true });
+    });
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Shuffle" }));
+
+    await waitFor(() => {
+      const rows = screen.getAllByText(/Shabang|Sleep Paralysis/).map((node) => node.textContent);
+      expect(rows.indexOf("Sleep Paralysis")).toBeLessThan(rows.indexOf("Shabang"));
+    });
+  });
+
   it("navigates public sections from the sidebar", async () => {
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Queue" }));

@@ -384,8 +384,9 @@ function PlaybackOptions({ state, disabled, onRefresh, onAction }: { state: AppS
   async function setRepeat() {
     const next = playback.repeat === "off" ? "all" : playback.repeat === "all" ? "one" : "off";
     await onAction(async () => {
-      await savePlayback({ repeat: next });
+      const result = await savePlayback({ repeat: next });
       await onRefresh();
+      return result;
     });
   }
 
@@ -399,15 +400,17 @@ function PlaybackOptions({ state, disabled, onRefresh, onAction }: { state: AppS
             : { shuffle: false, smartQueue: true }
           : { shuffle: true, smartQueue: false };
     await onAction(async () => {
-      await savePlayback(next);
+      const result = await savePlayback(next);
       await onRefresh();
+      return result;
     });
   }
 
   async function setSource(source: AppState["playback"]["smartShuffleSource"]) {
     await onAction(async () => {
-      await savePlayback({ smartShuffleSource: source });
+      const result = await savePlayback({ smartShuffleSource: source });
       await onRefresh();
+      return result;
     });
   }
 
