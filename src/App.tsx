@@ -805,7 +805,7 @@ function PlaylistsPanel({ onRefresh, onAction }: { onRefresh: () => void; onActi
   const [detailTracks, setDetailTracks] = useState<Track[]>([]);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [hasMoreDetail, setHasMoreDetail] = useState(false);
-  const detailPageSize = 100;
+  const detailPageSize = 50;
 
   useEffect(() => {
     onAction(async () => {

@@ -325,13 +325,13 @@ describe("Cloud Squeeze UI", () => {
     await userEvent.click(await screen.findByText("Goodbye ERA"));
     expect(await screen.findByText("First Leak")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Queue all" })).toBeInTheDocument();
-    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/library/collection") && String(url).includes("limit=100"))).toBe(true);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/library/collection") && String(url).includes("limit=50"))).toBe(true);
 
     await userEvent.click(screen.getByRole("button", { name: "Back" }));
     await userEvent.click(screen.getByRole("button", { name: "Spotify" }));
     await userEvent.click(await screen.findByText("Drake Mix"));
     expect(await screen.findByText("Playlist Child")).toBeInTheDocument();
-    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/spotify/children") && String(url).includes("limit=100"))).toBe(true);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/spotify/children") && String(url).includes("limit=50"))).toBe(true);
   });
 
   it("opens saved Spotify tracks without queueing them until an explicit action", async () => {
