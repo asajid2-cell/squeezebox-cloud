@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { createApp, maintainVisiblePlaybackQueueForTests, nextQueueItemForPlayback, refreshLmsForTests, resetRefreshStateForTests, sameContinuingPlayback, shouldNudgePlayback, syncVisibleQueueWithCurrentTrack } from "../server/app.js";
 import { clearLibraryCaches } from "../server/library.js";
-import { addQueueItem, appState, config, removeQueueItem, updateNowPlaying, updateSpotifyStatus } from "../server/state.js";
+import { addQueueItem, appState, config, removeQueueItem, updateNowPlaying, updatePlayback, updateSpotifyStatus } from "../server/state.js";
 
 const tinyMp3 = Buffer.from(
   "SUQzBAAAAAAAIlRTU0UAAAAOAAADTGF2ZjYyLjMuMTAwAAAAAAAAAAAAAAD/+0DAAAAAAAAAAAAAAAAAAAAAAABJbmZvAAAADwAAAAUAAAK+AGhoaGhoaGhoaGhoaGhoaGhoaGiOjo6Ojo6Ojo6Ojo6Ojo6Ojo6OjrS0tLS0tLS0tLS0tLS0tLS0tLS02tra2tra2tra2tra2tra2tra2tr//////////////////////////wAAAABMYXZjNjIuMTEAAAAAAAAAAAAAAAAkAwYAAAAAAAACvhC6F/0AAAAAAP/7EMQAA8AAAaQAAAAgAAA0gAAABExBTUUzLjEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//sQxCmDwAABpAAAACAAADSAAAAEVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVX/+xDEUwPAAAGkAAAAIAAANIAAAARVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVf/7EMR8g8AAAaQAAAAgAAA0gAAABFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//sQxKYDwAABpAAAACAAADSAAAAEVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU=",
@@ -2473,6 +2473,27 @@ describe("Cloud Squeeze API", () => {
     expect(shuffled.body.queued.map((item: { uri?: string }) => item.uri)).toEqual(shuffled.body.queue.map((item: { uri?: string }) => item.uri));
     expect(shuffled.body.queue.every((item: { uri?: string; requestedBy?: string }) => playlistUris.has(item.uri || "") && item.requestedBy === "guest")).toBe(true);
     expect(shuffled.body.queue.some((item: { title: string }) => item.title === "Stale Local")).toBe(false);
+  });
+
+  it("preserves manual shuffle state for a stopped visible queue", async () => {
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    addQueueItem({ title: "Queued A", artist: "Tester", uri: "spotify:track:0000000000000000000501", source: "Spotify", kind: "track", requestedBy: "guest" });
+    addQueueItem({ title: "Queued B", artist: "Tester", uri: "spotify:track:0000000000000000000502", source: "Spotify", kind: "track", requestedBy: "guest" });
+    updatePlayback({ shuffle: true, manualShuffle: true, smartQueue: false, appManagedPlayback: false, history: [], previousTracks: [] });
+
+    await refreshLmsForTests({
+      ...mockLms,
+      async status() {
+        return { id: "player-1", name: "Test Speaker", connected: true, online: true, mode: "stop", volume: 44, detail: "stopped" };
+      },
+      async nowPlaying() {
+        return { id: "idle", title: "No track playing", artist: "Connect a player or request a song", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null };
+      }
+    }, { force: true });
+
+    expect(appState.queue.map((item) => item.title)).toEqual(["Queued A", "Queued B"]);
+    expect(appState.playback).toMatchObject({ shuffle: true, manualShuffle: true, smartQueue: false });
   });
 
   it("rejects unknown single-track playback actions", async () => {

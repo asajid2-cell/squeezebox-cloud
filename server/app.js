@@ -2002,9 +2002,7 @@ async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force =
           prewarmSpotifyLibrary(lms, status.id);
         }
         if (maintainPlayback) await maintainVisiblePlaybackQueue(lms, status, track, { observedTrackChanged, queueAdvanceEpoch });
-        const waitingForVisibleQueueAdvance =
-          appState.playback.appManagedPlayback &&
-          appState.queue.length > 0;
+        const waitingForVisibleQueueAdvance = appState.queue.length > 0;
         if (!trackInfoCandidate && appState.nowPlaying?.id === "idle" && !waitingForVisibleQueueAdvance) {
           const idlePlayback = { history: [], previousTracks: [], appManagedPlayback: false };
           if (appState.playback.manualShuffle) {
