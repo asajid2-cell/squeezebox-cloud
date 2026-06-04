@@ -1687,7 +1687,12 @@ async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force =
           appState.playback.appManagedPlayback &&
           appState.queue.length > 0;
         if (!trackInfoCandidate && appState.nowPlaying?.id === "idle" && !waitingForVisibleQueueAdvance) {
-          updatePlayback({ history: [], previousTracks: [], appManagedPlayback: false });
+          const idlePlayback = { history: [], previousTracks: [], appManagedPlayback: false };
+          if (appState.playback.manualShuffle) {
+            idlePlayback.shuffle = false;
+            idlePlayback.manualShuffle = false;
+          }
+          updatePlayback(idlePlayback);
           updateTrackInfo(idleTrackInfo);
         }
       }

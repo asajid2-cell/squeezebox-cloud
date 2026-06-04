@@ -865,6 +865,45 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.playback).toMatchObject({ appManagedPlayback: false, history: [], previousTracks: [] });
   });
 
+  it("clears stale manual shuffle when a manually shuffled queue ends", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      manualShuffle: true,
+      smartQueue: false,
+      appManagedPlayback: true,
+      history: ["manual-stale-history"],
+      previousTracks: [{ title: "Previous Track", artist: "Tester", path: "/music/previous.mp3", source: "Local library" }]
+    };
+    updateNowPlaying({ id: "last-manual-track", title: "Last Manual Track", artist: "Tester", source: "LMS", duration: 100, elapsed: 99, canSeek: true });
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async status() {
+          return { id: "hot-player", name: "Test Speaker", connected: true, online: true, mode: "stop", volume: 44 };
+        },
+        async nowPlaying() {
+          return { id: "idle", title: "No track playing", artist: "Connect a player or request a song", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null };
+        }
+      }
+    });
+
+    resetRefreshStateForTests();
+    const response = await request(app).get("/api/state").expect(200);
+
+    expect(response.body.nowPlaying).toMatchObject({ id: "idle", title: "No track playing" });
+    expect(response.body.playback).toMatchObject({
+      shuffle: false,
+      manualShuffle: false,
+      smartQueue: false,
+      appManagedPlayback: false,
+      history: [],
+      previousTracks: []
+    });
+  });
+
   it("seeks the current player position", async () => {
     updateNowPlaying({ id: "seek-track", title: "Seek Track", artist: "Tester", source: "LMS", duration: 100, elapsed: 12, canSeek: true });
     const response = await request(createApp({ lms: mockLms })).post("/api/player/seek").send({ seconds: 42 }).expect(200);
