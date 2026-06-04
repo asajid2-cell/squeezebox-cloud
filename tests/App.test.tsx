@@ -321,12 +321,14 @@ describe("Cloud Squeeze UI", () => {
   });
 
   it("searches Spotify when the Spotify source is selected", async () => {
+    const fetchMock = vi.mocked(fetch);
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Library" }));
     await userEvent.click(screen.getByRole("button", { name: "Spotify" }));
     await userEvent.type(screen.getByLabelText("Search music"), "drake");
     await waitFor(() => expect(screen.getByText("Headlines")).toBeInTheDocument());
     expect(screen.getByText(/Drake - Take Care/)).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/spotify/search") && String(url).includes("q=drake") && String(url).includes("limit=20"))).toBe(true);
   });
 
   it("does not show playback actions for Spotify search containers", async () => {
