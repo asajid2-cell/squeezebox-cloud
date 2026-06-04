@@ -137,7 +137,7 @@ export async function postQueue(track: Partial<Track> & { requestedBy?: string }
   return responseJson(response, "Queue request failed");
 }
 
-export async function updateQueueItem(id: string, updates: { title?: string; artist?: string; album?: string; requestedBy?: string }) {
+export async function updateQueueItem(id: string, updates: { title?: string; artist?: string; album?: string }) {
   const response = await fetch(`${apiBase}/queue/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },

@@ -616,7 +616,7 @@ function QueuePanel({ queue, onRefresh, onAction }: { queue: AppState["queue"]; 
                   <Check size={16} />
                 </button>
               ) : (
-                <button aria-label={`Edit ${item.title}`} title="Edit title, artist, and requester" data-tooltip="Edit details" className="icon-button" onClick={() => beginEdit(item)}>
+                <button aria-label={`Edit ${item.title}`} title="Edit title and artist" data-tooltip="Edit details" className="icon-button" onClick={() => beginEdit(item)}>
                   <SlidersHorizontal size={16} />
                 </button>
               )}
