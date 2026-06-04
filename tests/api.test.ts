@@ -113,7 +113,8 @@ describe("Cloud Squeeze API", () => {
         .expect(200);
 
       expect(response.body.results[0]).toMatchObject({ title: "Art Match", art: "api/artwork/local-cover" });
-      expect(enrichmentLimit).toBeGreaterThanOrEqual(200);
+      expect(enrichmentLimit).toBeGreaterThan(0);
+      expect(enrichmentLimit).toBeLessThanOrEqual(60);
     } finally {
       config.musicSourceDir = previousMusicDir;
       await fs.rm(root, { recursive: true, force: true });
