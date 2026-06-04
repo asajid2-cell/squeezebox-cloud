@@ -996,19 +996,21 @@ export function createApp({ lms = new LmsClient() } = {}) {
     try {
       const playerId = await hotPlayerId(lms);
       logEvent("transport.previous.request", { queue: queueSummary(), playback: appState.playback, nowPlaying: trackSummary(appState.nowPlaying) });
-      const previous = peekPreviousTrack();
+      const previous = peekPreviousTrackForCurrent(appState.nowPlaying);
       if (previous) {
         const currentBeforePrevious = appState.nowPlaying;
         await lms.playTrack(playerId, previous, "play-now");
-        popPreviousTrack();
+        popPreviousTrackForCurrent(currentBeforePrevious);
         restoreCurrentTrackAfterPrevious(currentBeforePrevious);
         updatePlayback({ appManagedPlayback: true });
         setMode("play");
         markPendingPlayback(previous);
         updateNowPlaying(optimisticTrack(previous));
       } else if (appState.player.mode === "stop" || appState.player.mode === "stopped") {
+        pruneStalePreviousSelfEntries(appState.nowPlaying);
         logEvent("transport.previous.noop", { reason: "stopped", queue: queueSummary(), nowPlaying: trackSummary(appState.nowPlaying) });
       } else {
+        pruneStalePreviousSelfEntries(appState.nowPlaying);
         logEvent("transport.previous.noop", { reason: "empty-app-history", queue: queueSummary(), nowPlaying: trackSummary(appState.nowPlaying) });
       }
       if (previous && !process.env.VITEST) {
@@ -2647,6 +2649,47 @@ function popPreviousTrack() {
 
 function peekPreviousTrack() {
   return (appState.playback.previousTracks || [])[0] || null;
+}
+
+function peekPreviousTrackForCurrent(currentTrack = appState.nowPlaying) {
+  return previousTrackIndexForCurrent(currentTrack).track;
+}
+
+function popPreviousTrackForCurrent(currentTrack = appState.nowPlaying) {
+  const { index: nextIndex, staleIndexes } = previousTrackIndexForCurrent(currentTrack);
+  const previousTracks = appState.playback.previousTracks || [];
+  if (nextIndex < 0) return null;
+  const previous = previousTracks[nextIndex];
+  const staleSet = new Set(staleIndexes);
+  const rest = previousTracks.filter((_, index) => index !== nextIndex && !staleSet.has(index));
+  updatePlayback({ previousTracks: rest });
+  return previous;
+}
+
+function pruneStalePreviousSelfEntries(currentTrack = appState.nowPlaying) {
+  const { staleIndexes } = previousTrackIndexForCurrent(currentTrack);
+  if (staleIndexes.length === 0) return;
+  const staleSet = new Set(staleIndexes);
+  updatePlayback({ previousTracks: (appState.playback.previousTracks || []).filter((_, index) => !staleSet.has(index)) });
+}
+
+function previousTrackIndexForCurrent(currentTrack = appState.nowPlaying) {
+  const previousTracks = appState.playback.previousTracks || [];
+  const currentKey = trackKey(currentTrack);
+  const staleIndexes = [];
+  const index = previousTracks.findIndex((track, trackIndex) => {
+    const previousKey = trackKey(track);
+    const sameCurrent =
+      currentKey &&
+      previousKey &&
+      (previousKey === currentKey || tracksSharePlaybackIdentity(track, currentTrack));
+    if (sameCurrent) {
+      staleIndexes.push(trackIndex);
+      return false;
+    }
+    return true;
+  });
+  return { index, track: index >= 0 ? previousTracks[index] : null, staleIndexes };
 }
 
 function isRestorablePreviousTrack(track) {

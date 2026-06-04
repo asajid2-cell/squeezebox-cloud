@@ -1270,6 +1270,85 @@ describe("Cloud Squeeze API", () => {
     expect(appState.playback.previousTracks).toEqual([]);
   });
 
+  it("skips stale current-track entries when restoring app previous history", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = {
+      id: "current",
+      title: "Current Track",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 12,
+      canSeek: true,
+      art: null,
+      path: "/music/current.mp3"
+    };
+    appState.playback = {
+      ...appState.playback,
+      appManagedPlayback: true,
+      previousTracks: [
+        { title: "Current Track", artist: "Tester", path: "/music/current.mp3", source: "Local library" },
+        { title: "Actual Previous", artist: "Tester", path: "/music/actual-previous.mp3", source: "Local library" }
+      ]
+    };
+    const played: Array<{ action: string; title?: string; path?: string }> = [];
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string; path?: string }, action: string) {
+        played.push({ action, title: track.title, path: track.path });
+        return "ok";
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/previous").expect(200);
+
+    expect(response.body.action).toBe("app-previous");
+    expect(response.body.nowPlaying).toMatchObject({ title: "Actual Previous", path: "/music/actual-previous.mp3" });
+    expect(played).toEqual([{ action: "play-now", title: "Actual Previous", path: "/music/actual-previous.mp3" }]);
+    expect(response.body.queue).toEqual([expect.objectContaining({ title: "Current Track", path: "/music/current.mp3" })]);
+    expect(response.body.playback.previousTracks).toEqual([]);
+  });
+
+  it("no-ops previous instead of restarting the current track when history only contains self entries", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = {
+      id: "current",
+      title: "Current Track",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 12,
+      canSeek: true,
+      art: null,
+      path: "/music/current.mp3"
+    };
+    appState.playback = {
+      ...appState.playback,
+      previousTracks: [
+        { title: "Current Track", artist: "Tester", path: "/music/current.mp3", source: "Local library" }
+      ]
+    };
+    const played: string[] = [];
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string }) {
+        played.push(String(track.title || ""));
+        return "ok";
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/previous").expect(200);
+
+    expect(response.body.action).toBe("noop");
+    expect(response.body.nowPlaying).toMatchObject({ title: "Current Track", path: "/music/current.mp3" });
+    expect(played).toEqual([]);
+    expect(response.body.playback.previousTracks).toEqual([]);
+  });
+
   it("restores the forward track after app previous so next can return to it", async () => {
     const played: Array<{ action: string; track: { title?: string; uri?: string } }> = [];
     appState.queue.splice(0, appState.queue.length);
