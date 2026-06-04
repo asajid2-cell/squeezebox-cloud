@@ -2217,7 +2217,7 @@ function preserveKnownNowPlayingMetadata(fresh, requestedTrack = null) {
   const known = requestedTrack || lookupRecentPlaybackMetadata(fresh) || (tracksSharePlaybackIdentity(fresh, current) ? current : null);
   if (!known || !tracksSharePlaybackIdentity(fresh, known)) return fresh;
   const art = fresh.art || known.art || null;
-  if (!isUploadedTrackPath(fresh.path || known.path)) return { ...fresh, art };
+  if (!shouldPreserveKnownTrackMetadata(fresh, known, requestedTrack)) return { ...fresh, art };
   const preserved = {
     ...fresh,
     title: known.title || fresh.title,
@@ -2228,6 +2228,13 @@ function preserveKnownNowPlayingMetadata(fresh, requestedTrack = null) {
   };
   rememberPlaybackMetadata(preserved);
   return preserved;
+}
+
+function shouldPreserveKnownTrackMetadata(fresh, known, requestedTrack = null) {
+  if (isUploadedTrackPath(fresh.path || known.path)) return true;
+  if (requestedTrack && isPlayableSpotifyTrack(known)) return true;
+  if (isPlayableSpotifyTrack(fresh) && isPlayableSpotifyTrack(known)) return true;
+  return false;
 }
 
 function isUploadedTrackPath(value) {

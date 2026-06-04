@@ -1755,6 +1755,66 @@ describe("Cloud Squeeze API", () => {
     });
   });
 
+  it("preserves selected Spotify metadata when LMS normalizes the now playing title", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const previousSpotify = { ...appState.services.spotify };
+    updateSpotifyStatus({ configured: true, reachable: true, detail: "Spotty detected" });
+    const selected = {
+      id: "spotify:track:0WQiDwKJclirSYG9v5tayI",
+      title: "There Is a Light That Never Goes Out - 2011 Remaster",
+      artist: "The Smiths",
+      album: "The Queen Is Dead",
+      source: "Spotify",
+      uri: "spotify:track:0WQiDwKJclirSYG9v5tayI",
+      kind: "track",
+      art: "https://i.scdn.co/image/cover"
+    };
+    try {
+      const app = createApp({
+        lms: {
+          ...mockLms,
+          async spotifySearch() {
+            return [selected];
+          },
+          async nowPlaying() {
+            return {
+              id: "spotify://track:0WQiDwKJclirSYG9v5tayI",
+              title: "There Is a Light That Never Goes Out",
+              artist: "The Smiths",
+              album: "The Queen Is Dead",
+              source: "Spotify",
+              uri: "spotify:track:0WQiDwKJclirSYG9v5tayI",
+              duration: 244,
+              elapsed: 0,
+              canSeek: true,
+              art: null
+            };
+          }
+        }
+      });
+      const search = await request(app).get("/api/spotify/search?q=smiths").expect(200);
+      const track = search.body.results[0];
+
+      const response = await request(app)
+        .post("/api/player/track")
+        .send({ action: "play-now", track })
+        .expect(200);
+
+      expect(response.body.nowPlaying).toMatchObject({
+        title: "There Is a Light That Never Goes Out - 2011 Remaster",
+        artist: "The Smiths",
+        album: "The Queen Is Dead",
+        source: "Spotify",
+        uri: "spotify:track:0WQiDwKJclirSYG9v5tayI",
+        duration: 244,
+        canSeek: true,
+        art: "https://i.scdn.co/image/cover"
+      });
+    } finally {
+      updateSpotifyStatus(previousSpotify);
+    }
+  });
+
   it("does not reject skipped Spotify rows beyond the public queue limit", async () => {
     appState.queue.splice(0, appState.queue.length);
     const previousMaxQueuePerUser = appState.admin.maxQueuePerUser;
