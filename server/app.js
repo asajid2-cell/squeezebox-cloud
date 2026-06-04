@@ -1004,7 +1004,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
         }
         setMode("play");
       }
-      refreshLms(lms, { force: true, maintainPlayback: appState.queue.length > 0 || appState.playback.smartQueue }).catch(() => null);
+      refreshLms(lms, { force: true, maintainPlayback: false }).catch(() => null);
       res.json({ ok: true, seconds, player: appState.player, nowPlaying: appState.nowPlaying });
     } catch (error) {
       res.status(502).json({ error: error.message, seconds, seekApplied: false, player: appState.player, nowPlaying: appState.nowPlaying });

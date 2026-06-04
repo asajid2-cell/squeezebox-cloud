@@ -974,6 +974,49 @@ describe("Cloud Squeeze API", () => {
     expect(state.body.nowPlaying.elapsed).toBeLessThan(45);
   });
 
+  it("does not consume the visible queue immediately after seeking near the end", async () => {
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "player-1", connected: true, online: true, mode: "play" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, appManagedPlayback: true, previousTracks: [], history: [] };
+    updateNowPlaying({
+      id: "current",
+      title: "Current Track",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      path: "/music/current.mp3",
+      duration: 100,
+      elapsed: 20,
+      canSeek: true,
+      art: null
+    });
+    addQueueItem({ title: "Queued Track", artist: "Tester", requestedBy: "guest", path: "/music/queued.mp3" });
+    const played: string[] = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async nowPlaying() {
+          return { id: "current", title: "Current Track", artist: "Tester", album: "", source: "Local library", path: "/music/current.mp3", duration: 100, elapsed: 99, canSeek: true, art: null };
+        },
+        async control() {
+          return "ok";
+        },
+        async playTrack(_playerId: string, track: { title?: string }) {
+          played.push(String(track.title || ""));
+          return "ok";
+        }
+      }
+    });
+
+    await request(app).post("/api/player/seek").send({ seconds: 99 }).expect(200);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(played).toEqual([]);
+    expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Queued Track"]);
+    expect(appState.nowPlaying.title).toBe("Current Track");
+  });
+
   it("rejects invalid seek values", async () => {
     const app = createApp({ lms: mockLms });
 
