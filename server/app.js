@@ -976,8 +976,9 @@ export function createApp({ lms = new LmsClient() } = {}) {
         !appState.playback.smartQueue &&
         (appState.player.mode === "stop" || appState.player.mode === "stopped");
       if (!played && !stoppedWithEmptyManualQueue && !emptyAppManagedQueue) {
-        rememberPreviousTrack(appState.nowPlaying);
+        const currentBeforeNext = appState.nowPlaying;
         await control(lms, "next");
+        rememberPreviousTrack(currentBeforeNext);
       }
       if (!stoppedWithEmptyManualQueue && !emptyAppManagedQueue) refreshLms(lms, { force: true }).catch(() => null);
       const resultAction = played ? "visible-queue-next" : (stoppedWithEmptyManualQueue || emptyAppManagedQueue) ? "noop" : "next";

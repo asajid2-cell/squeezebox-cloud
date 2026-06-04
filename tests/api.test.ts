@@ -3032,6 +3032,37 @@ describe("Cloud Squeeze API", () => {
     expect(appState.playback.previousTracks).toEqual([]);
   });
 
+  it("does not record previous history when LMS next fails", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.nowPlaying = {
+      id: "current",
+      title: "Current LMS Next Failure",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 12,
+      canSeek: true,
+      art: null,
+      path: "/music/test/current-lms-next-failure.mp3"
+    };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, appManagedPlayback: false, previousTracks: [] };
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    const lms = {
+      ...mockLms,
+      async control(_playerId: string, action: string) {
+        if (action === "next") throw new Error("LMS refused next");
+        return "ok";
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/next").expect(502);
+
+    expect(response.body.error).toContain("LMS refused next");
+    expect(appState.playback.previousTracks).toEqual([]);
+    expect(appState.nowPlaying).toMatchObject({ title: "Current LMS Next Failure" });
+  });
+
   it("uses the hot player id for visible queue next without waiting on a fresh status call", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true };
