@@ -4272,6 +4272,56 @@ describe("Cloud Squeeze API", () => {
     expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Generated Existing"]);
   });
 
+  it("rejects stale playback shuffle when the queue is cleared while settings are pending", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, manualShuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "spotify", history: [] };
+    addQueueItem({ title: "Manual A", artist: "Tester", requestedBy: "guest", uri: "spotify:track:manual-a", source: "Spotify", kind: "track" });
+    let releaseShuffleControl: () => void = () => {};
+    let markShuffleControlStarted: () => void = () => {};
+    const shuffleGate = new Promise<void>((resolve) => {
+      releaseShuffleControl = resolve;
+    });
+    const shuffleControlStarted = new Promise<void>((resolve) => {
+      markShuffleControlStarted = resolve;
+    });
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string) {
+          if (action === "shuffle") {
+            markShuffleControlStarted();
+            await shuffleGate;
+          }
+          return "ok";
+        },
+        async spotifySearch() {
+          return [{ title: "Generated Leak", artist: "Tester", uri: "spotify:track:generated-leak", source: "Spotify", kind: "track" }];
+        }
+      }
+    });
+
+    const playbackRequest = request(app)
+      .post("/api/player/playback")
+      .send({ shuffle: true, smartQueue: false })
+      .expect(409);
+    const playbackPromise = playbackRequest.then((response) => response);
+    await shuffleControlStarted;
+    const clearRequest = request(app).delete("/api/queue").expect(200);
+    const clearPromise = clearRequest.then((response) => response);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    releaseShuffleControl();
+    const clear = await clearPromise;
+    const playback = await playbackPromise;
+
+    expect(clear.body.queue).toEqual([]);
+    expect(playback.body.error).toContain("Queue was cleared");
+    expect(playback.body.queued).toEqual([]);
+    expect(playback.body.queue).not.toEqual(expect.arrayContaining([expect.objectContaining({ title: "Generated Leak" })]));
+    expect(appState.queue).toEqual([]);
+    expect(appState.playback).toMatchObject({ shuffle: false, manualShuffle: false, smartQueue: false });
+    expect(appState.queue).not.toEqual(expect.arrayContaining([expect.objectContaining({ title: "Generated Leak" })]));
+  });
+
   it("rejects malformed playback settings instead of silently ignoring them", async () => {
     const response = await request(createApp({ lms: mockLms }))
       .post("/api/player/playback")

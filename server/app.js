@@ -931,6 +931,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
     try {
       await control(lms, "stop");
       cancelPendingVisibleQueueAdvance();
+      markQueueCleared();
       for (const item of [...appState.queue]) {
         removeQueueItem(item.id);
       }
@@ -1074,7 +1075,9 @@ export function createApp({ lms = new LmsClient() } = {}) {
     }
   });
 
-  app.post("/api/player/playback", async (req, res) => withQueueMutationLock(async () => {
+  app.post("/api/player/playback", async (req, res) => {
+    const clearEpochAtRequest = queueClearState.epoch;
+    return withQueueMutationLock(async () => {
     const next = {};
     try {
       const parsed = playbackSchema.safeParse(req.body || {});
@@ -1170,6 +1173,10 @@ export function createApp({ lms = new LmsClient() } = {}) {
       if (queueModeChanged && (next.smartQueue === false || next.shuffle === false || next.shuffle === true || sourceChanged)) {
         removeGeneratedQueueItems();
       }
+      if (queueAddStaleAfterClear(clearEpochAtRequest)) {
+        res.status(409).json({ error: "Queue was cleared while playback settings were pending", playback: appState.playback, queue: appState.queue, queued: [] });
+        return;
+      }
       updatePlayback(next);
       let queued = [];
       if (queueModeChanged && appState.playback.smartQueue) {
@@ -1182,12 +1189,18 @@ export function createApp({ lms = new LmsClient() } = {}) {
           queued = await activateGeneratedQueue(lms, playerId, { shuffle: true, mode: appState.playback.smartShuffleSource, controlsReady: true });
         }
       }
+      if (queueAddStaleAfterClear(clearEpochAtRequest)) {
+        stopGeneratedPlayback();
+        res.status(409).json({ error: "Queue was cleared while playback settings were pending", playback: appState.playback, queue: appState.queue, queued: [] });
+        return;
+      }
       logEvent("playback.result", { after: appState.playback, queued: queued.map(trackSummary), queue: queueSummary() });
       res.json({ ok: true, playback: appState.playback, queued, queue: appState.queue });
     } catch (error) {
       res.status(502).json({ error: error.message, playback: appState.playback });
     }
-  }));
+    });
+  });
 
   app.post("/api/player/smart-shuffle", async (req, res) => withQueueMutationLock(async () => {
     try {
