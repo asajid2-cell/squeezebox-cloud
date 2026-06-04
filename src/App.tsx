@@ -300,7 +300,7 @@ function PublicScreen({
   if (activeScreen === "Playlists") {
     return (
       <div className="content-grid focus-grid">
-        <PlaylistsPanel onRefresh={onRefresh} onAction={onAction} />
+        <PlaylistsPanel requestsOpen={publicRequestsOpen(state)} onRefresh={onRefresh} onAction={onAction} />
         <RightRail state={state} />
       </div>
     );
@@ -802,7 +802,7 @@ function SearchPanel({
           />
         )}
         {visibleResults.map((track) => (
-          <SearchResultRow key={track.id} track={track} onRefresh={onRefresh} onAction={onAction} />
+          <SearchResultRow key={track.id} track={track} requestsOpen={publicRequestsOpen(state)} onRefresh={onRefresh} onAction={onAction} />
         ))}
       </div>
       {(sourceFilter === "local" || sourceFilter === "uploaded" || sourceFilter === "spotify") && results.length > 3 && (
@@ -814,7 +814,7 @@ function SearchPanel({
   );
 }
 
-function SearchResultRow({ track, onRefresh, onAction }: { track: Track; onRefresh: () => void; onAction: ActionRunner }) {
+function SearchResultRow({ track, requestsOpen, onRefresh, onAction }: { track: Track; requestsOpen: boolean; onRefresh: () => void; onAction: ActionRunner }) {
   const playable = !track.kind || track.kind === "track" || Boolean(track.path || track.lmsTrackId);
   const art = track.art || track.artwork;
   return (
@@ -829,15 +829,15 @@ function SearchResultRow({ track, onRefresh, onAction }: { track: Track; onRefre
       </div>
       <span>{track.kind && track.kind !== "track" ? track.kind : track.duration ? formatTime(track.duration) : "--:--"}</span>
       <div className="track-actions">
-        {playable && <button className="ghost-add" onClick={() => onAction(async () => { await playTrack("play-now", track); await onRefresh(); })}>Play now</button>}
-        {playable && <button className="ghost-add" onClick={() => onAction(async () => { await playTrack("play-next", track); await onRefresh(); })}>Play next</button>}
-        {playable && <button className="ghost-add" onClick={() => onAction(async () => { await playTrack("add-queue", track); await onRefresh(); })}>Queue</button>}
+        {playable && <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("play-now", track); await onRefresh(); })}>Play now</button>}
+        {playable && <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("play-next", track); await onRefresh(); })}>Play next</button>}
+        {playable && <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("add-queue", track); await onRefresh(); })}>Queue</button>}
       </div>
     </div>
   );
 }
 
-function PlaylistsPanel({ onRefresh, onAction }: { onRefresh: () => void; onAction: ActionRunner }) {
+function PlaylistsPanel({ requestsOpen, onRefresh, onAction }: { requestsOpen: boolean; onRefresh: () => void; onAction: ActionRunner }) {
   const [collections, setCollections] = useState<LibraryCollection[]>([]);
   const [source, setSource] = useState<"local" | "spotify">("local");
   const [spotifyType, setSpotifyType] = useState<"playlists" | "albums" | "artists" | "tracks" | "home">("playlists");
@@ -983,6 +983,7 @@ function PlaylistsPanel({ onRefresh, onAction }: { onRefresh: () => void; onActi
           hasMore={hasMoreDetail}
           onLoadMore={loadMoreDetail}
           getQueueTracks={queueableDetailTracks}
+          requestsOpen={requestsOpen}
           onRefresh={onRefresh}
           onAction={onAction}
         />
@@ -1031,6 +1032,7 @@ function PlaylistTracks({
   hasMore,
   onLoadMore,
   getQueueTracks,
+  requestsOpen,
   onRefresh,
   onAction
 }: {
@@ -1040,6 +1042,7 @@ function PlaylistTracks({
   hasMore: boolean;
   onLoadMore: () => void;
   getQueueTracks: () => Promise<Track[] | undefined>;
+  requestsOpen: boolean;
   onRefresh: () => void;
   onAction: ActionRunner;
 }) {
@@ -1061,8 +1064,8 @@ function PlaylistTracks({
     <div className="playlist-detail" aria-label={`${title} tracks`}>
       <div className="playlist-detail-actions">
         <span>{loading ? "Loading tracks" : `${tracks.length} tracks`}</span>
-        <button className="ghost-add" disabled={tracks.length === 0} onClick={() => queueAll("play-next")}>Play next</button>
-        <button className="ghost-add" disabled={tracks.length === 0} onClick={() => queueAll("add-queue")}>Queue all</button>
+        <button className="ghost-add" disabled={!requestsOpen || tracks.length === 0} onClick={() => queueAll("play-next")}>Play next</button>
+        <button className="ghost-add" disabled={!requestsOpen || tracks.length === 0} onClick={() => queueAll("add-queue")}>Queue all</button>
       </div>
       {loading && <EmptyState title="Opening playlist" detail="Loading songs from the selected collection." />}
       {!loading && tracks.length === 0 && <EmptyState title="No songs found" detail="This playlist did not expose tracks yet." />}
@@ -1079,9 +1082,9 @@ function PlaylistTracks({
             </div>
             <span>{track.duration ? formatTime(track.duration) : "--:--"}</span>
             <div className="track-actions">
-              <button className="ghost-add" onClick={() => onAction(async () => { await playTrack("play-now", track); await onRefresh(); })}>Play now</button>
-              <button className="ghost-add" onClick={() => onAction(async () => { await playTrack("play-next", track); await onRefresh(); })}>Play next</button>
-              <button className="ghost-add" onClick={() => onAction(async () => { await playTrack("add-queue", track); await onRefresh(); })}>Queue</button>
+              <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("play-now", track); await onRefresh(); })}>Play now</button>
+              <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("play-next", track); await onRefresh(); })}>Play next</button>
+              <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("add-queue", track); await onRefresh(); })}>Queue</button>
             </div>
           </div>
         ))}
@@ -1418,4 +1421,8 @@ function EmptyState({ title, detail }: { title: string; detail: string }) {
 function formatTime(seconds: number) {
   const safe = Math.max(0, Math.round(seconds || 0));
   return `${Math.floor(safe / 60)}:${String(safe % 60).padStart(2, "0")}`;
+}
+
+function publicRequestsOpen(state: AppState) {
+  return state.admin.publicRequests !== false && !state.schedule.current?.requestsPaused;
 }

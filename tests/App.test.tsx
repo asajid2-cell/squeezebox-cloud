@@ -233,6 +233,48 @@ describe("Cloud Squeeze UI", () => {
     expect(screen.getByRole("button", { name: "Remove Awake" })).toBeInTheDocument();
   });
 
+  it("disables public track actions when requests are paused", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const defaultFetch = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (url.includes("/api/state")) {
+        return jsonResponse({
+          player: { id: "p1", name: "Test Speaker", connected: true, online: true, mode: "play", volume: 68 },
+          nowPlaying: { id: "t1", title: "Midnight City", artist: "M83", album: "Hurry Up", source: "Spotify", duration: 243, elapsed: 151, canSeek: true },
+          queue: [],
+          recentPicks: [],
+          schedule: { current: { name: "Closed", until: "10:00 PM", requestsPaused: false }, next: { name: "Open", time: "10:00 PM - 8:00 AM", requestsPaused: false } },
+          rules: [],
+          services: {
+            spotify: { configured: true, reachable: true, detail: "ok" },
+            localLibrary: { root: "Downloads", reachable: true, trackCount: 2, uploadedCount: 1 },
+            musicInfo: { configured: true, reachable: true, detail: "Plugin ready" }
+          },
+          trackInfo: { artistBio: "", albumReview: "", lyrics: "" },
+          admin: { publicRequests: false, maxQueuePerUser: 3, moderation: "basic", scheduleEnabled: true }
+        });
+      }
+      if (url.includes("/api/library/search")) {
+        return jsonResponse({ results: [{ id: "upload-1", title: "Shabang", artist: "Drake", source: "Uploaded", path: "/music/uploads/Drake - Shabang.mp3" }] });
+      }
+      return defaultFetch?.(url, options) ?? jsonResponse({ ok: true });
+    });
+
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Library" }));
+    await userEvent.click(screen.getByRole("button", { name: "Uploaded" }));
+    await userEvent.type(screen.getByLabelText("Search music"), "shabang");
+
+    expect(await screen.findByText("Shabang")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Play now" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Play next" })).toBeDisabled();
+    const queueButton = screen.getAllByRole("button", { name: "Queue" }).at(-1);
+    expect(queueButton).toBeTruthy();
+    expect(queueButton).toBeDisabled();
+    await userEvent.click(queueButton!);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/player/track"))).toBe(false);
+  });
+
   it("turns manual queue shuffle off instead of cycling into smart shuffle", async () => {
     const fetchMock = vi.mocked(fetch);
     const defaultFetch = fetchMock.getMockImplementation();
