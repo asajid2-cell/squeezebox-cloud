@@ -713,13 +713,24 @@ export function createApp({ lms = new LmsClient() } = {}) {
     }
   });
 
-  app.get("/api/library/collections", async (_req, res) => {
-    const source = parseLibrarySource(_req.query.source);
+  app.get("/api/library/collections", async (req, res) => {
+    const source = parseLibrarySource(req.query.source);
     if (!source) {
       res.status(400).json({ error: "Library source must be all, local, or uploaded" });
       return;
     }
-    res.json({ collections: await getCollections(undefined, source) });
+    const limit = parseBoundedIntegerParam(req.query.limit, { defaultValue: 1000, min: 1, max: 2000 });
+    if (limit === null) {
+      res.status(400).json({ error: "Library collections limit must be a positive integer up to 2000" });
+      return;
+    }
+    const offset = parseBoundedIntegerParam(req.query.offset, { defaultValue: 0, min: 0, max: 10000 });
+    if (offset === null) {
+      res.status(400).json({ error: "Library collections offset must be a non-negative integer" });
+      return;
+    }
+    const collections = await getCollections(undefined, source);
+    res.json({ collections: collections.slice(offset, offset + limit) });
   });
 
   app.get("/api/library/collection", async (req, res) => {

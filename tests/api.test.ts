@@ -4331,6 +4331,40 @@ describe("Cloud Squeeze API", () => {
     }
   });
 
+  it("paginates local collection lists without repeating the first page", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const previousUploadDir = config.uploadDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-collections-page-"));
+    config.musicSourceDir = root;
+    config.uploadDir = path.join(root, "uploads");
+    try {
+      for (let index = 1; index <= 5; index += 1) {
+        const folder = path.join(root, "collections", "Probe Artist", `Probe Collection ${index}`, "Tracks");
+        await fs.mkdir(folder, { recursive: true });
+        await fs.writeFile(path.join(folder, `Track ${index}.mp3`), "ID3");
+      }
+
+      const app = createApp({ lms: mockLms });
+      const first = await request(app).get("/api/library/collections?source=local&limit=2&offset=0").expect(200);
+      const second = await request(app).get("/api/library/collections?source=local&limit=2&offset=2").expect(200);
+      const invalidLimit = await request(app).get("/api/library/collections?source=local&limit=0").expect(400);
+      const invalidOffset = await request(app).get("/api/library/collections?source=local&offset=-1").expect(400);
+
+      const firstKeys = first.body.collections.map((collection: { collection: string; folder: string }) => `${collection.collection}/${collection.folder}`);
+      const secondKeys = second.body.collections.map((collection: { collection: string; folder: string }) => `${collection.collection}/${collection.folder}`);
+      expect(firstKeys).toHaveLength(2);
+      expect(secondKeys).toHaveLength(2);
+      expect(secondKeys.some((key: string) => firstKeys.includes(key))).toBe(false);
+      expect(invalidLimit.body.error).toContain("limit");
+      expect(invalidOffset.body.error).toContain("offset");
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      config.uploadDir = previousUploadDir;
+      clearLibraryCaches();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("accepts only validated audio uploads", async () => {
     const previousUploadDir = config.uploadDir;
     const previousMusicDir = config.musicSourceDir;
