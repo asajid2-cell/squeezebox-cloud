@@ -538,8 +538,8 @@ export function createApp({ lms = new LmsClient() } = {}) {
     }
     if (queued.length > 0) markQueueManagedPlayback();
     if (action === "play-next") queued.reverse();
-    const rejected = Math.max(0, playable.length - queued.length);
-    logEvent("queue.batch", { action, count: queued.length, requested: playable.length, deduped: uniquePlayable.length, rejected, queued: queued.map(trackSummary), queue: queueSummary() });
+    const rejected = Math.max(0, tracks.length - queued.length);
+    logEvent("queue.batch", { action, count: queued.length, requested: tracks.length, playable: playable.length, deduped: uniquePlayable.length, rejected, queued: queued.map(trackSummary), queue: queueSummary() });
     res.json({ ok: true, action, queued, queue: appState.queue, playback: appState.playback, accepted: queued.length, rejected });
   }));
 

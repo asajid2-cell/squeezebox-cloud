@@ -1847,7 +1847,9 @@ describe("Cloud Squeeze API", () => {
   it("does not reject skipped Spotify rows beyond the public queue limit", async () => {
     appState.queue.splice(0, appState.queue.length);
     const previousMaxQueuePerUser = appState.admin.maxQueuePerUser;
+    const previousSpotify = { ...appState.services.spotify };
     appState.admin = { ...appState.admin, maxQueuePerUser: 2 };
+    updateSpotifyStatus({ configured: true, reachable: true, detail: "Spotty detected" });
     try {
       addQueueItem({ title: "Existing Guest", artist: "Tester", path: "/music/test/existing-guest.mp3", requestedBy: "guest" });
       const app = createApp({ lms: mockLms });
@@ -1872,6 +1874,7 @@ describe("Cloud Squeeze API", () => {
       expect(appState.queue).not.toEqual(expect.arrayContaining([expect.objectContaining({ uri: "spotify:track:0000000000000000000999" })]));
     } finally {
       appState.admin = { ...appState.admin, maxQueuePerUser: previousMaxQueuePerUser };
+      updateSpotifyStatus(previousSpotify);
     }
   });
 
@@ -2032,6 +2035,8 @@ describe("Cloud Squeeze API", () => {
 
     expect(response.body.queued).toHaveLength(1);
     expect(response.body.queued[0].title).toBe("Playable Track");
+    expect(response.body.accepted).toBe(1);
+    expect(response.body.rejected).toBe(1);
   });
 
   it("rejects duplicate direct playback queue requests by playable key", async () => {
