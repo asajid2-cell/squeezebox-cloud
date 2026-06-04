@@ -105,7 +105,7 @@ const volumeSchema = z.object({
 }).strict();
 
 const seekSchema = z.object({
-  seconds: z.number().finite()
+  seconds: z.number().finite().min(0)
 }).strict();
 
 const playbackSchema = z.object({

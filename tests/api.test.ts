@@ -1261,6 +1261,7 @@ describe("Cloud Squeeze API", () => {
     await request(app).post("/api/player/seek").send({ seconds: "" }).expect(400);
     await request(app).post("/api/player/seek").send({ seconds: false }).expect(400);
     await request(app).post("/api/player/seek").send({ seconds: [] }).expect(400);
+    await request(app).post("/api/player/seek").send({ seconds: -1 }).expect(400);
   });
 
   it("rejects extra seek command fields before checking playback state", async () => {
