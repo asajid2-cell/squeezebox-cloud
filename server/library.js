@@ -400,6 +400,10 @@ function matchScore(track, normalizedQuery) {
     [track.collection, 24]
   ];
   const tokens = normalizedQuery.split(" ").filter(Boolean);
+  const normalizedFields = fields.map(([field]) => normalize(field)).filter(Boolean);
+  if (tokens.length > 0 && !tokens.every((token) => normalizedFields.some((field) => field.includes(token)))) {
+    return 0;
+  }
   let score = 0;
   for (const [field, weight] of fields) {
     const normalizedField = normalize(field);
