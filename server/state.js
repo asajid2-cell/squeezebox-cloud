@@ -231,21 +231,17 @@ function cleanText(value) {
 
 function recordRecentPick(item, status) {
   if (item.requestedBy === "smart shuffle" || item.requestedBy === "shuffle") return;
-  appState.recentPicks.unshift({ title: item.title, artist: item.artist, status });
+  appState.recentPicks.unshift({ id: item.id, title: item.title, artist: item.artist, status });
   appState.recentPicks = appState.recentPicks.slice(0, 8);
 }
 
 function removeRecentPick(item) {
-  const index = appState.recentPicks.findIndex(
-    (pick) => pick.title === item.title && pick.artist === item.artist
-  );
+  const index = appState.recentPicks.findIndex((pick) => pick.id === item.id);
   if (index >= 0) appState.recentPicks.splice(index, 1);
 }
 
 function updateRecentPick(previous, next) {
-  const index = appState.recentPicks.findIndex(
-    (pick) => pick.title === previous.title && pick.artist === previous.artist
-  );
+  const index = appState.recentPicks.findIndex((pick) => pick.id === previous.id);
   if (index >= 0) {
     appState.recentPicks[index] = {
       ...appState.recentPicks[index],

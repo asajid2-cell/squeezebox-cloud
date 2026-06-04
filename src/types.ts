@@ -35,7 +35,7 @@ export type AppState = {
   };
   nowPlaying: Track;
   queue: QueueItem[];
-  recentPicks: Array<{ title: string; artist: string; status: string }>;
+  recentPicks: Array<{ id?: string; title: string; artist: string; status: string }>;
   schedule: {
     current: { name: string; until: string; requestsPaused: boolean };
     next: { name: string; time: string; requestsPaused: boolean };

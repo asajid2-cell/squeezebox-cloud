@@ -655,7 +655,9 @@ describe("Cloud Squeeze API", () => {
     addQueueItem({ title: "Generated Pick", artist: "Tester", requestedBy: "smart shuffle", path: "/music/generated.mp3" });
     addQueueItem({ title: "Manual Pick", artist: "Tester", requestedBy: "guest", path: "/music/manual.mp3" });
 
-    expect(appState.recentPicks).toEqual([{ title: "Manual Pick", artist: "Tester", status: "Queued" }]);
+    expect(appState.recentPicks).toEqual([
+      expect.objectContaining({ title: "Manual Pick", artist: "Tester", status: "Queued" }),
+    ]);
   });
 
   it("removes recent pick entries when queued rows are removed", async () => {
@@ -663,17 +665,45 @@ describe("Cloud Squeeze API", () => {
     appState.recentPicks.splice(0, appState.recentPicks.length);
 
     const item = addQueueItem({ title: "Remove Recent", artist: "Tester", requestedBy: "guest", path: "/music/remove.mp3" });
-    expect(appState.recentPicks).toEqual([{ title: "Remove Recent", artist: "Tester", status: "Queued" }]);
+    expect(appState.recentPicks).toEqual([
+      expect.objectContaining({ id: item.id, title: "Remove Recent", artist: "Tester", status: "Queued" }),
+    ]);
 
     await request(createApp({ lms: mockLms }))
       .patch(`/api/queue/${item.id}`)
       .send({ title: "Remove Recent Edited", artist: "Edited Tester" })
       .expect(200);
-    expect(appState.recentPicks).toEqual([{ title: "Remove Recent Edited", artist: "Edited Tester", status: "Queued" }]);
+    expect(appState.recentPicks).toEqual([
+      expect.objectContaining({ id: item.id, title: "Remove Recent Edited", artist: "Edited Tester", status: "Queued" }),
+    ]);
 
     removeQueueItem(item.id);
 
     expect(appState.recentPicks).toEqual([]);
+  });
+
+  it("tracks recent picks by queue id when duplicate songs are queued", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.recentPicks.splice(0, appState.recentPicks.length);
+
+    const first = addQueueItem({ title: "Same Song", artist: "Tester", requestedBy: "guest", path: "/music/one.mp3" });
+    const second = addQueueItem({ title: "Same Song", artist: "Tester", requestedBy: "guest", path: "/music/two.mp3" });
+
+    await request(createApp({ lms: mockLms }))
+      .patch(`/api/queue/${first.id}`)
+      .send({ title: "Edited Same Song", artist: "Tester" })
+      .expect(200);
+
+    expect(appState.recentPicks).toEqual([
+      expect.objectContaining({ id: second.id, title: "Same Song", artist: "Tester", status: "Queued" }),
+      expect.objectContaining({ id: first.id, title: "Edited Same Song", artist: "Tester", status: "Queued" }),
+    ]);
+
+    removeQueueItem(second.id);
+
+    expect(appState.recentPicks).toEqual([
+      expect.objectContaining({ id: first.id, title: "Edited Same Song", artist: "Tester", status: "Queued" }),
+    ]);
   });
 
   it("returns a compact error for malformed JSON bodies", async () => {
@@ -737,6 +767,7 @@ describe("Cloud Squeeze API", () => {
   });
 
   it("does not mutate player mode when play pause or stop control fails", async () => {
+    appState.queue.splice(0, appState.queue.length);
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
     updateNowPlaying({ id: "stale-track", title: "Stale Track", artist: "Tester", source: "LMS" });
     const lms = {
