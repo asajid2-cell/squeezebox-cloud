@@ -2539,6 +2539,20 @@ describe("Cloud Squeeze API", () => {
     const app = createApp({ lms });
 
     const next = await request(app).post("/api/player/next").expect(200);
+    appState.nowPlaying = {
+      id: "file:///music/collections/Juice%20WRLD/2MININHELL.mp3",
+      title: "2MININHELL",
+      artist: "Juice WRLD",
+      album: "Cached LMS Album",
+      source: "LMS",
+      path: "/music/collections/Juice WRLD/2MININHELL.mp3",
+      duration: 222,
+      elapsed: 6,
+      canSeek: true,
+      art: "api/artwork/ab1a6eed"
+    };
+    await refreshLmsForTests(lms, { force: true });
+    appState.nowPlaying = next.body.nowPlaying;
     await refreshLmsForTests(lms, { force: true });
 
     expect(next.body.nowPlaying).toMatchObject({

@@ -2214,7 +2214,7 @@ function preserveKnownNowPlayingMetadata(fresh, requestedTrack = null) {
   if (!fresh) return fresh;
   if (requestedTrack) rememberPlaybackMetadata(requestedTrack);
   const current = appState.nowPlaying;
-  const known = requestedTrack || lookupRecentPlaybackMetadata(fresh) || (tracksSharePlaybackIdentity(fresh, current) ? current : null);
+  const known = requestedTrack || (tracksSharePlaybackIdentity(fresh, current) ? current : null) || lookupRecentPlaybackMetadata(fresh);
   if (!known || !tracksSharePlaybackIdentity(fresh, known)) return fresh;
   const art = fresh.art || known.art || null;
   if (!shouldPreserveKnownTrackMetadata(fresh, known, requestedTrack)) return { ...fresh, art };
