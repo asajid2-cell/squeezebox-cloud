@@ -2528,7 +2528,6 @@ describe("Cloud Squeeze API", () => {
           artist: "Juice WRLD",
           album: "",
           source: "LMS",
-          path: "/music/collections/Juice WRLD/2MININHELL.mp3",
           duration: 222,
           elapsed: 12,
           canSeek: true,

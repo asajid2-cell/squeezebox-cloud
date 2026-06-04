@@ -2224,6 +2224,7 @@ function preserveKnownNowPlayingMetadata(fresh, requestedTrack = null) {
     artist: known.artist || fresh.artist,
     album: known.album || fresh.album,
     source: known.source || fresh.source,
+    path: fresh.path || known.path,
     art
   };
   rememberPlaybackMetadata(preserved);
@@ -2402,9 +2403,21 @@ function trackKey(track) {
 function normalizeTrackKey(value) {
   const raw = String(value || "");
   const localPath = decodedLocalTrackIdPath(raw);
-  return (localPath || raw)
+  const filePath = decodedFileUriPath(raw);
+  return (localPath || filePath || raw)
     .replace(/^spotify:\/\/(track|episode):/i, "spotify:$1:")
     .toLowerCase();
+}
+
+function decodedFileUriPath(value) {
+  const raw = String(value || "");
+  if (!/^file:\/\//i.test(raw)) return "";
+  try {
+    const url = new URL(raw);
+    return decodeURIComponent(url.pathname || "");
+  } catch {
+    return "";
+  }
 }
 
 function decodedLocalTrackIdPath(value) {
