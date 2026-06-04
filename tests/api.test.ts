@@ -120,6 +120,36 @@ describe("Cloud Squeeze API", () => {
     }
   });
 
+  it("inherits local artwork across tracks in the same folder", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-art-inherit-"));
+    config.musicSourceDir = root;
+    try {
+      const albumDir = path.join(root, "Collection", "Shared Album");
+      await fs.mkdir(albumDir, { recursive: true });
+      await fs.writeFile(path.join(albumDir, "Artist - Inherit Source.mp3"), "ID3");
+      await fs.writeFile(path.join(albumDir, "Artist - Inherit Missing.mp3"), "ID3");
+      const response = await request(createApp({
+        lms: {
+          ...mockLms,
+          async enrichLocalArtwork(tracks: Array<{ title: string }>) {
+            return tracks.map((track) => track.title === "Inherit Source" ? { ...track, art: "api/artwork/shared-cover" } : track);
+          }
+        }
+      }))
+        .get("/api/library/search?q=inherit&limit=10&source=local")
+        .expect(200);
+
+      expect(response.body.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({ title: "Inherit Source", art: "api/artwork/shared-cover" }),
+        expect.objectContaining({ title: "Inherit Missing", art: "api/artwork/shared-cover" })
+      ]));
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("enriches uploaded search rows with external artwork when tags have no embedded cover", async () => {
     const previousUploadDir = config.uploadDir;
     const previousAllowNetwork = process.env.TRACK_INFO_ALLOW_NETWORK_IN_TESTS;

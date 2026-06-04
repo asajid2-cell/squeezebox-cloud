@@ -1686,7 +1686,33 @@ async function enrichLibraryArtwork(lms, tracks) {
   const localEnriched = typeof lms.enrichLocalArtwork === "function"
     ? await withTimeout(lms.enrichLocalArtwork(tracks, { limit: localArtworkLimit, deadlineMs: Math.max(100, localArtworkBudgetMs - 50) }), localArtworkBudgetMs, tracks)
     : tracks;
-  return enrichUploadedArtwork(lms, localEnriched);
+  return enrichUploadedArtwork(lms, inheritGroupedLocalArtwork(localEnriched));
+}
+
+function inheritGroupedLocalArtwork(tracks) {
+  const artByGroup = new Map();
+  for (const track of tracks) {
+    const key = localArtworkGroupKey(track);
+    if (key && track?.art && !artByGroup.has(key)) artByGroup.set(key, track.art);
+  }
+  if (artByGroup.size === 0) return tracks;
+  return tracks.map((track) => {
+    if (track?.art || track?.uri) return track;
+    const art = artByGroup.get(localArtworkGroupKey(track));
+    return art ? { ...track, art } : track;
+  });
+}
+
+function localArtworkGroupKey(track) {
+  if (!track?.path || track?.uri) return "";
+  const collection = String(track.collection || "").trim().toLowerCase();
+  const folder = String(track.folder || "").trim().toLowerCase();
+  const album = String(track.album || "").trim().toLowerCase();
+  const artist = String(track.artist || "").trim().toLowerCase();
+  const group = [collection, folder || album].filter(Boolean).join("|");
+  if (group) return `group:${group}`;
+  if (artist && album) return `album:${artist}|${album}`;
+  return "";
 }
 
 async function enrichUploadedArtwork(lms, tracks) {
