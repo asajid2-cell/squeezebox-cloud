@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { enrichTrackInfo } from "../server/trackInfo.js";
+import { enrichTrackArtwork, enrichTrackInfo } from "../server/trackInfo.js";
 
 describe("track information enrichment", () => {
   afterEach(() => {
@@ -34,6 +34,27 @@ describe("track information enrichment", () => {
     expect(info.artistBio).not.toContain("may refer to");
     expect(requestedUrls.some((url) => url.endsWith("/Drake"))).toBe(true);
     expect(requestedUrls.some((url) => url.endsWith("/Drake%20(musician)"))).toBe(true);
+  });
+
+  it("caches standalone artwork lookups by track identity", async () => {
+    process.env.TRACK_INFO_ALLOW_NETWORK_IN_TESTS = "1";
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes("itunes.apple.com")) {
+        return jsonResponse({
+          results: [{ artworkUrl100: "https://is1-ssl.mzstatic.com/image/thumb/Music/test/100x100bb.jpg" }]
+        });
+      }
+      return jsonResponse({}, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = await enrichTrackArtwork({ title: "Lucid Dreams", artist: "Juice WRLD" });
+    const second = await enrichTrackArtwork({ title: "Lucid Dreams", artist: "Juice WRLD" });
+
+    expect(first).toBe("https://is1-ssl.mzstatic.com/image/thumb/Music/test/600x600bb.jpg");
+    expect(second).toBe(first);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 

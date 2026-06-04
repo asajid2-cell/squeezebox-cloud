@@ -1,4 +1,6 @@
 const cache = new Map();
+const artworkCache = new Map();
+const artworkCacheTtlMs = 6 * 60 * 60 * 1000;
 
 export async function enrichTrackInfo(track) {
   const parsed = parseTrack(track);
@@ -30,8 +32,20 @@ export async function enrichTrackInfo(track) {
 
 export async function enrichTrackArtwork(track) {
   if (process.env.VITEST && !process.env.TRACK_INFO_ALLOW_NETWORK_IN_TESTS) return null;
-  const artwork = await fetchArtwork(parseTrack(track));
-  return artwork.art || null;
+  const parsed = parseTrack(track);
+  const key = `${parsed.artist}::${parsed.title}`.toLowerCase();
+  const cached = artworkCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.art;
+  const artwork = await fetchArtwork(parsed);
+  const art = artwork.art || null;
+  artworkCache.set(key, { art, expiresAt: Date.now() + artworkCacheTtlMs });
+  if (artworkCache.size > 1000) {
+    for (const [entryKey, entry] of artworkCache) {
+      if (entry.expiresAt <= Date.now() || artworkCache.size > 800) artworkCache.delete(entryKey);
+      if (artworkCache.size <= 800) break;
+    }
+  }
+  return art;
 }
 
 function fallbackInfo(parsed) {
