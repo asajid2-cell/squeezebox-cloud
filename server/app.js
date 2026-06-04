@@ -149,6 +149,7 @@ const trackInfoBudgetMs = Number(process.env.TRACK_INFO_BUDGET_MS || 1800);
 const localArtworkBudgetMs = Number(process.env.LOCAL_ARTWORK_BUDGET_MS || 300);
 const localArtworkLimit = Number(process.env.LOCAL_ARTWORK_LIMIT || 60);
 const localFallbackArtworkBudgetMs = Number(process.env.LOCAL_FALLBACK_ARTWORK_BUDGET_MS || 900);
+const localSearchFallbackArtworkBudgetMs = Number(process.env.LOCAL_SEARCH_FALLBACK_ARTWORK_BUDGET_MS || 350);
 const localFallbackArtworkLimit = Number(process.env.LOCAL_FALLBACK_ARTWORK_LIMIT || 24);
 const uploadedArtworkBudgetMs = Number(process.env.UPLOADED_ARTWORK_BUDGET_MS || 900);
 const uploadedArtworkLimit = Number(process.env.UPLOADED_ARTWORK_LIMIT || 8);
@@ -605,7 +606,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
     const cacheKey = enrichedLibraryResponseCacheKey("search", { query, limit, source });
     const results = await cachedEnrichedLibraryResults(cacheKey, async () => {
       const libraryResults = await searchLibrary(query, undefined, limit, source);
-      return enrichLibraryArtwork(lms, libraryResults);
+      return enrichLibraryArtwork(lms, libraryResults, { fallbackBudgetMs: localSearchFallbackArtworkBudgetMs });
     });
     res.json({ results });
   });
@@ -1749,13 +1750,13 @@ function withTimeout(promise, timeoutMs, fallback) {
   ]).finally(() => clearTimeout(timer));
 }
 
-async function enrichLibraryArtwork(lms, tracks) {
+async function enrichLibraryArtwork(lms, tracks, { fallbackBudgetMs = localFallbackArtworkBudgetMs } = {}) {
   if (!Array.isArray(tracks) || tracks.length === 0) return tracks;
   const localEnriched = typeof lms.enrichLocalArtwork === "function"
     ? await withTimeout(lms.enrichLocalArtwork(tracks, { limit: localArtworkLimit, deadlineMs: Math.max(100, localArtworkBudgetMs - 50) }), localArtworkBudgetMs, tracks)
     : tracks;
   const grouped = inheritGroupedLocalArtwork(localEnriched);
-  const localFallbackEnriched = await enrichMissingLocalArtwork(lms, grouped);
+  const localFallbackEnriched = await enrichMissingLocalArtwork(lms, grouped, { budgetMs: fallbackBudgetMs });
   return enrichUploadedArtwork(lms, inheritGroupedLocalArtwork(localFallbackEnriched));
 }
 
@@ -1874,7 +1875,7 @@ async function enrichUploadedArtwork(lms, tracks) {
   })).then(() => results), uploadedArtworkBudgetMs, results);
 }
 
-async function enrichMissingLocalArtwork(lms, tracks) {
+async function enrichMissingLocalArtwork(lms, tracks, { budgetMs = localFallbackArtworkBudgetMs } = {}) {
   const results = tracks.slice();
   const candidates = results
     .map((track, index) => ({ track, index }))
@@ -1885,7 +1886,7 @@ async function enrichMissingLocalArtwork(lms, tracks) {
   return withTimeout(Promise.all(candidates.map(async ({ track, index }) => {
     const art = await fallbackArtworkForTrack(lms, track);
     if (art) results[index] = { ...track, art };
-  })).then(() => results), localFallbackArtworkBudgetMs, results);
+  })).then(() => results), budgetMs, results);
 }
 
 async function fallbackArtworkForTrack(lms, track) {
