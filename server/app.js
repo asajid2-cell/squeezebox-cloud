@@ -2010,6 +2010,7 @@ async function maintainVisiblePlaybackQueue(lms, status, track, { observedTrackC
       return;
     }
   }
+  clearManualShuffleWhenQueueExhausted();
   await topOffGeneratedQueue(lms, status.id);
   const needsPlaybackNudge = shouldNudgePlayback(status, track);
   const missedEndedTrack =
@@ -2250,12 +2251,27 @@ async function playQueuedItem(lms, playerId, item) {
   if (isGeneratedQueueItem(item)) rememberShuffleTrack(item);
   markPendingPlayback(item);
   removeQueueItem(item.id);
+  clearManualShuffleWhenQueueExhausted();
   setMode("play");
   updatePlayback({ appManagedPlayback: true });
   updateNowPlaying(optimisticTrack(item));
   refreshPlayedTrackMetadataInBackground(lms, playerId, item);
   logEvent("queue.play-item", { item: trackSummary(item), queueAfterRemove: queueSummary(), playback: appState.playback });
   return item;
+}
+
+function clearManualShuffleWhenQueueExhausted() {
+  if (!appState.playback.manualShuffle) return;
+  if (manualQueueCount() > 0) return;
+  updatePlayback({
+    shuffle: false,
+    manualShuffle: false,
+    smartQueue: false,
+    lastShuffleRefillAt: 0,
+    lastShuffleSeed: "",
+    lastSmartQueueBase: "",
+    history: []
+  });
 }
 
 function refreshPlayedTrackMetadataInBackground(lms, playerId, requestedTrack) {

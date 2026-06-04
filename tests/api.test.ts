@@ -4990,6 +4990,7 @@ describe("Cloud Squeeze API", () => {
     expect(played).toEqual(["Playlist Next"]);
     expect(searched).toEqual([]);
     expect(appState.queue).toEqual([]);
+    expect(appState.playback).toMatchObject({ shuffle: false, manualShuffle: false, smartQueue: false });
   });
 
   it("does not generate random rows after a manually shuffled playlist queue is exhausted", async () => {
@@ -5030,7 +5031,7 @@ describe("Cloud Squeeze API", () => {
     expect(searched).toEqual([]);
     expect(played).toEqual([]);
     expect(appState.queue).toEqual([]);
-    expect(appState.playback).toMatchObject({ shuffle: true, manualShuffle: true, smartQueue: false });
+    expect(appState.playback).toMatchObject({ shuffle: false, manualShuffle: false, smartQueue: false });
   });
 
   it("does not add generated shuffle rows after shuffle is disabled mid-refill", async () => {
