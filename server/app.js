@@ -1955,10 +1955,10 @@ async function maintainVisiblePlaybackQueue(lms, status, track, { observedTrackC
     appState.queue.length > 0;
   if (needsPlaybackNudge && appState.queue.length > 0) {
     logEvent("queue.auto-advance", { reason: "near-track-end", queue: queueSummary(), nowPlaying: trackSummary(track) });
-    await playNextVisibleQueueItem(lms, status.id, { generatedOnly: appState.playback.smartQueue, queueAdvanceEpoch });
+    await withQueueMutationLock(() => playNextVisibleQueueItem(lms, status.id, { generatedOnly: appState.playback.smartQueue, queueAdvanceEpoch }));
   } else if (missedEndedTrack) {
     logEvent("queue.auto-advance", { reason: "stopped-with-visible-queue", queue: queueSummary(), nowPlaying: trackSummary(track) });
-    await playNextVisibleQueueItem(lms, status.id, { generatedOnly: appState.playback.smartQueue, queueAdvanceEpoch });
+    await withQueueMutationLock(() => playNextVisibleQueueItem(lms, status.id, { generatedOnly: appState.playback.smartQueue, queueAdvanceEpoch }));
   }
 }
 
