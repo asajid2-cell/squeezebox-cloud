@@ -1,4 +1,4 @@
-import { createApp, prewarmLibraryCaches } from "./app.js";
+import { createApp, prewarmLibraryCaches, prewarmSpotifySearchCaches } from "./app.js";
 import { LmsClient } from "./lmsClient.js";
 import { config } from "./state.js";
 import express from "express";
@@ -20,4 +20,5 @@ if (process.env.NODE_ENV === "production") {
 
 app.listen(config.port, () => {
   console.log(`Squeezebox Cloud API listening on http://127.0.0.1:${config.port}`);
+  prewarmSpotifySearchCaches(lms).catch(() => null);
 });

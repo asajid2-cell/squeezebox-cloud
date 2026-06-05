@@ -1877,6 +1877,15 @@ export async function prewarmLibraryCaches(lms) {
   ]);
 }
 
+export async function prewarmSpotifySearchCaches(lms) {
+  const spotifyStatus = await lms.spotifyStatus().catch((error) => ({ configured: false, reachable: false, detail: error.message }));
+  updateSpotifyStatus(spotifyStatus);
+  if (!spotifyBrowsingAvailable()) return [];
+  const playerId = await hotPlayerId(lms);
+  if (!playerId) return [];
+  return Promise.all(spotifySearchPrewarmTerms.map((term) => lms.spotifySearch(playerId, term, 50).catch(() => [])));
+}
+
 function inheritGroupedLocalArtwork(tracks) {
   const artByGroup = new Map();
   for (const track of tracks) {

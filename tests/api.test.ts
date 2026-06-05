@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createApp, maintainVisiblePlaybackQueueForTests, nextQueueItemForPlayback, refreshLmsForTests, resetRefreshStateForTests, sameContinuingPlayback, shouldNudgePlayback, syncVisibleQueueWithCurrentTrack } from "../server/app.js";
+import { createApp, maintainVisiblePlaybackQueueForTests, nextQueueItemForPlayback, prewarmSpotifySearchCaches, refreshLmsForTests, resetRefreshStateForTests, sameContinuingPlayback, shouldNudgePlayback, syncVisibleQueueWithCurrentTrack } from "../server/app.js";
 import { clearLibraryCaches } from "../server/library.js";
 import { addQueueItem, appState, config, removeQueueItem, updateNowPlaying, updatePlayback, updateSpotifyStatus } from "../server/state.js";
 
@@ -4387,6 +4387,37 @@ describe("Cloud Squeeze API", () => {
       expect(library.body.results).toEqual([]);
       expect(children.body.results).toEqual([]);
       expect(calls).toEqual([]);
+    } finally {
+      appState.services.spotify = previousSpotify;
+    }
+  });
+
+  it("prewarms common Spotify searches when browsing is reachable", async () => {
+    const previousSpotify = { ...appState.services.spotify };
+    const calls: Array<{ query: string; limit: number }> = [];
+    const lms = {
+      ...mockLms,
+      async status() {
+        return { id: "player-1", name: "Test Speaker", connected: true, online: true, mode: "stop", volume: 44, detail: "test player connected" };
+      },
+      async spotifyStatus() {
+        return { configured: true, reachable: true, detail: "Spotty detected" };
+      },
+      async spotifySearch(_playerId: string, query: string, limit: number) {
+        calls.push({ query, limit });
+        return [];
+      }
+    };
+
+    try {
+      await prewarmSpotifySearchCaches(lms);
+
+      expect(calls).toEqual(expect.arrayContaining([
+        { query: "drake", limit: 50 },
+        { query: "juice wrld", limit: 50 },
+        { query: "the weeknd", limit: 50 },
+        { query: "travis scott", limit: 50 }
+      ]));
     } finally {
       appState.services.spotify = previousSpotify;
     }
