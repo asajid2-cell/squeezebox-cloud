@@ -1642,6 +1642,7 @@ function publicRequestsOpen() {
 
 function shouldMaintainQueueOnPoll() {
   if (appState.playback.smartQueue) return true;
+  if (appState.playback.shuffle && appState.queue.length > 0) return true;
   return Boolean(appState.playback.appManagedPlayback && appState.queue.length > 0);
 }
 
