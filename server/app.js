@@ -2767,7 +2767,7 @@ function generatedShufflePlaybackActive() {
 
 function shuffleVisibleQueue() {
   const manual = appState.queue.filter((item) => item.requestedBy !== "smart shuffle" && item.requestedBy !== "shuffle");
-  const shuffled = shuffle(manual);
+  const shuffled = shuffleChangedOrder(manual);
   appState.queue.splice(0, appState.queue.length, ...shuffled);
   appState.queue.forEach((item, index) => {
     item.etaMinutes = (index + 1) * 7;
@@ -3062,4 +3062,12 @@ function shuffle(items) {
     [copy[index], copy[swapIndex]] = [copy[swapIndex], copy[index]];
   }
   return copy;
+}
+
+function shuffleChangedOrder(items) {
+  const shuffled = shuffle(items);
+  if (items.length < 2) return shuffled;
+  const changed = shuffled.some((item, index) => item !== items[index]);
+  if (changed) return shuffled;
+  return [shuffled.at(-1), ...shuffled.slice(0, -1)];
 }

@@ -2510,6 +2510,26 @@ describe("Cloud Squeeze API", () => {
     expect(shuffled.body.queue.some((item: { title: string }) => item.title === "Stale Local")).toBe(false);
   });
 
+  it("changes visible queue order when manual shuffle is enabled", async () => {
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.99);
+    appState.queue.splice(0, appState.queue.length);
+    updatePlayback({ shuffle: false, manualShuffle: false, smartQueue: false, repeat: "off", history: [], previousTracks: [] });
+    addQueueItem({ title: "Manual A", artist: "Tester", uri: "spotify:track:0000000000000000000601", source: "Spotify", kind: "track", requestedBy: "guest" });
+    addQueueItem({ title: "Manual B", artist: "Tester", uri: "spotify:track:0000000000000000000602", source: "Spotify", kind: "track", requestedBy: "guest" });
+    try {
+      const response = await request(createApp({ lms: mockLms }))
+        .post("/api/player/playback")
+        .send({ shuffle: true, smartQueue: false })
+        .expect(200);
+
+      expect(response.body.playback).toMatchObject({ shuffle: true, manualShuffle: true, smartQueue: false });
+      expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Manual B", "Manual A"]);
+      expect(response.body.queued.map((item: { title: string }) => item.title)).toEqual(["Manual B", "Manual A"]);
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
   it("preserves manual shuffle state for a stopped visible queue", async () => {
     resetRefreshStateForTests();
     appState.queue.splice(0, appState.queue.length);
