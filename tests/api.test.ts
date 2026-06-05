@@ -217,7 +217,7 @@ describe("Cloud Squeeze API", () => {
       expect(response.body.results[0]).toMatchObject({
         title: "Shabang",
         source: "Uploaded",
-        art: "https://is1-ssl.mzstatic.com/image/thumb/Music/test/600x600bb.jpg"
+        art: "api/image-proxy?url=https%3A%2F%2Fis1-ssl.mzstatic.com%2Fimage%2Fthumb%2FMusic%2Ftest%2F600x600bb.jpg"
       });
     } finally {
       config.uploadDir = previousUploadDir;
@@ -384,7 +384,7 @@ describe("Cloud Squeeze API", () => {
       expect(response.body.results[0]).toMatchObject({
         title: "Sleep Paralysis",
         source: "Uploaded",
-        art: "https://is1-ssl.mzstatic.com/image/thumb/Music/fast/600x600bb.jpg"
+        art: "api/image-proxy?url=https%3A%2F%2Fis1-ssl.mzstatic.com%2Fimage%2Fthumb%2FMusic%2Ffast%2F600x600bb.jpg"
       });
     } finally {
       config.uploadDir = previousUploadDir;

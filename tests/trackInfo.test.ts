@@ -52,7 +52,7 @@ describe("track information enrichment", () => {
     const first = await enrichTrackArtwork({ title: "Lucid Dreams", artist: "Juice WRLD" });
     const second = await enrichTrackArtwork({ title: "Lucid Dreams", artist: "Juice WRLD" });
 
-    expect(first).toBe("https://is1-ssl.mzstatic.com/image/thumb/Music/test/600x600bb.jpg");
+    expect(first).toBe("api/image-proxy?url=https%3A%2F%2Fis1-ssl.mzstatic.com%2Fimage%2Fthumb%2FMusic%2Ftest%2F600x600bb.jpg");
     expect(second).toBe(first);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });

@@ -90,7 +90,7 @@ async function fetchMusicBrainz({ artist, title }) {
         ? `${artist} - ${recording.title}. MusicBrainz match confidence: ${recording.score ?? "unknown"}.`
         : "",
       albumReview: release ? `${release.title}${release.date ? ` (${release.date})` : ""}.` : "",
-      art: release?.id ? `https://coverartarchive.org/release/${release.id}/front-500` : null
+      art: proxiedArtworkUrl(release?.id ? `https://coverartarchive.org/release/${release.id}/front-500` : null)
     };
   } catch {
     return {};
@@ -175,7 +175,7 @@ async function fetchArtwork({ artist, title }) {
     const data = await response.json();
     const result = data.results?.[0];
     return {
-      art: result?.artworkUrl100 ? result.artworkUrl100.replace(/100x100bb/, "600x600bb") : null,
+      art: proxiedArtworkUrl(result?.artworkUrl100 ? result.artworkUrl100.replace(/100x100bb/, "600x600bb") : null),
       albumReview: result?.collectionName ? `${result.collectionName}${result.releaseDate ? ` (${String(result.releaseDate).slice(0, 10)})` : ""}.` : ""
     };
   } catch {
@@ -185,4 +185,10 @@ async function fetchArtwork({ artist, title }) {
 
 function clean(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function proxiedArtworkUrl(value) {
+  const raw = String(value || "");
+  if (!/^https?:\/\//i.test(raw)) return null;
+  return `api/image-proxy?url=${encodeURIComponent(raw)}`;
 }
