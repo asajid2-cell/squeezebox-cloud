@@ -41,18 +41,55 @@ describe("LMS client parsing", () => {
       "xstartprivateparty; set ui_mapname zm_cosmodrome; seta sv_maxclients 1; map zm_cosmodrome"
     );
     const client = new LmsClient();
-    client.command = async (command: string) => {
-      if (command === "player count ?") return "player count 1";
-      if (command === "player id 0 ?") return "player id 0 player-1";
-      if (command.endsWith("name ?")) return `player-1 name ${payload}`;
-      if (command.endsWith("mode ?")) return "player-1 mode play";
-      if (command.endsWith("mixer volume ?")) return "player-1 mixer volume 50";
-      return "ok";
+    client.jsonRequest = async (params: unknown[]) => {
+      const command = params[1] as unknown[];
+      if (command[0] === "players") {
+        return { result: { count: 1, players_loop: [{ playerid: "player-1", name: payload, connected: 1 }] } };
+      }
+      return { result: { player_name: payload, mode: "play", "mixer volume": 50, player_connected: 1 } };
     };
 
     const status = await client.status();
 
     expect(status.name).toBe("Squeezebox player");
+  });
+
+  it("reads player status through JSON-RPC without CLI fan-out", async () => {
+    const commands: string[] = [];
+    const client = new LmsClient();
+    client.command = async (command: string) => {
+      commands.push(command);
+      return "ok";
+    };
+    client.jsonRequest = async (params: unknown[]) => {
+      const command = params[1] as unknown[];
+      if (command[0] === "players") {
+        return { result: { count: 1, players_loop: [{ playerid: "player-1", name: "Boom", connected: 1 }] } };
+      }
+      return { result: { player_name: "Boom", mode: "play", "mixer volume": 42, player_connected: 1 } };
+    };
+
+    const status = await client.status();
+
+    expect(status).toMatchObject({ id: "player-1", name: "Boom", mode: "play", volume: 42, connected: true });
+    expect(commands).toEqual([]);
+  });
+
+  it("falls back to CLI status when JSON-RPC status fails", async () => {
+    const client = new LmsClient();
+    client.jsonRequest = async () => {
+      throw new Error("JSON unavailable");
+    };
+    client.command = async (command: string) => {
+      if (command === "player count ?") return "player count 1";
+      if (command === "player id 0 ?") return "player id 0 player-1";
+      if (command.endsWith("name ?")) return "player-1 name Boom";
+      if (command.endsWith("mode ?")) return "player-1 mode play";
+      if (command.endsWith("mixer volume ?")) return "player-1 mixer volume 50";
+      return "ok";
+    };
+
+    await expect(client.status()).resolves.toMatchObject({ id: "player-1", name: "Boom", mode: "play", volume: 50 });
   });
 
   it("merges rich LMS status into now playing", async () => {

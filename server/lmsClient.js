@@ -73,6 +73,9 @@ export class LmsClient {
   }
 
   async status() {
+    const jsonStatus = await this.statusFromJson().catch(() => null);
+    if (jsonStatus) return jsonStatus;
+
     const countResponse = await this.command("player count ?");
     const count = Number(lastToken(countResponse));
     if (!Number.isFinite(count) || count < 1) {
@@ -91,6 +94,28 @@ export class LmsClient {
       mode: firstSafeDisplayValue([decodeCliToken(modeResponse)], "stopped"),
       volume: Number(decodeURIComponent(lastToken(volumeResponse))) || 0,
       connected: true,
+      online: true,
+      detail: "LMS player connected"
+    };
+  }
+
+  async statusFromJson() {
+    const playersResponse = await this.jsonRequest(["", ["players", 0, 10]]);
+    const players = playersResponse?.result?.players_loop || [];
+    if (!Array.isArray(players) || players.length < 1) {
+      return { connected: false, online: true, detail: "LMS online, no player connected" };
+    }
+    const player = players.find((candidate) => candidate?.connected !== 0) || players[0];
+    const playerId = String(player.playerid || "").trim();
+    if (!playerId) return null;
+    const statusResponse = await this.jsonRequest([playerId, ["status", "-", 1]]);
+    const status = statusResponse?.result || {};
+    return {
+      id: playerId,
+      name: firstSafeDisplayValue([status.player_name, player.name], "Squeezebox player"),
+      mode: firstSafeDisplayValue([status.mode], "stopped"),
+      volume: Number(status["mixer volume"]) || 0,
+      connected: status.player_connected !== 0 && player.connected !== 0,
       online: true,
       detail: "LMS player connected"
     };
