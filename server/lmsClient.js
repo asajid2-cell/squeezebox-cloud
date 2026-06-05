@@ -363,7 +363,7 @@ export class LmsClient {
       const categoryIds = items
         .map((item) => item.actions?.go?.params?.item_id)
         .filter((id) => /^1\.0_.*\.[012]$/.test(String(id)));
-      const categoryDeadline = directPlayable.length >= count ? spotifySearchCategoryDeadlineMs : spotifyBrowseDeadlineMs;
+      const categoryDeadline = directPlayable.length > 0 ? spotifySearchCategoryDeadlineMs : spotifyBrowseDeadlineMs;
       const categoryResults = categoryIds.length > 0
         ? await withDeadline(
           Promise.all(
