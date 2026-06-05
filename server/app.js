@@ -174,7 +174,11 @@ const refreshState = {
   pendingSeekKey: "",
   pendingSeekSeconds: 0,
   pendingSeekAt: 0,
-  pendingSeekWasPlaying: false
+  pendingSeekWasPlaying: false,
+  elapsedTrackKey: "",
+  elapsedAt: 0,
+  elapsedEstimate: 0,
+  elapsedObserved: 0
 };
 const prewarmState = { key: "", at: 0 };
 const spotifyLibraryPrewarmState = { playerId: "", at: 0 };
@@ -1985,7 +1989,7 @@ async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force =
       }
       updateStablePlayerStatus(status);
       if (status.connected) {
-        const track = applyPendingSeek(await lms.nowPlaying(status.id));
+        const track = estimateContinuousElapsed(applyPendingSeek(await lms.nowPlaying(status.id)), status);
         const key = trackKey(track);
         const trackInfoCandidate = isTrackInfoCandidate(track);
         const shouldRefreshTrackInfo =
@@ -2486,6 +2490,43 @@ function applyPendingSeek(track) {
   return { ...track, elapsed: Math.max(0, expectedElapsed) };
 }
 
+function estimateContinuousElapsed(track, status) {
+  const key = trackKey(track);
+  const observedElapsed = Number(track?.elapsed);
+  const duration = Number(track?.duration);
+  const now = Date.now();
+  if (status?.mode !== "play" || !key || !isTrackInfoCandidate(track) || !Number.isFinite(observedElapsed)) {
+    clearElapsedEstimate();
+    return track;
+  }
+  let elapsed = Math.max(0, observedElapsed);
+  const ageMs = now - refreshState.elapsedAt;
+  if (
+    key === refreshState.elapsedTrackKey &&
+    refreshState.elapsedAt > 0 &&
+    ageMs >= 500 &&
+    elapsed <= refreshState.elapsedObserved + 0.35
+  ) {
+    const base = Math.max(refreshState.elapsedEstimate, elapsed);
+    elapsed = base + Math.max(0, ageMs / 1000);
+  }
+  if (Number.isFinite(duration) && duration > 0) {
+    elapsed = Math.min(duration, elapsed);
+  }
+  refreshState.elapsedTrackKey = key;
+  refreshState.elapsedAt = now;
+  refreshState.elapsedEstimate = elapsed;
+  refreshState.elapsedObserved = Math.max(refreshState.elapsedObserved, Math.max(0, observedElapsed));
+  return elapsed === observedElapsed ? track : { ...track, elapsed };
+}
+
+function clearElapsedEstimate() {
+  refreshState.elapsedTrackKey = "";
+  refreshState.elapsedAt = 0;
+  refreshState.elapsedEstimate = 0;
+  refreshState.elapsedObserved = 0;
+}
+
 function clearPendingSeek() {
   refreshState.pendingSeekKey = "";
   refreshState.pendingSeekSeconds = 0;
@@ -2771,6 +2812,7 @@ export function resetRefreshStateForTests() {
   recentPlaybackMetadata.clear();
   clearPendingPlayback();
   clearPendingSeek();
+  clearElapsedEstimate();
 }
 
 function trackKey(track) {

@@ -68,6 +68,7 @@ const mockLms = {
 
 describe("Cloud Squeeze API", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -1213,6 +1214,40 @@ describe("Cloud Squeeze API", () => {
     expect(state.body.nowPlaying.title).toBe("Test Song");
     expect(state.body.nowPlaying.elapsed).toBeGreaterThan(41.9);
     expect(state.body.nowPlaying.elapsed).toBeLessThan(45);
+  });
+
+  it("estimates elapsed when LMS reports a stuck playing position", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:01.000Z"));
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    const stuckElapsedLms = {
+      ...mockLms,
+      async nowPlaying() {
+        return {
+          id: "spotify:track:stuck-elapsed",
+          title: "Stuck Elapsed",
+          artist: "Tester",
+          album: "",
+          source: "Spotify",
+          uri: "spotify:track:stuck-elapsed",
+          duration: 100,
+          elapsed: 0,
+          canSeek: true,
+          art: null
+        };
+      }
+    };
+
+    await refreshLmsForTests(stuckElapsedLms, { force: true });
+    const initialElapsed = appState.nowPlaying.elapsed;
+    vi.advanceTimersByTime(3200);
+    await refreshLmsForTests(stuckElapsedLms, { force: true });
+    const laterElapsed = appState.nowPlaying.elapsed;
+
+    expect(initialElapsed).toBe(0);
+    expect(laterElapsed).toBeGreaterThan(3);
+    expect(laterElapsed).toBeLessThan(4);
   });
 
   it("does not consume the visible queue immediately after seeking near the end", async () => {
