@@ -447,7 +447,7 @@ describe("Cloud Squeeze UI", () => {
     await userEvent.type(screen.getByLabelText("Search music"), "local");
 
     await waitFor(() => {
-      expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/library/search") && String(url).includes("q=local") && String(url).includes("limit=200"))).toBe(true);
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/library/search") && String(url).includes("q=local") && String(url).includes("limit=50"))).toBe(true);
     });
   });
 

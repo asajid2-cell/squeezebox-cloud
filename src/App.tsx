@@ -60,7 +60,7 @@ import "./styles.css";
 const spotifyRecommendationQuery = "drake";
 const spotifySuggestionTerms = ["drake", "juice wrld", "the weeknd", "travis scott"];
 const starterLibraryLimit = 60;
-const typedLibrarySearchLimit = 200;
+const typedLibrarySearchLimit = 50;
 const typedSpotifySearchLimit = 20;
 
 const navItems = [
