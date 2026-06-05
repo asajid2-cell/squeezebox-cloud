@@ -1216,11 +1216,12 @@ describe("Cloud Squeeze API", () => {
     expect(state.body.nowPlaying.elapsed).toBeLessThan(45);
   });
 
-  it("estimates elapsed when LMS reports a stuck playing position", async () => {
+  it("estimates elapsed after LMS has reported real track progress", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:01.000Z"));
     resetRefreshStateForTests();
     appState.queue.splice(0, appState.queue.length);
+    let elapsed = 4;
     const stuckElapsedLms = {
       ...mockLms,
       async nowPlaying() {
@@ -1232,7 +1233,7 @@ describe("Cloud Squeeze API", () => {
           source: "Spotify",
           uri: "spotify:track:stuck-elapsed",
           duration: 100,
-          elapsed: 0,
+          elapsed,
           canSeek: true,
           art: null
         };
@@ -1241,13 +1242,44 @@ describe("Cloud Squeeze API", () => {
 
     await refreshLmsForTests(stuckElapsedLms, { force: true });
     const initialElapsed = appState.nowPlaying.elapsed;
+    elapsed = 4;
     vi.advanceTimersByTime(3200);
     await refreshLmsForTests(stuckElapsedLms, { force: true });
     const laterElapsed = appState.nowPlaying.elapsed;
 
-    expect(initialElapsed).toBe(0);
-    expect(laterElapsed).toBeGreaterThan(3);
-    expect(laterElapsed).toBeLessThan(4);
+    expect(initialElapsed).toBe(4);
+    expect(laterElapsed).toBeGreaterThan(7);
+    expect(laterElapsed).toBeLessThan(8);
+  });
+
+  it("does not estimate progress for a Spotify track stuck at zero", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:01.000Z"));
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    const stuckSpotifyLms = {
+      ...mockLms,
+      async nowPlaying() {
+        return {
+          id: "spotify:track:not-streaming",
+          title: "Not Streaming",
+          artist: "Tester",
+          album: "",
+          source: "Spotify",
+          uri: "spotify:track:not-streaming",
+          duration: 100,
+          elapsed: 0,
+          canSeek: true,
+          art: null
+        };
+      }
+    };
+
+    await refreshLmsForTests(stuckSpotifyLms, { force: true });
+    vi.advanceTimersByTime(3200);
+    await refreshLmsForTests(stuckSpotifyLms, { force: true });
+
+    expect(appState.nowPlaying.elapsed).toBe(0);
   });
 
   it("does not consume the visible queue immediately after seeking near the end", async () => {

@@ -2511,7 +2511,9 @@ function estimateContinuousElapsed(track, status) {
   }
   let elapsed = Math.max(0, observedElapsed);
   const ageMs = now - refreshState.elapsedAt;
+  const hasObservedProgress = observedElapsed > 0 || (key === refreshState.elapsedTrackKey && refreshState.elapsedObserved > 0);
   if (
+    hasObservedProgress &&
     key === refreshState.elapsedTrackKey &&
     refreshState.elapsedAt > 0 &&
     ageMs >= 500 &&
