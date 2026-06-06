@@ -109,6 +109,8 @@ export default function App() {
   const [results, setResults] = useState<Track[]>([]);
   const [sourceFilter, setSourceFilter] = useState<"local" | "uploaded" | "spotify" | "playlists">("spotify");
   const [actionError, setActionError] = useState("");
+  const [actionPending, setActionPending] = useState(false);
+  const actionPendingCount = useRef(0);
   const isAdminRoute = window.location.pathname.replace(/\/$/, "").endsWith("/admin");
 
   const refresh = useCallback(async () => {
@@ -116,6 +118,8 @@ export default function App() {
   }, []);
 
   const runAction = useCallback(async <T,>(action: () => Promise<T>) => {
+    actionPendingCount.current += 1;
+    setActionPending(true);
     setActionError("");
     try {
       const result = await action();
@@ -124,6 +128,9 @@ export default function App() {
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Action failed");
       return undefined;
+    } finally {
+      actionPendingCount.current = Math.max(0, actionPendingCount.current - 1);
+      setActionPending(actionPendingCount.current > 0);
     }
   }, []);
 
@@ -235,6 +242,7 @@ export default function App() {
             setSourceFilter={setSourceFilter}
             onRefresh={refresh}
             onAction={runAction}
+            actionPending={actionPending}
             onPlayerAction={playerAction}
           />
         )}
@@ -253,6 +261,7 @@ function PublicScreen({
   setSourceFilter,
   onRefresh,
   onAction,
+  actionPending,
   onPlayerAction
 }: {
   state: AppState;
@@ -264,6 +273,7 @@ function PublicScreen({
   setSourceFilter: (value: "local" | "uploaded" | "spotify" | "playlists") => void;
   onRefresh: () => void;
   onAction: ActionRunner;
+  actionPending: boolean;
   onPlayerAction: (action: "play" | "pause" | "stop" | "next" | "previous") => Promise<unknown>;
 }) {
   const commonSearch = (
@@ -307,7 +317,7 @@ function PublicScreen({
   }
 
   const hasTrack = state.nowPlaying.id !== "idle" && (state.nowPlaying.duration || 0) > 0;
-  const controlsDisabled = !state.player.connected;
+  const controlsDisabled = !state.player.connected || actionPending;
   return (
     <div className="content-grid">
       <NowPlayingPanel state={state} hasTrack={hasTrack} controlsDisabled={controlsDisabled} onRefresh={onRefresh} onAction={onAction} onPlayerAction={onPlayerAction} />
@@ -546,6 +556,18 @@ function Progress({
 }
 
 function VolumeControl({ volume, onChange }: { volume: number; onChange: (volume: number) => void }) {
+  const [draftVolume, setDraftVolume] = useState(volume);
+
+  useEffect(() => {
+    setDraftVolume(volume);
+  }, [volume]);
+
+  useEffect(() => {
+    if (draftVolume === volume) return;
+    const timer = window.setTimeout(() => onChange(draftVolume), 180);
+    return () => window.clearTimeout(timer);
+  }, [draftVolume, onChange, volume]);
+
   return (
     <div className="volume-row">
       <Volume2 size={20} />
@@ -554,10 +576,10 @@ function VolumeControl({ volume, onChange }: { volume: number; onChange: (volume
         type="range"
         min="0"
         max="100"
-        value={volume}
-        onChange={(event) => onChange(Number(event.currentTarget.value))}
+        value={draftVolume}
+        onChange={(event) => setDraftVolume(Number(event.currentTarget.value))}
       />
-      <span>{volume}%</span>
+      <span>{draftVolume}%</span>
     </div>
   );
 }

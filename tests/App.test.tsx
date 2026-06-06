@@ -134,6 +134,24 @@ describe("Cloud Squeeze UI", () => {
     });
   });
 
+  it("coalesces rapid volume slider changes", async () => {
+    const fetchMock = vi.mocked(fetch);
+    render(<App />);
+    const slider = await screen.findByLabelText("Volume");
+
+    fireEvent.change(slider, { target: { value: "69" } });
+    fireEvent.change(slider, { target: { value: "70" } });
+    fireEvent.change(slider, { target: { value: "79" } });
+
+    await waitFor(() => {
+      const volumeCalls = fetchMock.mock.calls.filter(([url]) => String(url).includes("/api/player/volume"));
+      expect(volumeCalls).toHaveLength(1);
+    });
+
+    const volumeCall = fetchMock.mock.calls.find(([url]) => String(url).includes("/api/player/volume"));
+    expect(JSON.parse(String(volumeCall?.[1]?.body))).toEqual({ volume: 79 });
+  });
+
   it("surfaces failed transport controls", async () => {
     const fetchMock = vi.mocked(fetch);
     render(<App />);
