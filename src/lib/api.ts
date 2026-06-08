@@ -1,4 +1,4 @@
-import type { AppState, ConnectionGuide, LibraryCollection, Track } from "../types";
+import type { AppState, ConnectionGuide, LibraryCollection, Playlist, PlaylistSummary, SpotifySearchGroups, Track } from "../types";
 
 const apiBase = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/api`;
 let stateRequest: Promise<AppState> | null = null;
@@ -82,6 +82,112 @@ export async function searchSpotify(query: string, limit = 50): Promise<Track[]>
   const response = await fetch(`${apiBase}/spotify/search?q=${encodeURIComponent(trimmed)}&limit=${limit}`);
   const data = await responseJson<{ results?: Track[] }>(response, "Spotify search failed");
   return data.results || [];
+}
+
+const emptyGroups: SpotifySearchGroups = { tracks: [], artists: [], albums: [], playlists: [] };
+
+export async function searchSpotifyGrouped(query: string, limit = 50): Promise<SpotifySearchGroups> {
+  const trimmed = query.trim();
+  if (!trimmed) return emptyGroups;
+  const response = await fetch(`${apiBase}/spotify/search?q=${encodeURIComponent(trimmed)}&limit=${limit}`);
+  const data = await responseJson<{ groups?: Partial<SpotifySearchGroups> }>(response, "Spotify search failed");
+  return { ...emptyGroups, ...(data.groups || {}) };
+}
+
+export async function searchSpotifyCategories(query: string, limit = 8): Promise<Pick<SpotifySearchGroups, "artists" | "albums" | "playlists">> {
+  const trimmed = query.trim();
+  const empty = { artists: [], albums: [], playlists: [] };
+  if (!trimmed) return empty;
+  const response = await fetch(`${apiBase}/spotify/search/categories?q=${encodeURIComponent(trimmed)}&limit=${limit}`);
+  if (!response.ok) return empty;
+  const data = await response.json().catch(() => empty);
+  return {
+    artists: data.artists || [],
+    albums: data.albums || [],
+    playlists: data.playlists || []
+  };
+}
+
+export async function fetchPlaylists(): Promise<PlaylistSummary[]> {
+  const response = await fetch(`${apiBase}/playlists`);
+  const data = await responseJson<{ playlists?: PlaylistSummary[] }>(response, "Playlists failed");
+  return data.playlists || [];
+}
+
+export async function fetchPlaylist(id: string): Promise<Playlist | null> {
+  const response = await fetch(`${apiBase}/playlists/${encodeURIComponent(id)}`);
+  if (!response.ok) return null;
+  const data = await response.json();
+  return data.playlist || null;
+}
+
+export async function createPlaylist(input: { name: string; description?: string; createdBy?: string }): Promise<Playlist> {
+  const response = await fetch(`${apiBase}/playlists`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  const data = await responseJson<{ playlist: Playlist }>(response, "Could not create playlist");
+  return data.playlist;
+}
+
+export async function addTracksToPlaylist(id: string, tracks: Partial<Track>[]): Promise<{ playlist: Playlist; added: number }> {
+  const response = await fetch(`${apiBase}/playlists/${encodeURIComponent(id)}/tracks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tracks: tracks.map(compactPlaylistTrack) })
+  });
+  return responseJson<{ playlist: Playlist; added: number }>(response, "Could not add tracks");
+}
+
+export async function renamePlaylist(id: string, updates: { name?: string; description?: string }): Promise<Playlist> {
+  const response = await fetch(`${apiBase}/playlists/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...adminAuthHeader() },
+    body: JSON.stringify(updates)
+  });
+  const data = await responseJson<{ playlist: Playlist }>(response, "Could not update playlist");
+  return data.playlist;
+}
+
+export async function deletePlaylist(id: string): Promise<void> {
+  const response = await fetch(`${apiBase}/playlists/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: { ...adminAuthHeader() }
+  });
+  await responseJson(response, "Could not delete playlist");
+}
+
+export async function removePlaylistTrack(id: string, key: string): Promise<Playlist> {
+  const response = await fetch(`${apiBase}/playlists/${encodeURIComponent(id)}/tracks/${encodeURIComponent(key)}`, {
+    method: "DELETE",
+    headers: { ...adminAuthHeader() }
+  });
+  const data = await responseJson<{ playlist: Playlist }>(response, "Could not remove track");
+  return data.playlist;
+}
+
+export async function movePlaylistTrack(id: string, key: string, direction: "up" | "down"): Promise<Playlist> {
+  const response = await fetch(`${apiBase}/playlists/${encodeURIComponent(id)}/tracks/move`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...adminAuthHeader() },
+    body: JSON.stringify({ key, direction })
+  });
+  const data = await responseJson<{ playlist: Playlist }>(response, "Could not reorder track");
+  return data.playlist;
+}
+
+export function playlistTrackKey(track: Partial<Track>): string {
+  return String(track.uri || track.path || track.lmsTrackId || track.id || track.title || "").toLowerCase();
+}
+
+function compactPlaylistTrack(track: Partial<Track>) {
+  const compact: Partial<Track> = {};
+  for (const key of ["id", "title", "artist", "album", "source", "path", "uri", "kind", "lmsTrackId", "uploaded", "duration", "art", "browseId"] as const) {
+    const value = track[key];
+    if (value !== undefined && value !== null && value !== "") compact[key] = value as never;
+  }
+  return compact;
 }
 
 export async function fetchSpotifyLibrary(type: "playlists" | "albums" | "artists" | "tracks" | "home", limit = 50): Promise<Track[]> {
@@ -257,7 +363,7 @@ export function clearAdminSession() {
   window.localStorage.removeItem("cloud-squeeze-admin-token");
 }
 
-function adminAuthHeader() {
+function adminAuthHeader(): Record<string, string> {
   const token = window.localStorage.getItem("cloud-squeeze-admin-token");
   return token ? { Authorization: `Bearer ${token}` } : {};
 }

@@ -448,6 +448,52 @@ export class LmsClient {
     return results;
   }
 
+  // Resolves the artist/album/playlist category buckets for a Spotify search.
+  // Kept separate from spotifySearch so track results stay fast; this can take
+  // longer (each bucket is its own Spotty drill) and is fetched in parallel by
+  // the client. Results are cached so repeat searches are instant.
+  async spotifySearchCategories(playerId, query, limit = 8) {
+    const empty = { artists: [], albums: [], playlists: [] };
+    if (!playerId || !String(query || "").trim()) return empty;
+    const count = Math.max(1, Math.min(20, Number(limit) || 8));
+    const search = normalizeSearchQuery(query);
+    if (looksLikeRandomSingleTokenNoise(search)) return empty;
+    const cacheKey = `spotifySearchCategories:${playerId}:${search.toLowerCase()}:${count}`;
+    const cached = this.getCached(cacheKey);
+    if (cached) return cached;
+    return this.once(cacheKey, async () => {
+      const response = await this.jsonRequest([
+        playerId,
+        ["spotty", "items", 0, 30, "menu:spotty", "item_id:1.0", `search:${search}`, "cachesearch:1"]
+      ]);
+      const items = response?.result?.item_loop || response?.result?.loop_loop || [];
+      const idForLabel = (label) =>
+        items.find((item) => String(item.text || "").trim().toLowerCase() === label)?.actions?.go?.params?.item_id || "";
+      const buckets = [
+        ["artist", "artists", idForLabel("artists")],
+        ["album", "albums", idForLabel("albums")],
+        ["playlist", "playlists", idForLabel("playlists")]
+      ];
+      const fetched = await Promise.all(
+        buckets.map(async ([kind, , itemId]) => {
+          if (!itemId) return [];
+          const result = await this.jsonRequest([
+            playerId,
+            ["spotty", "items", 0, count, "menu:spotty", `item_id:${itemId}`]
+          ]).catch(() => null);
+          const loop = result?.result?.item_loop || result?.result?.loop_loop || [];
+          return spotifyPlayableItems(loop, kind).map((item) => spotifyItemToTrack(item));
+        })
+      );
+      const categories = { artists: fetched[0], albums: fetched[1], playlists: fetched[2] };
+      if (categories.artists.length || categories.albums.length || categories.playlists.length) {
+        this.rememberSpotifyBrowseIds([...categories.artists, ...categories.albums, ...categories.playlists]);
+        this.setCached(cacheKey, categories, spotifySearchCacheMs);
+      }
+      return categories;
+    });
+  }
+
   async spotifyLibrary(playerId, type = "playlists", limit = 50, offset = 0) {
     if (!playerId) return [];
     const count = Math.max(1, Math.min(100, Number(limit) || 50));

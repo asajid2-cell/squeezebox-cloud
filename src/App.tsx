@@ -7,10 +7,13 @@ import {
   ChevronDown,
   ChevronUp,
   ListMusic,
+  ListPlus,
   LockKeyhole,
   Music2,
   Pause,
+  Pencil,
   Play,
+  Plus,
   Radio,
   Repeat,
   Repeat1,
@@ -22,43 +25,74 @@ import {
   SlidersHorizontal,
   Speaker,
   Square,
+  Trash2,
   Volume2,
   XCircle
 } from "lucide-react";
 import {
+  addTracksToPlaylist,
   checkMusicInfo,
   checkSpeaker,
   checkSpotify,
+  createPlaylist,
+  deletePlaylist,
   fetchCollectionTracks,
   clearAdminSession,
   fetchCollections,
   fetchConnectionGuide,
+  fetchPlaylist,
+  fetchPlaylists,
   fetchSpotifyChildren,
   fetchSpotifyLibrary,
   fetchState,
   getSpotifyConnect,
   hasAdminSession,
   loginAdmin,
+  movePlaylistTrack,
   moveQueueItem,
   playerAction,
+  playlistTrackKey,
   playTrack,
   playTracks,
+  removePlaylistTrack,
   removeQueueItem,
+  renamePlaylist,
   rescanLibrary,
   saveAdminSettings,
   savePlayback,
   searchLibrary,
-  searchSpotify,
+  searchSpotifyCategories,
+  searchSpotifyGrouped,
   seekPlayer,
   setPlayerVolume,
   updateQueueItem,
   uploadTrack,
 } from "./lib/api";
-import type { AppState, ConnectionGuide, LibraryCollection, Track } from "./types";
+import type { AppState, ConnectionGuide, LibraryCollection, Playlist, PlaylistSummary, SpotifySearchGroups, Track } from "./types";
 import "./styles.css";
 
 const spotifyRecommendationQuery = "drake";
 const spotifySuggestionTerms = ["drake", "juice wrld", "the weeknd", "travis scott"];
+const emptySpotifyGroups: SpotifySearchGroups = { tracks: [], artists: [], albums: [], playlists: [] };
+
+const playlistListeners = new Set<() => void>();
+function notifyPlaylistsChanged() {
+  playlistListeners.forEach((listener) => listener());
+}
+
+function usePlaylists() {
+  const [playlists, setPlaylists] = useState<PlaylistSummary[]>([]);
+  const reload = useCallback(() => fetchPlaylists().then(setPlaylists), []);
+  useEffect(() => {
+    reload();
+    playlistListeners.add(reload);
+    return () => {
+      playlistListeners.delete(reload);
+    };
+  }, [reload]);
+  return { playlists, reload };
+}
+
 const starterLibraryLimit = 60;
 const typedLibrarySearchLimit = 50;
 const typedSpotifySearchLimit = 20;
@@ -107,6 +141,7 @@ export default function App() {
   const [activeScreen, setActiveScreen] = useState<PublicScreenName>("Now Playing");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Track[]>([]);
+  const [spotifyGroups, setSpotifyGroups] = useState<SpotifySearchGroups>(emptySpotifyGroups);
   const [sourceFilter, setSourceFilter] = useState<"local" | "uploaded" | "spotify" | "playlists">("spotify");
   const [actionError, setActionError] = useState("");
   const [actionPending, setActionPending] = useState(false);
@@ -148,18 +183,29 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     setResults([]);
+    setSpotifyGroups(emptySpotifyGroups);
     const timer = window.setTimeout(async () => {
       try {
-        let nextResults: Track[] = [];
         if (sourceFilter === "spotify") {
-          nextResults = await searchSpotify(query.trim() || spotifyRecommendationQuery, typedSpotifySearchLimit);
+          const term = query.trim() || spotifyRecommendationQuery;
+          // Tracks return fast; artist/album/playlist buckets are slower, so load
+          // them in parallel and merge in when ready instead of blocking the list.
+          const groupsPromise = searchSpotifyGrouped(term, typedSpotifySearchLimit);
+          searchSpotifyCategories(term).then((categories) => {
+            if (!cancelled) setSpotifyGroups((current) => ({ ...current, ...categories }));
+          }).catch(() => {});
+          const groups = await groupsPromise;
+          if (!cancelled) {
+            setSpotifyGroups((current) => ({ ...groups, artists: current.artists.length ? current.artists : groups.artists, albums: current.albums.length ? current.albums : groups.albums, playlists: current.playlists.length ? current.playlists : groups.playlists }));
+            setActionError("");
+          }
         } else {
           const localLimit = query.trim() ? typedLibrarySearchLimit : starterLibraryLimit;
-          nextResults = sourceFilter === "local" || sourceFilter === "uploaded" ? await searchLibrary(query, localLimit, sourceFilter) : [];
-        }
-        if (!cancelled) {
-          setResults(nextResults);
-          setActionError("");
+          const nextResults = sourceFilter === "local" || sourceFilter === "uploaded" ? await searchLibrary(query, localLimit, sourceFilter) : [];
+          if (!cancelled) {
+            setResults(nextResults);
+            setActionError("");
+          }
         }
       } catch (error) {
         if (!cancelled) setActionError(error instanceof Error ? error.message : "Search failed");
@@ -237,6 +283,7 @@ export default function App() {
             activeScreen={activeScreen}
             query={query}
             results={results}
+            spotifyGroups={spotifyGroups}
             setQuery={setQuery}
             sourceFilter={sourceFilter}
             setSourceFilter={setSourceFilter}
@@ -256,6 +303,7 @@ function PublicScreen({
   activeScreen,
   query,
   results,
+  spotifyGroups,
   setQuery,
   sourceFilter,
   setSourceFilter,
@@ -268,6 +316,7 @@ function PublicScreen({
   activeScreen: PublicScreenName;
   query: string;
   results: Track[];
+  spotifyGroups: SpotifySearchGroups;
   setQuery: (value: string) => void;
   sourceFilter: "local" | "uploaded" | "spotify" | "playlists";
   setSourceFilter: (value: "local" | "uploaded" | "spotify" | "playlists") => void;
@@ -281,6 +330,7 @@ function PublicScreen({
       query={query}
       setQuery={setQuery}
       results={results}
+      spotifyGroups={spotifyGroups}
       state={state}
       sourceFilter={sourceFilter}
       setSourceFilter={setSourceFilter}
@@ -699,6 +749,7 @@ function SearchPanel({
   query,
   setQuery,
   results,
+  spotifyGroups,
   state,
   sourceFilter,
   setSourceFilter,
@@ -708,6 +759,7 @@ function SearchPanel({
   query: string;
   setQuery: (value: string) => void;
   results: Track[];
+  spotifyGroups: SpotifySearchGroups;
   state: AppState;
   sourceFilter: "local" | "uploaded" | "spotify" | "playlists";
   setSourceFilter: (value: "local" | "uploaded" | "spotify" | "playlists") => void;
@@ -718,11 +770,18 @@ function SearchPanel({
   const [collections, setCollections] = useState<LibraryCollection[]>([]);
   const [uploadError, setUploadError] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [detail, setDetail] = useState<{ track: Track; tracks: Track[]; loading: boolean } | null>(null);
   const spotifyAvailable = state.services.spotify.configured;
+  const requestsOpen = publicRequestsOpen(state);
   const visibleResults = showAllResults ? results : results.slice(0, 3);
   const filteredCollections = collections.filter((item) =>
     `${item.collection} ${item.folder} ${item.sample.join(" ")}`.toLowerCase().includes(query.toLowerCase())
   );
+  const spotifyEmpty =
+    spotifyGroups.tracks.length === 0 &&
+    spotifyGroups.artists.length === 0 &&
+    spotifyGroups.albums.length === 0 &&
+    spotifyGroups.playlists.length === 0;
 
   useEffect(() => {
     fetchCollections().then(setCollections);
@@ -731,6 +790,17 @@ function SearchPanel({
   useEffect(() => {
     setShowAllResults(false);
   }, [query, sourceFilter]);
+
+  useEffect(() => {
+    setDetail(null);
+  }, [query, sourceFilter]);
+
+  async function openSpotifyDetail(track: Track) {
+    setDetail({ track, tracks: [], loading: true });
+    const tracks = (await onAction(() => fetchSpotifyChildren(track, 250))) || [];
+    setDetail({ track, tracks, loading: false });
+  }
+
   return (
     <section className="panel search-panel" aria-label="Library">
       <h2>Library</h2>
@@ -781,7 +851,7 @@ function SearchPanel({
           {uploadError && <small className="form-error">{uploadError}</small>}
         </div>
       )}
-      {sourceFilter === "spotify" && spotifyAvailable && (
+      {sourceFilter === "spotify" && spotifyAvailable && !detail && (
         <div className="suggestion-row" aria-label="Spotify recommendations">
           {spotifySuggestionTerms.map((term) => (
             <button key={term} onClick={() => setQuery(term)} className={query.toLowerCase() === term ? "is-selected" : ""}>
@@ -790,49 +860,177 @@ function SearchPanel({
           ))}
         </div>
       )}
-      <div className="result-list">
-        {sourceFilter === "spotify" && !spotifyAvailable && (
-          <EmptyState title="Spotify is not linked" detail="Connect Spotty in LMS before public Spotify search is enabled." />
-        )}
-        {sourceFilter === "spotify" && spotifyAvailable && query.trim() === "" && (
-          <div className="recommendation-head">
-            <strong>Recommended from Spotify</strong>
-            <small>Showing a starter set. Type anything to search Spotty directly.</small>
-          </div>
-        )}
-        {sourceFilter === "spotify" && spotifyAvailable && query.trim() !== "" && results.length === 0 && (
-          <EmptyState title="No Spotify results" detail="Try another Spotify search term." />
-        )}
-        {sourceFilter === "playlists" && filteredCollections.length === 0 && (
-          <EmptyState title="No playlist collections" detail="Try another collection, era, folder, or track name." />
-        )}
-        {sourceFilter === "playlists" &&
-          filteredCollections.map((item) => (
-            <div className="collection-inline" key={`${item.collection}-${item.folder}`}>
-              <div>
-                <strong>{item.folder}</strong>
-                <small>{item.collection}</small>
-                <small>{item.sample.join(", ")}</small>
-              </div>
-              <span>{item.count} tracks</span>
+
+      {sourceFilter === "spotify" && spotifyAvailable && detail && (
+        <SpotifyDetail
+          detail={detail}
+          requestsOpen={requestsOpen}
+          onBack={() => setDetail(null)}
+          onRefresh={onRefresh}
+          onAction={onAction}
+        />
+      )}
+
+      {sourceFilter === "spotify" && spotifyAvailable && !detail && (
+        <>
+          {query.trim() === "" && (
+            <div className="recommendation-head">
+              <strong>Recommended from Spotify</strong>
+              <small>Showing a starter set. Type anything to search Spotty directly.</small>
             </div>
-          ))}
-        {(sourceFilter === "local" || sourceFilter === "uploaded") && results.length === 0 && (
-          <EmptyState
-            title={sourceFilter === "uploaded" ? "No uploaded songs" : "No local results"}
-            detail={sourceFilter === "uploaded" ? "Upload a supported music file to add it here." : "Add music to the configured LMS music folder or search another title."}
-          />
-        )}
-        {visibleResults.map((track) => (
-          <SearchResultRow key={track.id} track={track} requestsOpen={publicRequestsOpen(state)} onRefresh={onRefresh} onAction={onAction} />
-        ))}
-      </div>
-      {(sourceFilter === "local" || sourceFilter === "uploaded" || sourceFilter === "spotify") && results.length > 3 && (
-        <button className="link-button" onClick={() => setShowAllResults(!showAllResults)}>
-          {showAllResults ? "Show fewer" : `View all ${results.length} results`}
-        </button>
+          )}
+          {spotifyEmpty && query.trim() !== "" && (
+            <EmptyState title="No Spotify results" detail="Try another Spotify search term." />
+          )}
+          <SpotifyGroupSection title="Songs" kind="track" items={spotifyGroups.tracks} requestsOpen={requestsOpen} onRefresh={onRefresh} onAction={onAction} />
+          <SpotifyGroupSection title="Artists" kind="artist" items={spotifyGroups.artists} onOpen={openSpotifyDetail} />
+          <SpotifyGroupSection title="Albums" kind="album" items={spotifyGroups.albums} onOpen={openSpotifyDetail} />
+          <SpotifyGroupSection title="Playlists" kind="playlist" items={spotifyGroups.playlists} onOpen={openSpotifyDetail} />
+        </>
+      )}
+
+      {sourceFilter === "spotify" && !spotifyAvailable && (
+        <div className="result-list">
+          <EmptyState title="Spotify is not linked" detail="Connect Spotty in LMS before public Spotify search is enabled." />
+        </div>
+      )}
+
+      {sourceFilter !== "spotify" && (
+        <>
+          <div className="result-list">
+            {sourceFilter === "playlists" && filteredCollections.length === 0 && (
+              <EmptyState title="No playlist collections" detail="Try another collection, era, folder, or track name." />
+            )}
+            {sourceFilter === "playlists" &&
+              filteredCollections.map((item) => (
+                <div className="collection-inline" key={`${item.collection}-${item.folder}`}>
+                  <div>
+                    <strong>{item.folder}</strong>
+                    <small>{item.collection}</small>
+                    <small>{item.sample.join(", ")}</small>
+                  </div>
+                  <span>{item.count} tracks</span>
+                </div>
+              ))}
+            {(sourceFilter === "local" || sourceFilter === "uploaded") && results.length === 0 && (
+              <EmptyState
+                title={sourceFilter === "uploaded" ? "No uploaded songs" : "No local results"}
+                detail={sourceFilter === "uploaded" ? "Upload a supported music file to add it here." : "Add music to the configured LMS music folder or search another title."}
+              />
+            )}
+            {(sourceFilter === "local" || sourceFilter === "uploaded") &&
+              visibleResults.map((track) => (
+                <SearchResultRow key={track.id} track={track} requestsOpen={requestsOpen} onRefresh={onRefresh} onAction={onAction} />
+              ))}
+          </div>
+          {(sourceFilter === "local" || sourceFilter === "uploaded") && results.length > 3 && (
+            <button className="link-button" onClick={() => setShowAllResults(!showAllResults)}>
+              {showAllResults ? "Show fewer" : `View all ${results.length} results`}
+            </button>
+          )}
+        </>
       )}
     </section>
+  );
+}
+
+function SpotifyGroupSection({
+  title,
+  kind,
+  items,
+  requestsOpen,
+  onRefresh,
+  onAction,
+  onOpen
+}: {
+  title: string;
+  kind: "track" | "artist" | "album" | "playlist";
+  items: Track[];
+  requestsOpen?: boolean;
+  onRefresh?: () => void;
+  onAction?: ActionRunner;
+  onOpen?: (track: Track) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  if (items.length === 0) return null;
+  const limit = kind === "track" ? 6 : 4;
+  const visible = expanded ? items : items.slice(0, limit);
+  return (
+    <div className="spotify-group">
+      <h3 className="spotify-group-title">{title}</h3>
+      <div className="result-list">
+        {visible.map((track) =>
+          kind === "track" ? (
+            <SearchResultRow
+              key={track.id}
+              track={track}
+              requestsOpen={Boolean(requestsOpen)}
+              onRefresh={onRefresh || (() => {})}
+              onAction={onAction || (async (action) => action())}
+            />
+          ) : (
+            <SpotifyBrowseRow key={track.id} track={track} onOpen={() => onOpen?.(track)} />
+          )
+        )}
+      </div>
+      {items.length > limit && (
+        <button className="link-button" onClick={() => setExpanded(!expanded)}>
+          {expanded ? "Show fewer" : `View all ${items.length} ${title.toLowerCase()}`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function SpotifyBrowseRow({ track, onOpen }: { track: Track; onOpen: () => void }) {
+  const art = track.art || track.artwork;
+  return (
+    <button className="result-row browse-row" onClick={onOpen}>
+      <div className="cover-thumb">{art && <img src={art} alt="" />}</div>
+      <div>
+        <strong>{track.title}</strong>
+        <small>{track.artist || track.album || track.source}</small>
+      </div>
+      <span className="kind-chip">{track.kind}</span>
+      <ChevronRight size={16} />
+    </button>
+  );
+}
+
+function SpotifyDetail({
+  detail,
+  requestsOpen,
+  onBack,
+  onRefresh,
+  onAction
+}: {
+  detail: { track: Track; tracks: Track[]; loading: boolean };
+  requestsOpen: boolean;
+  onBack: () => void;
+  onRefresh: () => void;
+  onAction: ActionRunner;
+}) {
+  return (
+    <div className="search-detail">
+      <div className="playlist-title-row">
+        <div>
+          <h3>{detail.track.title}</h3>
+          <small>{detail.track.artist || detail.track.source} - {detail.track.kind}</small>
+        </div>
+        <button className="ghost-add" onClick={onBack}>Back</button>
+      </div>
+      <PlaylistTracks
+        title={detail.track.title}
+        tracks={detail.tracks}
+        loading={detail.loading}
+        hasMore={false}
+        onLoadMore={() => {}}
+        getQueueTracks={async () => detail.tracks}
+        requestsOpen={requestsOpen}
+        onRefresh={onRefresh}
+        onAction={onAction}
+      />
+    </div>
   );
 }
 
@@ -854,14 +1052,109 @@ function SearchResultRow({ track, requestsOpen, onRefresh, onAction }: { track: 
         {playable && <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("play-now", track); await onRefresh(); })}>Play now</button>}
         {playable && <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("play-next", track); await onRefresh(); })}>Play next</button>}
         {playable && <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("add-queue", track); await onRefresh(); })}>Queue</button>}
+        {playable && <AddToPlaylistButton track={track} />}
       </div>
+    </div>
+  );
+}
+
+function AddToPlaylistButton({ track }: { track: Track }) {
+  const [open, setOpen] = useState(false);
+  const { playlists, reload } = usePlaylists();
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [status, setStatus] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocClick(event: MouseEvent) {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open]);
+
+  function closeSoon() {
+    window.setTimeout(() => {
+      setOpen(false);
+      setStatus("");
+      setCreating(false);
+    }, 1100);
+  }
+
+  async function addTo(id: string) {
+    try {
+      const result = await addTracksToPlaylist(id, [track]);
+      setStatus(result.added > 0 ? "Added" : "Already added");
+      notifyPlaylistsChanged();
+      closeSoon();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Failed");
+    }
+  }
+
+  async function createAndAdd(event: FormEvent) {
+    event.preventDefault();
+    if (!newName.trim()) return;
+    try {
+      const playlist = await createPlaylist({ name: newName.trim() });
+      await addTracksToPlaylist(playlist.id, [track]);
+      setNewName("");
+      setStatus("Created and added");
+      notifyPlaylistsChanged();
+      reload();
+      closeSoon();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Failed");
+    }
+  }
+
+  return (
+    <div className="add-to-playlist" ref={ref}>
+      <button className="ghost-add" title="Add to playlist" onClick={() => setOpen((value) => !value)}>
+        <ListPlus size={14} /> Save
+      </button>
+      {open && (
+        <div className="playlist-popover" role="menu">
+          <div className="playlist-popover-head">
+            <strong>Add to playlist</strong>
+            {status && <small>{status}</small>}
+          </div>
+          <div className="playlist-popover-list">
+            {playlists.length === 0 && <small className="muted">No playlists yet</small>}
+            {playlists.map((playlist) => (
+              <button key={playlist.id} className="playlist-popover-item" onClick={() => addTo(playlist.id)}>
+                <span>{playlist.name}</span>
+                <small>{playlist.trackCount}</small>
+              </button>
+            ))}
+          </div>
+          {creating ? (
+            <form className="playlist-popover-create" onSubmit={createAndAdd}>
+              <input
+                autoFocus
+                placeholder="New playlist name"
+                value={newName}
+                maxLength={80}
+                onChange={(event) => setNewName(event.currentTarget.value)}
+              />
+              <button type="submit" className="primary-small">Create</button>
+            </form>
+          ) : (
+            <button className="playlist-popover-new" onClick={() => setCreating(true)}>
+              <Plus size={14} /> New playlist
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 function PlaylistsPanel({ requestsOpen, onRefresh, onAction }: { requestsOpen: boolean; onRefresh: () => void; onAction: ActionRunner }) {
   const [collections, setCollections] = useState<LibraryCollection[]>([]);
-  const [source, setSource] = useState<"local" | "spotify">("local");
+  const [source, setSource] = useState<"mine" | "local" | "spotify">("mine");
   const [spotifyType, setSpotifyType] = useState<"playlists" | "albums" | "artists" | "tracks" | "home">("playlists");
   const [spotifyItems, setSpotifyItems] = useState<Track[]>([]);
   const [selectedLocal, setSelectedLocal] = useState<LibraryCollection | null>(null);
@@ -961,26 +1254,31 @@ function PlaylistsPanel({ requestsOpen, onRefresh, onAction }: { requestsOpen: b
 
   return (
     <section className="panel playlist-panel" aria-label="Playlists">
-      <div className="playlist-title-row">
-        <div>
-          <h2>{selectedTitle ? selectedTitle : "Collections"}</h2>
-          {selectedTitle && <small>{selectedSubtitle}</small>}
+      {source !== "mine" && (
+        <div className="playlist-title-row">
+          <div>
+            <h2>{selectedTitle ? selectedTitle : "Collections"}</h2>
+            {selectedTitle && <small>{selectedSubtitle}</small>}
+          </div>
+          {selectedTitle && (
+            <button
+              className="ghost-add"
+              onClick={() => {
+                setSelectedLocal(null);
+                setSelectedSpotify(null);
+                setDetailTracks([]);
+                setHasMoreDetail(false);
+              }}
+            >
+              Back
+            </button>
+          )}
         </div>
-        {selectedTitle && (
-          <button
-            className="ghost-add"
-            onClick={() => {
-              setSelectedLocal(null);
-              setSelectedSpotify(null);
-              setDetailTracks([]);
-              setHasMoreDetail(false);
-            }}
-          >
-            Back
-          </button>
-        )}
-      </div>
+      )}
       <div className="source-tabs">
+        <button className={source === "mine" ? "primary-small" : ""} onClick={() => { setSource("mine"); setSelectedLocal(null); setSelectedSpotify(null); setDetailTracks([]); }}>
+          My Playlists
+        </button>
         <button className={source === "local" ? "primary-small" : ""} onClick={() => { setSource("local"); setSelectedSpotify(null); setDetailTracks([]); }}>
           Local
         </button>
@@ -988,6 +1286,7 @@ function PlaylistsPanel({ requestsOpen, onRefresh, onAction }: { requestsOpen: b
           Spotify
         </button>
       </div>
+      {source === "mine" && <AppPlaylistsView requestsOpen={requestsOpen} onRefresh={onRefresh} onAction={onAction} />}
       {source === "spotify" && !selectedTitle && (
         <div className="suggestion-row" aria-label="Spotify playlist filters">
           {(["playlists", "albums", "artists", "tracks", "home"] as const).map((type) => (
@@ -1047,6 +1346,295 @@ function PlaylistsPanel({ requestsOpen, onRefresh, onAction }: { requestsOpen: b
   );
 }
 
+function AppPlaylistsView({ requestsOpen, onRefresh, onAction }: { requestsOpen: boolean; onRefresh: () => void; onAction: ActionRunner }) {
+  const { playlists, reload } = usePlaylists();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<Playlist | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [error, setError] = useState("");
+  const isAdmin = hasAdminSession();
+
+  const openDetail = useCallback(async (id: string) => {
+    setSelectedId(id);
+    setLoading(true);
+    try {
+      setDetail(await fetchPlaylist(id));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    const listener = () => {
+      fetchPlaylist(selectedId).then((playlist) => {
+        if (playlist) setDetail(playlist);
+      });
+    };
+    playlistListeners.add(listener);
+    return () => {
+      playlistListeners.delete(listener);
+    };
+  }, [selectedId]);
+
+  async function create(event: FormEvent) {
+    event.preventDefault();
+    if (!newName.trim()) return;
+    setError("");
+    try {
+      const playlist = await createPlaylist({ name: newName.trim() });
+      setNewName("");
+      setCreating(false);
+      notifyPlaylistsChanged();
+      reload();
+      openDetail(playlist.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create playlist");
+    }
+  }
+
+  if (selectedId) {
+    return (
+      <AppPlaylistDetail
+        playlist={detail}
+        loading={loading}
+        isAdmin={isAdmin}
+        requestsOpen={requestsOpen}
+        onBack={() => {
+          setSelectedId(null);
+          setDetail(null);
+        }}
+        onRefresh={onRefresh}
+        onAction={onAction}
+        onChanged={(playlist) => {
+          setDetail(playlist);
+          notifyPlaylistsChanged();
+        }}
+        onDeleted={() => {
+          setSelectedId(null);
+          setDetail(null);
+          notifyPlaylistsChanged();
+          reload();
+        }}
+      />
+    );
+  }
+
+  return (
+    <div className="app-playlists">
+      <div className="playlist-create-row">
+        {creating ? (
+          <form className="playlist-create-form" onSubmit={create}>
+            <input
+              autoFocus
+              placeholder="Playlist name"
+              maxLength={80}
+              value={newName}
+              onChange={(event) => setNewName(event.currentTarget.value)}
+            />
+            <button type="submit" className="primary-small">Create</button>
+            <button type="button" className="ghost-add" onClick={() => { setCreating(false); setNewName(""); setError(""); }}>
+              Cancel
+            </button>
+          </form>
+        ) : (
+          <button className="primary-small" onClick={() => setCreating(true)}>
+            <Plus size={16} /> New playlist
+          </button>
+        )}
+      </div>
+      {error && <small className="form-error">{error}</small>}
+      {playlists.length === 0 && (
+        <EmptyState title="No playlists yet" detail="Create a playlist, then add songs from search or Spotify with the Save button." />
+      )}
+      <div className="collection-list">
+        {playlists.map((playlist) => (
+          <button className="collection-row" key={playlist.id} onClick={() => openDetail(playlist.id)}>
+            <div className="cover-thumb">{playlist.art && <img src={playlist.art} alt="" />}</div>
+            <div>
+              <strong>{playlist.name}</strong>
+              <small>{playlist.description || playlist.sample.join(", ") || "Empty playlist"}</small>
+            </div>
+            <span>{playlist.trackCount} tracks</span>
+            <ChevronRight size={16} />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AppPlaylistDetail({
+  playlist,
+  loading,
+  isAdmin,
+  requestsOpen,
+  onBack,
+  onRefresh,
+  onAction,
+  onChanged,
+  onDeleted
+}: {
+  playlist: Playlist | null;
+  loading: boolean;
+  isAdmin: boolean;
+  requestsOpen: boolean;
+  onBack: () => void;
+  onRefresh: () => void;
+  onAction: ActionRunner;
+  onChanged: (playlist: Playlist) => void;
+  onDeleted: () => void;
+}) {
+  const [renaming, setRenaming] = useState(false);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    setName(playlist?.name || "");
+  }, [playlist?.id]);
+
+  if (loading || !playlist) {
+    return (
+      <div className="app-playlist-detail">
+        <div className="playlist-title-row">
+          <h3>Opening playlist</h3>
+          <button className="ghost-add" onClick={onBack}>Back</button>
+        </div>
+        <EmptyState title="Opening playlist" detail="Loading songs." />
+      </div>
+    );
+  }
+
+  const current = playlist;
+  const isEmpty = current.tracks.length === 0;
+
+  async function queueAll(action: "add-queue" | "play-next") {
+    await onAction(async () => {
+      await playTracks(action, current.tracks.slice(0, 200));
+      await onRefresh();
+    });
+  }
+
+  async function doRename(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      onChanged(await renamePlaylist(current.id, { name: name.trim() }));
+      setRenaming(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not rename");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function doDelete() {
+    if (!window.confirm(`Delete playlist "${current.name}"?`)) return;
+    try {
+      await deletePlaylist(current.id);
+      onDeleted();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not delete");
+    }
+  }
+
+  async function remove(track: Track) {
+    try {
+      onChanged(await removePlaylistTrack(current.id, playlistTrackKey(track)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove track");
+    }
+  }
+
+  async function move(track: Track, direction: "up" | "down") {
+    try {
+      onChanged(await movePlaylistTrack(current.id, playlistTrackKey(track), direction));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not reorder");
+    }
+  }
+
+  return (
+    <div className="app-playlist-detail">
+      <div className="playlist-title-row">
+        <div>
+          {renaming ? (
+            <form className="playlist-create-form" onSubmit={doRename}>
+              <input autoFocus value={name} maxLength={80} onChange={(event) => setName(event.currentTarget.value)} />
+              <button type="submit" className="primary-small" disabled={busy}>Save</button>
+              <button type="button" className="ghost-add" onClick={() => { setRenaming(false); setName(current.name); }}>
+                Cancel
+              </button>
+            </form>
+          ) : (
+            <>
+              <h3>{current.name}</h3>
+              <small>{current.tracks.length} tracks{current.description ? ` - ${current.description}` : ""}</small>
+            </>
+          )}
+        </div>
+        <button className="ghost-add" onClick={onBack}>Back</button>
+      </div>
+      <div className="playlist-detail-actions">
+        <button className="ghost-add" disabled={!requestsOpen || isEmpty} onClick={() => queueAll("play-next")}>Play next</button>
+        <button className="ghost-add" disabled={!requestsOpen || isEmpty} onClick={() => queueAll("add-queue")}>Queue all</button>
+        {isAdmin && !renaming && (
+          <button className="ghost-add" onClick={() => setRenaming(true)}>
+            <Pencil size={14} /> Rename
+          </button>
+        )}
+        {isAdmin && (
+          <button className="ghost-add danger" onClick={doDelete}>
+            <Trash2 size={14} /> Delete
+          </button>
+        )}
+      </div>
+      {error && <small className="form-error">{error}</small>}
+      {isEmpty && <EmptyState title="Empty playlist" detail="Add songs from search or Spotify using the Save button." />}
+      <div className="result-list">
+        {current.tracks.map((track, index) => (
+          <div className="result-row" key={playlistTrackKey(track) || index}>
+            <div className="cover-thumb">{(track.art || track.artwork) && <img src={track.art || track.artwork || ""} alt="" />}</div>
+            <div>
+              <strong>{track.title}</strong>
+              <small>{track.artist} - {track.album || track.source}</small>
+            </div>
+            <span>{track.duration ? formatTime(track.duration) : "--:--"}</span>
+            <div className="track-actions">
+              <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("play-now", track); await onRefresh(); })}>Play</button>
+              <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("add-queue", track); await onRefresh(); })}>Queue</button>
+              {isAdmin && (
+                <button className="icon-button" title="Move up" disabled={index === 0} onClick={() => move(track, "up")}>
+                  <ChevronUp size={14} />
+                </button>
+              )}
+              {isAdmin && (
+                <button
+                  className="icon-button"
+                  title="Move down"
+                  disabled={index === current.tracks.length - 1}
+                  onClick={() => move(track, "down")}
+                >
+                  <ChevronDown size={14} />
+                </button>
+              )}
+              {isAdmin && (
+                <button className="icon-button danger" title="Remove" onClick={() => remove(track)}>
+                  <XCircle size={14} />
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function PlaylistTracks({
   title,
   tracks,
@@ -1093,22 +1681,7 @@ function PlaylistTracks({
       {!loading && tracks.length === 0 && <EmptyState title="No songs found" detail="This playlist did not expose tracks yet." />}
       <div className="result-list">
         {tracks.map((track) => (
-          <div className="result-row" key={track.id}>
-            <div className="cover-thumb">{track.art && <img src={track.art} alt="" />}</div>
-            <div>
-              <strong>{track.title}</strong>
-              <small>
-                {track.artist} - {track.album || track.source}
-                {track.folder ? ` / ${track.folder}` : ""}
-              </small>
-            </div>
-            <span>{track.duration ? formatTime(track.duration) : "--:--"}</span>
-            <div className="track-actions">
-              <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("play-now", track); await onRefresh(); })}>Play now</button>
-              <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("play-next", track); await onRefresh(); })}>Play next</button>
-              <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("add-queue", track); await onRefresh(); })}>Queue</button>
-            </div>
-          </div>
+          <SearchResultRow key={track.id} track={track} requestsOpen={requestsOpen} onRefresh={onRefresh} onAction={onAction} />
         ))}
       </div>
       {hasMore && (

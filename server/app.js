@@ -3,6 +3,7 @@ import cors from "cors";
 import { z } from "zod";
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { LmsClient } from "./lmsClient.js";
 import {
   addQueueItem,
@@ -24,6 +25,7 @@ import {
 } from "./state.js";
 import { clearLibraryCaches, getCollections, getCollectionTracks, saveUploadedTrack, scanLibrary, searchLibrary } from "./library.js";
 import { enrichTrackArtwork, enrichTrackInfo } from "./trackInfo.js";
+import { defaultPlaylistStore, PlaylistError } from "./playlists.js";
 
 const requiredText = z.string().trim().min(1);
 const optionalText = z.preprocess(
@@ -131,6 +133,12 @@ const loginSchema = z.object({
   password: z.string().min(1)
 });
 
+const playlistCreateSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  description: z.string().max(300).optional(),
+  createdBy: z.string().max(60).optional()
+});
+
 const adminSettingsSchema = z.object({
   publicRequests: z.boolean().optional(),
   maxQueuePerUser: z.number().int().min(1).max(25).optional(),
@@ -138,8 +146,108 @@ const adminSettingsSchema = z.object({
   scheduleEnabled: z.boolean().optional()
 }).strict();
 
-const adminPassword = process.env.CLOUD_SQUEEZE_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD || "admin";
-const adminToken = process.env.CLOUD_SQUEEZE_ADMIN_TOKEN || "cloud-squeeze-admin";
+function requireEnvSecret(name, legacyName) {
+  const value = process.env[name] || (legacyName ? process.env[legacyName] : "");
+  if (!value || isPlaceholderSecret(value)) {
+    throw new Error(`${name}${legacyName ? ` or ${legacyName}` : ""} must be set to a non-default value`);
+  }
+  return value;
+}
+
+function isPlaceholderSecret(value) {
+  const normalized = String(value || "").toLowerCase();
+  return normalized === "change-me" || normalized.startsWith("replace-with-") || normalized.startsWith("replace_with_");
+}
+
+function getAdminAuthConfig() {
+  const sessionTtlMs = Number(process.env.CLOUD_SQUEEZE_ADMIN_SESSION_TTL_MS || 12 * 60 * 60 * 1000);
+  if (!Number.isFinite(sessionTtlMs) || sessionTtlMs < 60000) {
+    throw new Error("CLOUD_SQUEEZE_ADMIN_SESSION_TTL_MS must be at least 60000 milliseconds");
+  }
+  return {
+    passwordVerifier: getAdminPasswordVerifier(),
+    sessionTtlMs
+  };
+}
+
+function getAdminPasswordVerifier() {
+  const hash = process.env.CLOUD_SQUEEZE_ADMIN_PASSWORD_HASH || process.env.CLOUD_SQUEEZE_ADMIN_PASSWORD_SHA256 || "";
+  if (hash) return parseAdminPasswordHash(hash);
+  const password = requireEnvSecret("CLOUD_SQUEEZE_ADMIN_PASSWORD", "ADMIN_PASSWORD");
+  return { type: "sha256", hash: hashHex(password) };
+}
+
+function parseAdminPasswordHash(value) {
+  if (!value || isPlaceholderSecret(value)) {
+    throw new Error("CLOUD_SQUEEZE_ADMIN_PASSWORD_HASH must be set to a non-default value");
+  }
+  const parts = value.split(":");
+  if (parts.length === 5 && parts[0] === "pbkdf2") {
+    const [, digest, iterationsRaw, salt, hash] = parts;
+    const iterations = Number(iterationsRaw);
+    if (!["sha256", "sha512"].includes(digest) || !Number.isInteger(iterations) || iterations < 100000 || !salt || !isHex(hash)) {
+      throw new Error("CLOUD_SQUEEZE_ADMIN_PASSWORD_HASH must use pbkdf2:sha256:<iterations>:<salt>:<hex-hash>");
+    }
+    return { type: "pbkdf2", digest, iterations, salt, hash: hash.toLowerCase() };
+  }
+  if (!/^[a-f0-9]{64}$/i.test(value)) {
+    throw new Error("CLOUD_SQUEEZE_ADMIN_PASSWORD_HASH must be a SHA-256 hex digest or pbkdf2 verifier");
+  }
+  return { type: "sha256", hash: value.toLowerCase() };
+}
+
+function isHex(value) {
+  return /^[a-f0-9]+$/i.test(value) && value.length % 2 === 0;
+}
+
+function hashHex(value) {
+  return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+function timingSafeHexEqual(leftHex, rightHex) {
+  if (!isHex(leftHex) || !isHex(rightHex)) return false;
+  const left = Buffer.from(leftHex, "hex");
+  const right = Buffer.from(rightHex, "hex");
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function verifyAdminPassword(password, verifier) {
+  if (verifier.type === "pbkdf2") {
+    const expected = Buffer.from(verifier.hash, "hex");
+    const actual = crypto.pbkdf2Sync(password, verifier.salt, verifier.iterations, expected.length, verifier.digest);
+    return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+  }
+  return timingSafeHexEqual(hashHex(password), verifier.hash);
+}
+
+const allowedCorsOrigins = new Set(
+  (process.env.CLOUD_SQUEEZE_ALLOWED_ORIGINS || "https://harmonizerlabs.cc")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+);
+if (process.env.NODE_ENV !== "production") {
+  allowedCorsOrigins.add("http://127.0.0.1:5173");
+  allowedCorsOrigins.add("http://localhost:5173");
+  allowedCorsOrigins.add("http://127.0.0.1:4177");
+  allowedCorsOrigins.add("http://localhost:4177");
+}
+
+const adminLoginAttempts = new Map();
+const adminSessions = new Map();
+const adminLoginWindowMs = Number(process.env.CLOUD_SQUEEZE_ADMIN_LOGIN_WINDOW_MS || 60000);
+const adminLoginMaxAttempts = Number(process.env.CLOUD_SQUEEZE_ADMIN_LOGIN_MAX_ATTEMPTS || 8);
+const securityPolicy = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: https:",
+  "media-src 'self' blob: http: https:",
+  "connect-src 'self' http: https:",
+  "frame-ancestors 'none'",
+  "base-uri 'self'",
+  "form-action 'self'"
+].join("; ");
 const imageProxyMaxBytes = Number(process.env.IMAGE_PROXY_MAX_BYTES || 8 * 1024 * 1024);
 const imageProxyCacheTtlMs = Number(process.env.IMAGE_PROXY_CACHE_TTL_MS || 6 * 60 * 60 * 1000);
 const imageProxyCacheLimit = Number(process.env.IMAGE_PROXY_CACHE_LIMIT || 200);
@@ -218,9 +326,21 @@ const idleNowPlaying = {
   art: null
 };
 
-export function createApp({ lms = new LmsClient() } = {}) {
+export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistStore } = {}) {
   const app = express();
-  app.use(cors());
+  const adminAuth = getAdminAuthConfig();
+  app.disable("x-powered-by");
+  app.use(applySecurityHeaders);
+  app.use(forceHttpsRedirect);
+  app.use(cors({
+    origin(origin, callback) {
+      if (!origin || allowedCorsOrigins.has(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(null, false);
+    }
+  }));
   const transportTextParser = express.text({ type: "*/*", limit: "2kb" });
   app.use((req, res, next) => {
     if (transportActionPaths.has(req.path)) return transportTextParser(req, res, next);
@@ -638,9 +758,35 @@ export function createApp({ lms = new LmsClient() } = {}) {
       const playerId = await hotPlayerId(lms);
       const results = await lms.spotifySearch(playerId, query, limit);
       rememberKnownSpotifyTracks(results);
-      res.json({ results });
+      res.json({ results, groups: groupSpotifyResults(results) });
     } catch (error) {
-      res.status(502).json({ error: error.message, results: [] });
+      res.status(502).json({ error: error.message, results: [], groups: groupSpotifyResults([]) });
+    }
+  });
+
+  app.get("/api/spotify/search/categories", async (req, res) => {
+    const empty = { artists: [], albums: [], playlists: [] };
+    try {
+      if (!spotifyBrowsingAvailable()) {
+        res.json(empty);
+        return;
+      }
+      const limit = parseBoundedIntegerParam(req.query.limit, { defaultValue: 8, min: 1, max: 20 });
+      if (limit === null) {
+        res.status(400).json({ error: "Spotify category limit must be a positive integer up to 20", ...empty });
+        return;
+      }
+      const query = String(req.query.q || "").trim();
+      if (!query) {
+        res.json(empty);
+        return;
+      }
+      const playerId = await hotPlayerId(lms);
+      const categories = await lms.spotifySearchCategories(playerId, query, limit);
+      rememberKnownSpotifyTracks([...categories.artists, ...categories.albums, ...categories.playlists]);
+      res.json(categories);
+    } catch (error) {
+      res.status(502).json({ error: error.message, ...empty });
     }
   });
 
@@ -720,6 +866,89 @@ export function createApp({ lms = new LmsClient() } = {}) {
     } catch (error) {
       res.status(502).json({ error: error.message, results: [] });
     }
+  });
+
+  app.get("/api/playlists", (_req, res) => {
+    res.json({ playlists: playlists.list() });
+  });
+
+  app.get("/api/playlists/:id", (req, res) => {
+    const playlist = playlists.get(req.params.id);
+    if (!playlist) {
+      res.status(404).json({ error: "Playlist not found" });
+      return;
+    }
+    res.json({ playlist });
+  });
+
+  app.post("/api/playlists", (req, res) => {
+    const parsed = playlistCreateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "A playlist name is required" });
+      return;
+    }
+    runPlaylistAction(res, () => {
+      const playlist = playlists.create({
+        name: parsed.data.name,
+        description: parsed.data.description,
+        createdBy: parsed.data.createdBy || "guest"
+      });
+      logEvent("playlist.create", { id: playlist.id, name: playlist.name, createdBy: playlist.createdBy });
+      res.status(201).json({ playlist });
+    });
+  });
+
+  app.post("/api/playlists/:id/tracks", (req, res) => {
+    const tracks = Array.isArray(req.body?.tracks)
+      ? req.body.tracks
+      : req.body?.track
+        ? [req.body.track]
+        : [];
+    if (tracks.length === 0) {
+      res.status(400).json({ error: "At least one track is required" });
+      return;
+    }
+    runPlaylistAction(res, () => {
+      const { playlist, added } = playlists.addTracks(req.params.id, tracks.slice(0, 100));
+      logEvent("playlist.add-tracks", { id: playlist.id, added });
+      res.json({ playlist, added });
+    });
+  });
+
+  app.patch("/api/playlists/:id", requireAdmin, (req, res) => {
+    runPlaylistAction(res, () => {
+      const playlist = playlists.rename(req.params.id, { name: req.body?.name, description: req.body?.description });
+      logEvent("playlist.rename", { id: playlist.id, name: playlist.name });
+      res.json({ playlist });
+    });
+  });
+
+  app.delete("/api/playlists/:id", requireAdmin, (req, res) => {
+    runPlaylistAction(res, () => {
+      const playlist = playlists.remove(req.params.id);
+      logEvent("playlist.delete", { id: playlist.id });
+      res.json({ ok: true, id: playlist.id });
+    });
+  });
+
+  app.delete("/api/playlists/:id/tracks/:trackKey", requireAdmin, (req, res) => {
+    runPlaylistAction(res, () => {
+      const key = decodeURIComponent(req.params.trackKey || "").toLowerCase();
+      const playlist = playlists.removeTrack(req.params.id, key);
+      res.json({ playlist });
+    });
+  });
+
+  app.post("/api/playlists/:id/tracks/move", requireAdmin, (req, res) => {
+    runPlaylistAction(res, () => {
+      const playlist = playlists.moveTrack(req.params.id, {
+        key: typeof req.body?.key === "string" ? req.body.key.toLowerCase() : undefined,
+        from: req.body?.from,
+        to: req.body?.to,
+        direction: req.body?.direction
+      });
+      res.json({ playlist });
+    });
   });
 
   app.get("/api/library/collections", async (req, res) => {
@@ -929,12 +1158,21 @@ export function createApp({ lms = new LmsClient() } = {}) {
   });
 
   app.post("/api/admin/login", (req, res) => {
+    if (isAdminLoginRateLimited(req)) {
+      logEvent("admin.login.rate-limited", { key: adminLoginKey(req) });
+      res.status(429).json({ error: "Too many admin login attempts" });
+      return;
+    }
     const parsed = loginSchema.safeParse(req.body);
-    if (!parsed.success || parsed.data.password !== adminPassword) {
+    if (!parsed.success || !verifyAdminPassword(parsed.data.password, adminAuth.passwordVerifier)) {
+      recordAdminLoginFailure(req);
+      logEvent("admin.login.failed", { key: adminLoginKey(req) });
       res.status(401).json({ error: "Invalid admin password" });
       return;
     }
-    res.json({ token: adminToken });
+    clearAdminLoginFailures(req);
+    logEvent("admin.login.success", { key: adminLoginKey(req) });
+    res.json(issueAdminSession(adminAuth.sessionTtlMs));
   });
 
   app.post("/api/player/play", async (req, res) => {
@@ -1775,12 +2013,115 @@ function requireAdmin(req, res, next) {
     res.status(401).json({ error: "Admin login required" });
     return;
   }
-  const token = match[1];
-  if (token !== adminToken) {
+  if (!isValidAdminSession(match[1])) {
     res.status(403).json({ error: "Invalid admin token" });
     return;
   }
   next();
+}
+
+function applySecurityHeaders(req, res, next) {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Content-Security-Policy", securityPolicy);
+  if (isHttpsRequest(req)) {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
+  next();
+}
+
+function forceHttpsRedirect(req, res, next) {
+  if (process.env.CLOUD_SQUEEZE_FORCE_HTTPS !== "1" || isHttpsRequest(req) || !["GET", "HEAD"].includes(req.method)) {
+    next();
+    return;
+  }
+  const host = req.get("host");
+  if (!host) {
+    next();
+    return;
+  }
+  res.redirect(308, `https://${host}${req.originalUrl}`);
+}
+
+function isHttpsRequest(req) {
+  return req.secure || String(req.get("x-forwarded-proto") || "").split(",")[0].trim().toLowerCase() === "https";
+}
+
+function adminLoginKey(req) {
+  return req.ip || req.get("x-forwarded-for") || "unknown";
+}
+
+function isAdminLoginRateLimited(req) {
+  const attempt = adminLoginAttempts.get(adminLoginKey(req));
+  if (!attempt) return false;
+  if (Date.now() - attempt.firstAt > adminLoginWindowMs) {
+    adminLoginAttempts.delete(adminLoginKey(req));
+    return false;
+  }
+  return attempt.count >= adminLoginMaxAttempts;
+}
+
+function recordAdminLoginFailure(req) {
+  const key = adminLoginKey(req);
+  const now = Date.now();
+  const attempt = adminLoginAttempts.get(key);
+  if (!attempt || now - attempt.firstAt > adminLoginWindowMs) {
+    adminLoginAttempts.set(key, { count: 1, firstAt: now });
+    return;
+  }
+  attempt.count += 1;
+}
+
+function clearAdminLoginFailures(req) {
+  adminLoginAttempts.delete(adminLoginKey(req));
+}
+
+function issueAdminSession(sessionTtlMs) {
+  cleanupAdminSessions();
+  const token = crypto.randomBytes(32).toString("base64url");
+  const expiresAtMs = Date.now() + sessionTtlMs;
+  adminSessions.set(hashHex(token), expiresAtMs);
+  return { token, expiresAt: new Date(expiresAtMs).toISOString() };
+}
+
+function cleanupAdminSessions() {
+  const now = Date.now();
+  for (const [tokenHash, expiresAtMs] of adminSessions) {
+    if (expiresAtMs <= now) adminSessions.delete(tokenHash);
+  }
+}
+
+function isValidAdminSession(token) {
+  if (!token) return false;
+  cleanupAdminSessions();
+  const expiresAtMs = adminSessions.get(hashHex(token));
+  return Boolean(expiresAtMs && expiresAtMs > Date.now());
+}
+
+function runPlaylistAction(res, action) {
+  try {
+    action();
+  } catch (error) {
+    if (error instanceof PlaylistError) {
+      res.status(error.status).json({ error: error.message });
+      return;
+    }
+    res.status(500).json({ error: "Playlist operation failed" });
+  }
+}
+
+function groupSpotifyResults(results) {
+  const groups = { tracks: [], artists: [], albums: [], playlists: [] };
+  for (const item of Array.isArray(results) ? results : []) {
+    const kind = String(item?.kind || "track").toLowerCase();
+    if (kind === "artist") groups.artists.push(item);
+    else if (kind === "album") groups.albums.push(item);
+    else if (kind === "playlist") groups.playlists.push(item);
+    else groups.tracks.push(item);
+  }
+  return groups;
 }
 
 function withTimeout(promise, timeoutMs, fallback) {

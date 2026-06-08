@@ -90,3 +90,26 @@ export type LibraryCollection = {
   sample: string[];
   art?: string | null;
 };
+
+export type SpotifySearchGroups = {
+  tracks: Track[];
+  artists: Track[];
+  albums: Track[];
+  playlists: Track[];
+};
+
+export type PlaylistSummary = {
+  id: string;
+  name: string;
+  description: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  trackCount: number;
+  art?: string | null;
+  sample: string[];
+};
+
+export type Playlist = PlaylistSummary & {
+  tracks: Track[];
+};

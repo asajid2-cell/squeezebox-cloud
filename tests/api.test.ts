@@ -6,6 +6,7 @@ import path from "node:path";
 import { createApp, maintainVisiblePlaybackQueueForTests, nextQueueItemForPlayback, prewarmSpotifySearchCaches, refreshLmsForTests, resetRefreshStateForTests, sameContinuingPlayback, shouldNudgePlayback, syncVisibleQueueWithCurrentTrack } from "../server/app.js";
 import { clearLibraryCaches } from "../server/library.js";
 import { addQueueItem, appState, config, removeQueueItem, updateNowPlaying, updatePlayback, updateSpotifyStatus } from "../server/state.js";
+import { createPlaylistStore } from "../server/playlists.js";
 
 const tinyMp3 = Buffer.from(
   "SUQzBAAAAAAAIlRTU0UAAAAOAAADTGF2ZjYyLjMuMTAwAAAAAAAAAAAAAAD/+0DAAAAAAAAAAAAAAAAAAAAAAABJbmZvAAAADwAAAAUAAAK+AGhoaGhoaGhoaGhoaGhoaGhoaGiOjo6Ojo6Ojo6Ojo6Ojo6Ojo6OjrS0tLS0tLS0tLS0tLS0tLS0tLS02tra2tra2tra2tra2tra2tra2tr//////////////////////////wAAAABMYXZjNjIuMTEAAAAAAAAAAAAAAAAkAwYAAAAAAAACvhC6F/0AAAAAAP/7EMQAA8AAAaQAAAAgAAA0gAAABExBTUUzLjEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//sQxCmDwAABpAAAACAAADSAAAAEVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVX/+xDEUwPAAAGkAAAAIAAANIAAAARVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVf/7EMR8g8AAAaQAAAAgAAA0gAAABFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//sQxKYDwAABpAAAACAAADSAAAAEVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU=",
@@ -4291,6 +4292,121 @@ describe("Cloud Squeeze API", () => {
   it("returns Spotify search results from Spotty", async () => {
     const response = await request(createApp({ lms: mockLms })).get("/api/spotify/search?q=drake").expect(200);
     expect(response.body.results[0].uri).toBe("spotify:track:0000000000000000000101");
+  });
+
+  it("groups Spotify search results by tracks, artists, albums, and playlists", async () => {
+    const groupedLms = {
+      ...mockLms,
+      async spotifySearch() {
+        return [
+          { id: "spotify:track:t1", title: "Song", artist: "Drake", source: "Spotify", uri: "spotify:track:t1", kind: "track" },
+          { id: "spotify:artist:a1", title: "Drake", artist: "", source: "Spotify artist", uri: "spotify:artist:a1", kind: "artist", browseId: "1.0_a" },
+          { id: "spotify:album:al1", title: "Views", artist: "Drake", source: "Spotify album", uri: "spotify:album:al1", kind: "album", browseId: "1.0_b" },
+          { id: "spotify:playlist:p1", title: "Mix", artist: "Spotify", source: "Spotify playlist", uri: "spotify:playlist:p1", kind: "playlist", browseId: "1.0_c" }
+        ];
+      }
+    };
+    const response = await request(createApp({ lms: groupedLms })).get("/api/spotify/search?q=drake").expect(200);
+    expect(response.body.groups.tracks).toHaveLength(1);
+    expect(response.body.groups.artists[0].uri).toBe("spotify:artist:a1");
+    expect(response.body.groups.albums[0].title).toBe("Views");
+    expect(response.body.groups.playlists[0].kind).toBe("playlist");
+    expect(response.body.results).toHaveLength(4);
+  });
+
+  it("returns Spotify search categories from a dedicated endpoint", async () => {
+    const lms = {
+      ...mockLms,
+      async spotifySearchCategories() {
+        return {
+          artists: [{ id: "spotify:artist:a", title: "Drake", source: "Spotify artist", uri: "spotify:artist:a", kind: "artist" }],
+          albums: [{ id: "spotify:album:b", title: "Views", source: "Spotify album", uri: "spotify:album:b", kind: "album" }],
+          playlists: [{ id: "spotify:playlist:c", title: "Mix", source: "Spotify playlist", uri: "spotify:playlist:c", kind: "playlist" }]
+        };
+      }
+    };
+    const response = await request(createApp({ lms })).get("/api/spotify/search/categories?q=drake").expect(200);
+    expect(response.body.artists[0].uri).toBe("spotify:artist:a");
+    expect(response.body.albums[0].title).toBe("Views");
+    expect(response.body.playlists[0].kind).toBe("playlist");
+  });
+
+  it("manages app playlists with public create and admin-only mutations", async () => {
+    const file = path.join(os.tmpdir(), `cs-playlists-${Math.random().toString(36).slice(2)}.json`);
+    const playlists = createPlaylistStore(file);
+    const app = createApp({ lms: mockLms, playlists });
+    try {
+      const created = await request(app).post("/api/playlists").send({ name: "Road Trip" }).expect(201);
+      const id = created.body.playlist.id;
+      expect(created.body.playlist.name).toBe("Road Trip");
+
+      const added = await request(app)
+        .post(`/api/playlists/${id}/tracks`)
+        .send({ tracks: [
+          { id: "spotify:track:x", title: "Song A", uri: "spotify:track:x", kind: "track", source: "Spotify" },
+          { id: "spotify:album:y", title: "An Album", uri: "spotify:album:y", kind: "album", source: "Spotify album" }
+        ] })
+        .expect(200);
+      expect(added.body.added).toBe(1);
+      expect(added.body.playlist.tracks).toHaveLength(1);
+
+      const dup = await request(app)
+        .post(`/api/playlists/${id}/tracks`)
+        .send({ tracks: [{ id: "spotify:track:x", title: "Song A", uri: "spotify:track:x", kind: "track" }] })
+        .expect(200);
+      expect(dup.body.added).toBe(0);
+
+      const listed = await request(app).get("/api/playlists").expect(200);
+      expect(listed.body.playlists.find((item: { id: string }) => item.id === id).trackCount).toBe(1);
+
+      await request(app).patch(`/api/playlists/${id}`).send({ name: "Renamed" }).expect(401);
+      await request(app).delete(`/api/playlists/${id}`).expect(401);
+
+      const login = await request(app).post("/api/admin/login").send({ password: "admin" }).expect(200);
+      const auth = `Bearer ${login.body.token}`;
+      const renamed = await request(app).patch(`/api/playlists/${id}`).set("Authorization", auth).send({ name: "Renamed" }).expect(200);
+      expect(renamed.body.playlist.name).toBe("Renamed");
+
+      const removed = await request(app)
+        .delete(`/api/playlists/${id}/tracks/${encodeURIComponent("spotify:track:x")}`)
+        .set("Authorization", auth)
+        .expect(200);
+      expect(removed.body.playlist.tracks).toHaveLength(0);
+
+      await request(app).delete(`/api/playlists/${id}`).set("Authorization", auth).expect(200);
+      await request(app).get(`/api/playlists/${id}`).expect(404);
+    } finally {
+      await fs.rm(file, { force: true });
+    }
+  });
+
+  it("reorders playlist tracks for admins and persists across reloads", async () => {
+    const file = path.join(os.tmpdir(), `cs-playlists-${Math.random().toString(36).slice(2)}.json`);
+    const playlists = createPlaylistStore(file);
+    const app = createApp({ lms: mockLms, playlists });
+    try {
+      const created = await request(app).post("/api/playlists").send({ name: "Order" }).expect(201);
+      const id = created.body.playlist.id;
+      await request(app)
+        .post(`/api/playlists/${id}/tracks`)
+        .send({ tracks: [
+          { title: "One", uri: "spotify:track:1", kind: "track" },
+          { title: "Two", uri: "spotify:track:2", kind: "track" }
+        ] })
+        .expect(200);
+      const login = await request(app).post("/api/admin/login").send({ password: "admin" }).expect(200);
+      const moved = await request(app)
+        .post(`/api/playlists/${id}/tracks/move`)
+        .set("Authorization", `Bearer ${login.body.token}`)
+        .send({ key: "spotify:track:2", direction: "up" })
+        .expect(200);
+      expect(moved.body.playlist.tracks[0].uri).toBe("spotify:track:2");
+
+      const reloaded = createPlaylistStore(file);
+      expect(reloaded.get(id).tracks[0].uri).toBe("spotify:track:2");
+    } finally {
+      await fs.rm(file, { force: true });
+    }
   });
 
   it("returns Spotify library sections from Spotty", async () => {

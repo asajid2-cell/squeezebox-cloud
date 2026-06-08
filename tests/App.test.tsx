@@ -47,11 +47,11 @@ beforeEach(() => {
         return jsonResponse({ results: [{ id: "s1", title: "Local Test", artist: "Downloads", source: "Local library", path: "/music/local.mp3" }] });
       }
       if (url.includes("/api/spotify/search")) {
+        const track = { id: "sp1", title: "Headlines", artist: "Drake", album: "Take Care", source: "Spotify", uri: "spotify:track:abc123", kind: "track" };
+        const artist = { id: "spotify:artist:drake", title: "Drake Artist", artist: "Spotify", source: "Spotify artist", uri: "spotify:artist:drake", kind: "artist" };
         return jsonResponse({
-          results: [
-            { id: "sp1", title: "Headlines", artist: "Drake", album: "Take Care", source: "Spotify", uri: "spotify:track:abc123", kind: "track" },
-            { id: "spotify:artist:drake", title: "Drake Artist", artist: "Spotify", source: "Spotify artist", uri: "spotify:artist:drake", kind: "artist" }
-          ]
+          results: [track, artist],
+          groups: { tracks: [track], artists: [artist], albums: [], playlists: [] }
         });
       }
       if (url.includes("/api/library/collections")) {
@@ -75,6 +75,15 @@ beforeEach(() => {
         return jsonResponse({
           results: [{ id: "spotify:track:child", title: "Playlist Child", artist: "Drake", source: "Spotify", uri: "spotify:track:child", kind: "track" }]
         });
+      }
+      if (url.match(/\/api\/playlists\/[^/]+$/) && (!options || options.method === "GET")) {
+        return jsonResponse({ playlist: { id: "pl-1", name: "Late Nights", description: "", createdBy: "guest", createdAt: "", updatedAt: "", trackCount: 1, art: null, sample: ["First Leak"], tracks: [{ id: "spotify:track:child", title: "First Leak", artist: "Juice WRLD", source: "Spotify", uri: "spotify:track:child", kind: "track" }] } });
+      }
+      if (url.includes("/api/playlists") && options?.method === "POST") {
+        return jsonResponse({ playlist: { id: "pl-1", name: "Late Nights", description: "", createdBy: "guest", createdAt: "", updatedAt: "", trackCount: 0, art: null, sample: [], tracks: [] } });
+      }
+      if (url.includes("/api/playlists")) {
+        return jsonResponse({ playlists: [{ id: "pl-1", name: "Late Nights", description: "Chill set", createdBy: "guest", createdAt: "", updatedAt: "", trackCount: 1, art: null, sample: ["First Leak"] }] });
       }
       if (url.includes("/api/player/tracks") && options?.method === "POST") {
         return jsonResponse({ ok: true, accepted: 1, rejected: 1, queued: [], queue: [] });
@@ -495,6 +504,7 @@ describe("Cloud Squeeze UI", () => {
     const fetchMock = vi.mocked(fetch);
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Playlists" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Local" }));
     await userEvent.click(await screen.findByText("Goodbye ERA"));
     expect(await screen.findByText("First Leak")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Queue all" })).toBeInTheDocument();
@@ -532,11 +542,36 @@ describe("Cloud Squeeze UI", () => {
     const fetchMock = vi.mocked(fetch);
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Playlists" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Local" }));
     await userEvent.click(await screen.findByText("Goodbye ERA"));
     await userEvent.click(await screen.findByRole("button", { name: "Queue all" }));
 
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/library/collection") && String(url).includes("limit=200"))).toBe(true);
     expect(await screen.findByRole("alert")).toHaveTextContent("Queued 1 of 2 tracks; 1 skipped because of the queue limit or duplicates.");
+  });
+
+  it("shows app playlists under My Playlists and opens their tracks", async () => {
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Playlists" }));
+    await userEvent.click(await screen.findByRole("button", { name: "My Playlists" }));
+    await userEvent.click(await screen.findByText("Late Nights"));
+    expect(await screen.findByText("First Leak")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Queue all" })).toBeInTheDocument();
+  });
+
+  it("can add a Spotify track to a playlist from search", async () => {
+    const fetchMock = vi.mocked(fetch);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Library" }));
+    await userEvent.click(screen.getByRole("button", { name: "Spotify" }));
+    await userEvent.type(screen.getByLabelText("Search music"), "drake");
+    await waitFor(() => expect(screen.getByText("Headlines")).toBeInTheDocument());
+    const row = screen.getByText("Headlines").closest(".result-row");
+    await userEvent.click(within(row as HTMLElement).getByRole("button", { name: /Save/ }));
+    await userEvent.click(await screen.findByText("Late Nights"));
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url, options]) => /\/api\/playlists\/pl-1\/tracks$/.test(String(url)) && options?.method === "POST")).toBe(true);
+    });
   });
 });
 
