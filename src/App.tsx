@@ -411,6 +411,7 @@ function NowPlayingPanel({
             <p>{state.nowPlaying.artist}</p>
             <span className="source-chip">{state.nowPlaying.source}</span>
             <Progress
+              key={`${state.nowPlaying.id}:${state.nowPlaying.duration || 0}`}
               trackId={state.nowPlaying.id}
               elapsed={state.nowPlaying.elapsed || 0}
               duration={state.nowPlaying.duration || 0}
@@ -555,7 +556,7 @@ function Progress({
       setDraft(elapsed);
       setLiveElapsed(elapsed);
     }
-  }, [elapsed, dragging]);
+  }, [elapsed, dragging, trackId, duration]);
 
   useEffect(() => {
     endRefreshTrack.current = null;

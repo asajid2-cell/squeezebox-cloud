@@ -147,6 +147,56 @@ describe("Cloud Squeeze UI", () => {
     });
   });
 
+  it("resets local progress when the now-playing track changes with the same elapsed value", async () => {
+    let secondTrack = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/api/state")) {
+          return jsonResponse({
+            player: { id: "p1", name: "Test Speaker", connected: true, online: true, mode: secondTrack ? "pause" : "play", volume: 68 },
+            nowPlaying: {
+              id: secondTrack ? "track-b" : "track-a",
+              title: secondTrack ? "Track B" : "Track A",
+              artist: "Tester",
+              album: "",
+              source: "Spotify",
+              duration: 100,
+              elapsed: 0,
+              canSeek: true,
+              art: null
+            },
+            queue: [],
+            recentPicks: [],
+            schedule: {
+              current: { name: "Open Queue", until: "10:00 PM", requestsPaused: false },
+              next: { name: "Quiet Hours", time: "10:00 PM - 8:00 AM", requestsPaused: true }
+            },
+            rules: [],
+            services: {
+              spotify: { configured: true, reachable: true, detail: "ok" },
+              localLibrary: { root: "Downloads", reachable: true, trackCount: 2 },
+              musicInfo: { configured: true, reachable: true, detail: "Plugin ready" }
+            },
+            trackInfo: { artistBio: "", albumReview: "", lyrics: "" },
+            playback: { shuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "mixed" },
+            curation: { hidden: [], saved: [], pinned: [], revision: 0 },
+            admin: { publicRequests: true, maxQueuePerUser: 3, moderation: "basic", scheduleEnabled: true }
+          });
+        }
+        return jsonResponse({ ok: true });
+      })
+    );
+
+    render(<App />);
+    const slider = await screen.findByLabelText("Seek position");
+    await waitFor(() => expect(Number((slider as HTMLInputElement).value)).toBeGreaterThan(0), { timeout: 1500 });
+
+    secondTrack = true;
+    await waitFor(() => expect(screen.getByText("Track B")).toBeInTheDocument(), { timeout: 1500 });
+    expect((screen.getByLabelText("Seek position") as HTMLInputElement).value).toBe("0");
+  });
+
   it("coalesces rapid volume slider changes", async () => {
     const fetchMock = vi.mocked(fetch);
     render(<App />);

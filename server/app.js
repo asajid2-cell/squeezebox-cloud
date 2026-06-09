@@ -1477,8 +1477,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       );
       const sourceChangesGeneratedQueue = Boolean(sourceChanged && (finalSmartQueue || (finalShuffle && !finalManualShuffle)));
       const queueModeChanged = shuffleChanged || smartQueueChanged || sourceChangesGeneratedQueue;
-      const visibleQueueForcesRepeatOff = Boolean(body.repeat && body.repeat !== "off" && appState.queue.length > 0);
-      const queueModeForcesRepeatOff = ((finalShuffle || finalSmartQueue) && (queueModeChanged || Boolean(body.repeat))) || visibleQueueForcesRepeatOff;
+      const queueModeForcesRepeatOff = (finalShuffle || finalSmartQueue) && (queueModeChanged || Boolean(body.repeat));
       if (queueModeForcesRepeatOff) {
         next.repeat = "off";
       }

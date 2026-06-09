@@ -5134,7 +5134,7 @@ describe("Cloud Squeeze API", () => {
     expect(controls).toContainEqual({ action: "repeat", value: "off" });
   });
 
-  it("keeps repeat off when repeat is requested with a visible queue", async () => {
+  it("allows repeat changes while visible playlist queue rows exist", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "mixed" };
     addQueueItem({ title: "Manual A", artist: "Tester", requestedBy: "guest", path: "/music/manual-a.mp3" });
@@ -5153,9 +5153,9 @@ describe("Cloud Squeeze API", () => {
       .send({ repeat: "one" })
       .expect(200);
 
-    expect(response.body.playback.repeat).toBe("off");
-    expect(controls).toContainEqual({ action: "repeat", value: "off" });
-    expect(controls).not.toContainEqual({ action: "repeat", value: "one" });
+    expect(response.body.playback.repeat).toBe("one");
+    expect(controls).toContainEqual({ action: "repeat", value: "one" });
+    expect(controls).not.toContainEqual({ action: "repeat", value: "off" });
   });
 
   it("does not mutate repeat when LMS repeat control fails", async () => {
