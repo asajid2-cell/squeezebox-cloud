@@ -24,6 +24,12 @@ export type QueueItem = Track & {
   etaMinutes: number;
 };
 
+export type CurationItem = {
+  key: string;
+  track: Partial<Track>;
+  updatedAt: string;
+};
+
 export type AppState = {
   player: {
     id: string;
@@ -64,6 +70,12 @@ export type AppState = {
     lastSmartQueueBase?: string;
     history?: string[];
     previousTracks?: Partial<Track>[];
+  };
+  curation: {
+    hidden: CurationItem[];
+    saved: CurationItem[];
+    pinned: CurationItem[];
+    revision: number;
   };
   admin: {
     publicRequests: boolean;

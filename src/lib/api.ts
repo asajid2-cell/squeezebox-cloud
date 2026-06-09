@@ -47,6 +47,7 @@ const fallbackState: AppState = {
     lyrics: "Lyrics will appear when available."
   },
   playback: { shuffle: false, manualShuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "mixed", lastShuffleRefillAt: 0, lastShuffleSeed: "", lastSmartQueueBase: "", history: [], previousTracks: [] },
+  curation: { hidden: [], saved: [], pinned: [], revision: 0 },
   admin: { publicRequests: true, maxQueuePerUser: 25, moderation: "basic", scheduleEnabled: true }
 };
 
@@ -179,6 +180,16 @@ export async function movePlaylistTrack(id: string, key: string, direction: "up"
 
 export function playlistTrackKey(track: Partial<Track>): string {
   return String(track.uri || track.path || track.lmsTrackId || track.id || track.title || "").toLowerCase();
+}
+
+export async function curateLibraryItem(action: "hide" | "unhide" | "favorite" | "unfavorite" | "pin" | "unpin", track: Partial<Track>): Promise<AppState["curation"]> {
+  const response = await fetch(`${apiBase}/curation`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...adminAuthHeader() },
+    body: JSON.stringify({ action, track: compactPlaylistTrack(track) })
+  });
+  const data = await responseJson<{ curation: AppState["curation"] }>(response, "Could not update library curation");
+  return data.curation;
 }
 
 function compactPlaylistTrack(track: Partial<Track>) {

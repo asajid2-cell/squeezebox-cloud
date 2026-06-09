@@ -7,6 +7,7 @@ import { createApp, maintainVisiblePlaybackQueueForTests, nextQueueItemForPlayba
 import { clearLibraryCaches } from "../server/library.js";
 import { addQueueItem, appState, config, removeQueueItem, updateNowPlaying, updatePlayback, updateSpotifyStatus } from "../server/state.js";
 import { createPlaylistStore } from "../server/playlists.js";
+import { createCurationStore } from "../server/curation.js";
 
 const tinyMp3 = Buffer.from(
   "SUQzBAAAAAAAIlRTU0UAAAAOAAADTGF2ZjYyLjMuMTAwAAAAAAAAAAAAAAD/+0DAAAAAAAAAAAAAAAAAAAAAAABJbmZvAAAADwAAAAUAAAK+AGhoaGhoaGhoaGhoaGhoaGhoaGiOjo6Ojo6Ojo6Ojo6Ojo6Ojo6OjrS0tLS0tLS0tLS0tLS0tLS0tLS02tra2tra2tra2tra2tra2tra2tr//////////////////////////wAAAABMYXZjNjIuMTEAAAAAAAAAAAAAAAAkAwYAAAAAAAACvhC6F/0AAAAAAP/7EMQAA8AAAaQAAAAgAAA0gAAABExBTUUzLjEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//sQxCmDwAABpAAAACAAADSAAAAEVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVX/+xDEUwPAAAGkAAAAIAAANIAAAARVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVf/7EMR8g8AAAaQAAAAgAAA0gAAABFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//sQxKYDwAABpAAAACAAADSAAAAEVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU=",
@@ -4375,6 +4376,33 @@ describe("Cloud Squeeze API", () => {
 
       await request(app).delete(`/api/playlists/${id}`).set("Authorization", auth).expect(200);
       await request(app).get(`/api/playlists/${id}`).expect(404);
+    } finally {
+      await fs.rm(file, { force: true });
+    }
+  });
+
+  it("stores admin curation and filters hidden Spotify results", async () => {
+    const file = path.join(os.tmpdir(), `cs-curation-${Math.random().toString(36).slice(2)}.json`);
+    const curation = createCurationStore(file);
+    const app = createApp({ lms: mockLms, curation });
+    const track = { title: "Headlines", artist: "Drake", source: "Spotify", uri: "spotify:track:0000000000000000000101", kind: "track" };
+    try {
+      await request(app).post("/api/curation").send({ action: "favorite", track }).expect(401);
+      const login = await request(app).post("/api/admin/login").send({ password: "admin" }).expect(200);
+      const auth = `Bearer ${login.body.token}`;
+
+      const favorited = await request(app).post("/api/curation").set("Authorization", auth).send({ action: "favorite", track }).expect(200);
+      expect(favorited.body.curation.saved[0].track.title).toBe("Headlines");
+      const hidden = await request(app).post("/api/curation").set("Authorization", auth).send({ action: "hide", track }).expect(200);
+      expect(hidden.body.curation.hidden[0].key).toBe("uri:spotify:track:0000000000000000000101");
+
+      const search = await request(app).get("/api/spotify/search?q=drake").expect(200);
+      expect(search.body.results).toEqual([]);
+
+      const reloaded = createCurationStore(file);
+      const appAfterReload = createApp({ lms: mockLms, curation: reloaded });
+      const state = await request(appAfterReload).get("/api/state").expect(200);
+      expect(state.body.curation.hidden[0].track.title).toBe("Headlines");
     } finally {
       await fs.rm(file, { force: true });
     }

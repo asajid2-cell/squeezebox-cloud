@@ -26,6 +26,7 @@ import {
 import { clearLibraryCaches, getCollections, getCollectionTracks, saveUploadedTrack, scanLibrary, searchLibrary } from "./library.js";
 import { enrichTrackArtwork, enrichTrackInfo } from "./trackInfo.js";
 import { defaultPlaylistStore, PlaylistError } from "./playlists.js";
+import { defaultCurationStore, CurationError } from "./curation.js";
 
 const requiredText = z.string().trim().min(1);
 const optionalText = z.preprocess(
@@ -127,6 +128,33 @@ const smartShuffleSchema = z.object({
   source: z.enum(["mixed", "spotify", "local"]).optional(),
   count: z.number().int().min(1).max(8).optional(),
   seed: optionalText
+}).strict();
+
+const curationTrackSchema = z.object({
+  id: z.union([z.string().trim().min(1), z.number()]).optional(),
+  title: requiredText.optional(),
+  artist: optionalText,
+  album: optionalText,
+  source: optionalText,
+  path: optionalText,
+  uri: optionalText,
+  kind: optionalText,
+  lmsTrackId: z.union([z.string().trim().min(1), z.number()]).optional(),
+  art: optionalText.nullable(),
+  artwork: optionalText.nullable(),
+  uploaded: z.boolean().optional(),
+  duration: z.number().finite().nonnegative().nullable().optional(),
+  browseId: optionalText,
+  collection: optionalText,
+  folder: optionalText
+}).strict().refine(
+  (value) => Boolean(value.title || value.path || value.uri || value.lmsTrackId || value.collection || value.folder),
+  { message: "A title, path, URI, LMS id, collection, or folder is required" }
+);
+
+const curationSchema = z.object({
+  action: z.enum(["hide", "unhide", "favorite", "unfavorite", "pin", "unpin"]),
+  track: curationTrackSchema
 }).strict();
 
 const loginSchema = z.object({
@@ -326,9 +354,10 @@ const idleNowPlaying = {
   art: null
 };
 
-export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistStore } = {}) {
+export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistStore, curation = defaultCurationStore } = {}) {
   const app = express();
   const adminAuth = getAdminAuthConfig();
+  appState.curation = curation.getState();
   app.disable("x-powered-by");
   app.use(applySecurityHeaders);
   app.use(forceHttpsRedirect);
@@ -736,7 +765,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       const libraryResults = await searchLibrary(query, undefined, limit, source);
       return enrichLibraryArtwork(lms, libraryResults, { fallbackBudgetMs: localSearchFallbackArtworkBudgetMs });
     });
-    res.json({ results });
+    res.json({ results: filterHiddenResults(results, curation) });
   });
 
   app.get("/api/spotify/search", async (req, res) => {
@@ -758,7 +787,8 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       const playerId = await hotPlayerId(lms);
       const results = await lms.spotifySearch(playerId, query, limit);
       rememberKnownSpotifyTracks(results);
-      res.json({ results, groups: groupSpotifyResults(results) });
+      const visible = filterHiddenResults(results, curation);
+      res.json({ results: visible, groups: groupSpotifyResults(visible) });
     } catch (error) {
       res.status(502).json({ error: error.message, results: [], groups: groupSpotifyResults([]) });
     }
@@ -784,7 +814,11 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       const playerId = await hotPlayerId(lms);
       const categories = await lms.spotifySearchCategories(playerId, query, limit);
       rememberKnownSpotifyTracks([...categories.artists, ...categories.albums, ...categories.playlists]);
-      res.json(categories);
+      res.json({
+        artists: filterHiddenResults(categories.artists, curation),
+        albums: filterHiddenResults(categories.albums, curation),
+        playlists: filterHiddenResults(categories.playlists, curation)
+      });
     } catch (error) {
       res.status(502).json({ error: error.message, ...empty });
     }
@@ -815,7 +849,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       const results = await lms.spotifyLibrary(playerId, type, limit, offset);
       rememberKnownSpotifyTracks(results);
       res.json({
-        results
+        results: filterHiddenResults(results, curation)
       });
     } catch (error) {
       res.status(502).json({ error: error.message, results: [] });
@@ -862,7 +896,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
         offset
       );
       rememberKnownSpotifyTracks(results);
-      res.json({ results });
+      res.json({ results: filterHiddenResults(results, curation) });
     } catch (error) {
       res.status(502).json({ error: error.message, results: [] });
     }
@@ -951,6 +985,21 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     });
   });
 
+  app.post("/api/curation", requireAdmin, (req, res) => {
+    const parsed = curationSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid curation item", issues: parsed.error.issues, curation: appState.curation });
+      return;
+    }
+    runCurationAction(res, () => {
+      const result = curation.update(parsed.data.action, parsed.data.track);
+      appState.curation = result.curation;
+      clearEnrichedLibraryResponseCache();
+      logEvent("curation.update", { action: parsed.data.action, key: result.item.key });
+      res.json({ ok: true, action: parsed.data.action, item: result.item, curation: result.curation });
+    });
+  });
+
   app.get("/api/library/collections", async (req, res) => {
     const source = parseLibrarySource(req.query.source);
     if (!source) {
@@ -1007,7 +1056,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       });
       return enrichLibraryArtwork(lms, collectionResults);
     });
-    res.json({ results });
+    res.json({ results: filterHiddenResults(results, curation) });
   });
 
   app.post("/api/library/rescan", requireAdmin, async (_req, res) => {
@@ -2110,6 +2159,23 @@ function runPlaylistAction(res, action) {
     }
     res.status(500).json({ error: "Playlist operation failed" });
   }
+}
+
+function runCurationAction(res, action) {
+  try {
+    action();
+  } catch (error) {
+    if (error instanceof CurationError) {
+      res.status(error.status).json({ error: error.message, curation: appState.curation });
+      return;
+    }
+    res.status(500).json({ error: "Curation operation failed", curation: appState.curation });
+  }
+}
+
+function filterHiddenResults(results, curation) {
+  if (!Array.isArray(results) || results.length === 0) return [];
+  return results.filter((track) => !curation.isHidden(track));
 }
 
 function groupSpotifyResults(results) {

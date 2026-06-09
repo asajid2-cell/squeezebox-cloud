@@ -40,6 +40,7 @@ beforeEach(() => {
             albumReview: "Album review text",
             lyrics: "Lyrics text"
           },
+          curation: { hidden: [], saved: [], pinned: [], revision: 0 },
           admin: { publicRequests: true, maxQueuePerUser: 3, moderation: "basic", scheduleEnabled: true }
         });
       }
@@ -99,6 +100,9 @@ beforeEach(() => {
       }
       if (url.includes("/api/admin/login") && options?.method === "POST") {
         return jsonResponse({ token: "test-token" });
+      }
+      if (url.includes("/api/curation") && options?.method === "POST") {
+        return jsonResponse({ ok: true, curation: { hidden: [{ key: "uri:spotify:track:abc123", track: { title: "Headlines" }, updatedAt: "" }], saved: [], pinned: [], revision: 1 } });
       }
       if (url.includes("/api/speaker/connect-guide")) {
         return jsonResponse({
@@ -571,6 +575,27 @@ describe("Cloud Squeeze UI", () => {
     await userEvent.click(await screen.findByText("Late Nights"));
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([url, options]) => /\/api\/playlists\/pl-1\/tracks$/.test(String(url)) && options?.method === "POST")).toBe(true);
+    });
+  });
+
+  it("shows admin curation actions for search rows", async () => {
+    const fetchMock = vi.mocked(fetch);
+    window.localStorage.setItem("cloud-squeeze-admin-token", "test-token");
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Library" }));
+    await userEvent.click(screen.getByRole("button", { name: "Spotify" }));
+    await userEvent.type(screen.getByLabelText("Search music"), "drake");
+    await waitFor(() => expect(screen.getByText("Headlines")).toBeInTheDocument());
+
+    const row = screen.getByText("Headlines").closest(".result-row");
+    expect(row).toBeTruthy();
+    await userEvent.click(within(row as HTMLElement).getByRole("button", { name: "Hide" }));
+
+    await waitFor(() => {
+      const curationCall = fetchMock.mock.calls.find(([url, options]) => String(url).includes("/api/curation") && options?.method === "POST");
+      expect(curationCall).toBeTruthy();
+      expect(curationCall?.[1]?.headers).toEqual(expect.objectContaining({ Authorization: "Bearer test-token" }));
+      expect(curationCall?.[1]?.body).toContain("\"action\":\"hide\"");
     });
   });
 });

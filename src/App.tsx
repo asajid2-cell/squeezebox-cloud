@@ -6,12 +6,14 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  EyeOff,
   ListMusic,
   ListPlus,
   LockKeyhole,
   Music2,
   Pause,
   Pencil,
+  Pin,
   Play,
   Plus,
   Radio,
@@ -35,6 +37,7 @@ import {
   checkSpeaker,
   checkSpotify,
   createPlaylist,
+  curateLibraryItem,
   deletePlaylist,
   fetchCollectionTracks,
   clearAdminSession,
@@ -132,6 +135,10 @@ function mergeStateFromAction(previous: AppState | null, result: unknown): AppSt
     next.playback = { ...previous.playback, ...payload.playback };
     changed = true;
   }
+  if (payload.curation && typeof payload.curation === "object") {
+    next.curation = payload.curation;
+    changed = true;
+  }
 
   return changed ? next : previous;
 }
@@ -215,7 +222,7 @@ export default function App() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [query, sourceFilter]);
+  }, [query, sourceFilter, state?.curation?.revision]);
 
   if (!state) return <div className="boot">Squeezebox Cloud</div>;
 
@@ -1053,8 +1060,39 @@ function SearchResultRow({ track, requestsOpen, onRefresh, onAction }: { track: 
         {playable && <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("play-next", track); await onRefresh(); })}>Play next</button>}
         {playable && <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("add-queue", track); await onRefresh(); })}>Queue</button>}
         {playable && <AddToPlaylistButton track={track} />}
+        <CurationButtons track={track} onAction={onAction} />
       </div>
     </div>
+  );
+}
+
+function CurationButtons({ track, onAction }: { track: Track; onAction: ActionRunner }) {
+  const [status, setStatus] = useState("");
+  if (!hasAdminSession()) return null;
+
+  async function curate(action: "favorite" | "pin" | "hide") {
+    const label = action === "favorite" ? "Favorited" : action === "pin" ? "Pinned" : "Hidden";
+    await onAction(async () => {
+      const curation = await curateLibraryItem(action, track);
+      setStatus(label);
+      window.setTimeout(() => setStatus(""), 1200);
+      return { curation };
+    });
+  }
+
+  return (
+    <>
+      <button className="ghost-add icon-text" title="Favorite" onClick={() => curate("favorite")}>
+        <Check size={14} /> Favorite
+      </button>
+      <button className="ghost-add icon-text" title="Pin" onClick={() => curate("pin")}>
+        <Pin size={14} /> Pin
+      </button>
+      <button className="ghost-add icon-text danger-text" title="Hide from library" onClick={() => curate("hide")}>
+        <EyeOff size={14} /> Hide
+      </button>
+      {status && <small className="inline-status">{status}</small>}
+    </>
   );
 }
 

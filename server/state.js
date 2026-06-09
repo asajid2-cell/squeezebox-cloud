@@ -72,6 +72,12 @@ export const appState = {
     previousTracks: [],
     appManagedPlayback: false
   },
+  curation: {
+    hidden: [],
+    saved: [],
+    pinned: [],
+    revision: 0
+  },
   admin: {
     publicRequests: true,
     maxQueuePerUser: config.publicQueueMaxPerUser,

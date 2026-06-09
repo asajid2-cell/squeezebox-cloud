@@ -500,6 +500,18 @@ input[type="range"] {
   background: transparent;
   color: var(--rose);
 }
+.ghost-add.icon-text {
+  align-items: center;
+  display: inline-flex;
+  gap: 4px;
+}
+.ghost-add.danger-text {
+  color: #ffb4b4;
+}
+.inline-status {
+  color: var(--muted);
+  white-space: nowrap;
+}
 .queue-actions {
   display: flex;
   justify-content: flex-end;
