@@ -61,6 +61,14 @@ beforeEach(() => {
         });
       }
       if (url.includes("/api/library/collection")) {
+        if (String(url).includes("limit=200")) {
+          return jsonResponse({
+            results: [
+              { id: "local-playlist-1", title: "First Leak", artist: "Juice WRLD", source: "Local library", path: "/music/first.mp3" },
+              { id: "local-playlist-2", title: "Second Leak", artist: "Juice WRLD", source: "Local library", path: "/music/second.mp3" }
+            ]
+          });
+        }
         return jsonResponse({
           results: [{ id: "local-playlist-1", title: "First Leak", artist: "Juice WRLD", source: "Local library", path: "/music/first.mp3" }]
         });

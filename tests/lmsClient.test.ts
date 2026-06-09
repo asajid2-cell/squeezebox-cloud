@@ -75,6 +75,30 @@ describe("LMS client parsing", () => {
     expect(commands).toEqual([]);
   });
 
+  it("returns stale Spotify status immediately while refreshing it", async () => {
+    const client = new LmsClient();
+    const stale = { configured: true, reachable: true, detail: "cached" };
+    const fresh = { configured: true, reachable: false, detail: "fresh" };
+    let releaseFresh!: () => void;
+    let calls = 0;
+
+    client.setCached("spotifyStatus", stale, -1);
+    client.readSpotifyStatus = async () => {
+      calls += 1;
+      await new Promise<void>((resolve) => {
+        releaseFresh = resolve;
+      });
+      return fresh;
+    };
+
+    await expect(client.spotifyStatus()).resolves.toEqual(stale);
+    expect(calls).toBe(1);
+
+    releaseFresh();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await expect(client.spotifyStatus()).resolves.toEqual(fresh);
+  });
+
   it("falls back to CLI status when JSON-RPC status fails", async () => {
     const client = new LmsClient();
     client.jsonRequest = async () => {
