@@ -301,13 +301,20 @@ const transportActionPaths = new Set([
 // How long we keep showing a brief "reconnecting" hold after the LAST genuine
 // connection before reporting the player as truly offline, and how stale a cached
 // connected status may be before an action forces a fresh check (auto-wake).
-const playerReconnectGraceMs = Number(process.env.PLAYER_RECONNECT_GRACE_MS || 12000);
+const playerReconnectGraceMs = Number(process.env.PLAYER_RECONNECT_GRACE_MS || 20000);
 const playerStatusMaxAgeMs = Number(process.env.PLAYER_STATUS_MAX_AGE_MS || 6000);
+// The LMS<->player link is normally rock-steady; a status poll that comes back
+// "not connected" is almost always a transient slow/timed-out CLI call during
+// playback, not a real drop. Hold the last-known CONNECTED state through this
+// many consecutive failed polls before degrading the UI, so transport controls
+// never flicker off on a single blip.
+const playerStatusFailureThreshold = Number(process.env.PLAYER_STATUS_FAILURE_THRESHOLD || 3);
 
 const refreshState = {
   promise: null,
   updatedAt: 0,
   lastConnectedAt: 0,
+  statusFailures: 0,
   servicesAt: 0,
   trackInfoAt: 0,
   trackKey: "",
@@ -2660,13 +2667,22 @@ function delay(ms) {
 function updateStablePlayerStatus(status) {
   if (status.connected) {
     refreshState.lastConnectedAt = Date.now();
+    refreshState.statusFailures = 0;
     updatePlayerStatus({ ...status, reconnecting: false });
     return;
   }
-  // Grace window is measured from the LAST GENUINE connection, not refreshed on
-  // each held poll — so after a real disconnect we stop claiming "connected"
-  // once the window elapses instead of holding it forever.
+  // This poll came back "not connected". Because the link is normally steady,
+  // treat the first few consecutive failures as a transient blip and HOLD the
+  // last-known connected state — controls stay live instead of flickering off.
+  refreshState.statusFailures = (refreshState.statusFailures || 0) + 1;
   const sinceConnected = Date.now() - (refreshState.lastConnectedAt || 0);
+  const wasUsable = appState.player.connected && !appState.player.reconnecting;
+
+  if (wasUsable && refreshState.statusFailures < playerStatusFailureThreshold && sinceConnected < playerReconnectGraceMs) {
+    // Hold: leave appState.player untouched (still "connected") for the UI.
+    return;
+  }
+  // Sustained loss but still within the grace window -> honest "reconnecting".
   if (refreshState.lastConnectedAt && sinceConnected < playerReconnectGraceMs) {
     updatePlayerStatus({
       ...appState.player,
@@ -2677,6 +2693,7 @@ function updateStablePlayerStatus(status) {
     });
     return;
   }
+  // Grace elapsed -> genuinely offline.
   updatePlayerStatus({ ...status, reconnecting: false });
 }
 
