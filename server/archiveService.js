@@ -170,23 +170,24 @@ async function kickWorker() {
   }
 }
 
-/** spotty --single-track (S16LE PCM) | ffmpeg -> FLAC. */
-function downloadOne(job) {
+/**
+ * Reusable fetch primitive: spotty --single-track (S16LE PCM) | ffmpeg, encoded
+ * per `encodeArgs`, written to `outPath`. Shared by archive (FLAC) and the local
+ * browser stream cache (MP3).
+ */
+function fetchAndEncode(uri, outPath, encodeArgs, label = "Worker") {
   const bin = locateSpottyBin();
   if (!bin || !existsSync(bin)) {
     return Promise.reject(new Error("spotty helper binary not found"));
   }
-  const dest = path.join(ARCHIVE_DIR, `${sanitize(job.artist)} - ${sanitize(job.title)}.flac`);
-  const part = `${dest}.part`;
-
   return new Promise((resolve, reject) => {
     let settled = false;
     const fail = (e) => { if (!settled) { settled = true; reject(e instanceof Error ? e : new Error(String(e))); } };
 
     const spotty = spawn(bin, [
-      "-n", "ArchiveWorker",
+      "-n", label,
       "-c", CACHE_DIR,
-      "--single-track", job.uri,
+      "--single-track", uri,
       "--bitrate", "320",
       "--disable-discovery",
       "--disable-audio-cache"
@@ -195,9 +196,8 @@ function downloadOne(job) {
       "-hide_banner", "-loglevel", "error",
       "-f", "s16le", "-ar", "44100", "-ac", "2",
       "-i", "pipe:0",
-      "-c:a", "flac",
-      "-f", "flac",          // force the FLAC muxer ('.part' extension can't be inferred)
-      "-y", part
+      ...encodeArgs,
+      "-y", outPath
     ]);
 
     let errOut = "";
@@ -211,25 +211,79 @@ function downloadOne(job) {
     spotty.stdout.on("error", () => {});
     ff.stdin.on("error", () => {});
     spotty.stdout.pipe(ff.stdin);
-    // If spotty dies, make sure ffmpeg's stdin closes.
     spotty.on("close", () => { try { ff.stdin.end(); } catch {} });
 
     ff.on("close", async (code) => {
       if (settled) return;
       settled = true;
-      if (code === 0 && existsSync(part)) {
-        try {
-          await fs.rename(part, dest);
-          resolve(dest);
-        } catch (e) {
-          reject(e);
-        }
+      if (code === 0 && existsSync(outPath)) {
+        resolve(outPath);
       } else {
-        await fs.unlink(part).catch(() => {});
+        await fs.unlink(outPath).catch(() => {});
         reject(new Error(errOut.trim() || `encode failed (ffmpeg exit ${code})`));
       }
     });
   });
+}
+
+/** Archive job: fetch + encode to a permanent FLAC. */
+async function downloadOne(job) {
+  const dest = path.join(ARCHIVE_DIR, `${sanitize(job.artist)} - ${sanitize(job.title)}.flac`);
+  const part = `${dest}.part`;
+  await fetchAndEncode(job.uri, part, ["-c:a", "flac", "-f", "flac"], "ArchiveWorker");
+  await fs.rename(part, dest);
+  return dest;
+}
+
+// ---------------------------------------------------------------------------
+// Local browser stream cache (MP3, temporary, LRU) — for "play here" / local DJ
+// ---------------------------------------------------------------------------
+
+const STREAM_DIR = path.join(ARCHIVE_DIR, ".stream-cache");
+const STREAM_CACHE_MAX = Number(process.env.STREAM_CACHE_MAX_FILES || 60);
+const streamInflight = new Map();
+
+/**
+ * Ensure a browser-playable MP3 for the given track id/uri exists in the temp
+ * cache, fetching it on demand. Returns the file path. Same-track requests are
+ * de-duplicated. This is user-initiated (a "play here" click), so it runs
+ * immediately rather than through the rate-limited archive queue.
+ */
+export async function ensureStreamFile(uriOrId) {
+  const raw = String(uriOrId || "");
+  const norm = normalizeUri(raw.includes("track:") ? raw : `spotify://track:${raw}`);
+  const m = norm.match(/track:([A-Za-z0-9]+)/);
+  if (!m) throw new Error("Invalid track for streaming");
+  const id = m[1];
+  const dest = path.join(STREAM_DIR, `${id}.mp3`);
+  if (existsSync(dest)) {
+    const now = new Date();
+    fs.utimes(dest, now, now).catch(() => {});
+    return dest;
+  }
+  if (streamInflight.has(id)) return streamInflight.get(id);
+  const job = (async () => {
+    await fs.mkdir(STREAM_DIR, { recursive: true });
+    const part = `${dest}.part`;
+    await fetchAndEncode(norm, part, ["-c:a", "libmp3lame", "-b:a", "256k", "-f", "mp3"], "LocalStream");
+    await fs.rename(part, dest);
+    pruneStreamCache().catch(() => {});
+    return dest;
+  })().finally(() => streamInflight.delete(id));
+  streamInflight.set(id, job);
+  return job;
+}
+
+async function pruneStreamCache() {
+  const files = (await fs.readdir(STREAM_DIR).catch(() => [])).filter((f) => f.endsWith(".mp3"));
+  if (files.length <= STREAM_CACHE_MAX) return;
+  const stats = await Promise.all(
+    files.map(async (f) => ({ f, t: (await fs.stat(path.join(STREAM_DIR, f)).catch(() => ({ mtimeMs: 0 }))).mtimeMs }))
+  );
+  stats.sort((a, b) => a.t - b.t); // oldest first
+  for (const { f } of stats.slice(0, files.length - STREAM_CACHE_MAX)) {
+    await fs.unlink(path.join(STREAM_DIR, f)).catch(() => {});
+  }
 }
 
 // ---------------------------------------------------------------------------

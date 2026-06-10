@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { LmsClient } from "./lmsClient.js";
-import { enqueueNowPlaying, enqueueTrack, getQueueStatus, removeJob } from "./archiveService.js";
+import { enqueueNowPlaying, enqueueTrack, getQueueStatus, removeJob, ensureStreamFile } from "./archiveService.js";
 import {
   addQueueItem,
   addQueueItemNext,
@@ -1677,6 +1677,21 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
 
   app.get("/api/archive/status", (_req, res) => {
     res.json(getQueueStatus());
+  });
+
+  // Local browser playback of a Spotify track: fetch (or reuse) a browser-playable
+  // MP3 and serve it with range support so an <audio> element can play and seek it.
+  // Independent of the Squeezebox/LMS path. (Distinct from /api/stream/:encodedPath,
+  // which serves local library files.)
+  app.get("/api/local-stream/:id", async (req, res) => {
+    try {
+      const file = await ensureStreamFile(String(req.query.uri || req.params.id));
+      // dotfiles:"allow" — the cache lives under .stream-cache, which send() would
+      // otherwise 404 as a dotfile path.
+      res.sendFile(file, { dotfiles: "allow", headers: { "Cache-Control": "private, max-age=3600", "Accept-Ranges": "bytes" } });
+    } catch (error) {
+      res.status(502).json({ error: error.message });
+    }
   });
 
   app.delete("/api/archive/queue/:id", (req, res) => {
