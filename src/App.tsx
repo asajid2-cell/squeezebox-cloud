@@ -44,6 +44,8 @@ import {
   fetchArchive,
   archiveDownloadUrl,
   archiveCurrentTrack,
+  archiveTrack,
+  fetchArchiveStatus,
   fetchCollectionTracks,
   clearAdminSession,
   fetchCollections,
@@ -76,7 +78,7 @@ import {
   updateQueueItem,
   uploadTrack,
 } from "./lib/api";
-import type { ArchiveFile } from "./lib/api";
+import type { ArchiveFile, ArchiveJob } from "./lib/api";
 import type { AppState, ConnectionGuide, LibraryCollection, Playlist, PlaylistSummary, SpotifySearchGroups, Track } from "./types";
 import "./styles.css";
 
@@ -465,7 +467,7 @@ function NowPlayingPanel({
 }
 
 function ArchiveButton({ hasTrack }: { hasTrack: boolean }) {
-  const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [status, setStatus] = useState<"idle" | "saving" | "done" | "error">("idle");
   const [message, setMessage] = useState("");
 
   async function onArchive() {
@@ -473,27 +475,49 @@ function ArchiveButton({ hasTrack }: { hasTrack: boolean }) {
     setMessage("");
     try {
       const result = await archiveCurrentTrack();
-      setStatus("saved");
-      setMessage(result.track ? `Archiving “${result.track}”` : "Archiving current track");
-      window.setTimeout(() => setStatus("idle"), 6000);
+      setStatus("done");
+      setMessage(result.queued ? "Added to archive queue" : result.reason || "Already archived");
+      window.setTimeout(() => setStatus("idle"), 5000);
     } catch (err) {
       setStatus("error");
-      setMessage(err instanceof Error ? err.message : "Could not archive");
+      setMessage(err instanceof Error ? err.message : "Could not queue archive");
     }
   }
 
   return (
     <div className="archive-action">
-      <button
-        className="archive-button"
-        disabled={!hasTrack || status === "saving"}
-        onClick={onArchive}
-      >
+      <button className="archive-button" disabled={!hasTrack || status === "saving"} onClick={onArchive}>
         <HardDriveDownload size={18} />
-        {status === "saving" ? "Archiving…" : status === "saved" ? "Archiving started" : "Archive this song"}
+        {status === "saving" ? "Queueing…" : "Archive this song"}
       </button>
       {message && <span className={status === "error" ? "archive-msg error" : "archive-msg"}>{message}</span>}
     </div>
+  );
+}
+
+function ArchiveTrackButton({ track }: { track: Track }) {
+  const [state, setState] = useState<"idle" | "queued" | "error">("idle");
+  async function onClick() {
+    try {
+      const r = await archiveTrack(track);
+      setState("queued");
+      window.setTimeout(() => setState("idle"), 4000);
+      if (!r.queued && r.reason) setState("queued");
+    } catch {
+      setState("error");
+      window.setTimeout(() => setState("idle"), 4000);
+    }
+  }
+  return (
+    <button
+      className="ghost-add"
+      data-tooltip="Archive"
+      disabled={state === "queued"}
+      onClick={onClick}
+      aria-label={`Archive ${track.title}`}
+    >
+      {state === "queued" ? <Check size={15} /> : <HardDriveDownload size={15} />}
+    </button>
   );
 }
 
@@ -503,16 +527,24 @@ function formatBytes(bytes: number | null): string {
   return mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
+const ARCHIVE_STATUS_LABEL: Record<ArchiveJob["status"], string> = {
+  queued: "Queued",
+  downloading: "Downloading…",
+  done: "Saved",
+  failed: "Failed"
+};
+
 function ArchivePanel() {
   const [files, setFiles] = useState<ArchiveFile[]>([]);
+  const [jobs, setJobs] = useState<ArchiveJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   const reload = useCallback(() => {
-    setLoading(true);
-    fetchArchive()
-      .then((list) => {
+    Promise.all([fetchArchive(), fetchArchiveStatus().catch(() => null)])
+      .then(([list, status]) => {
         setFiles(list);
+        setJobs(status?.jobs || []);
         setError("");
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Could not load archive"))
@@ -521,27 +553,50 @@ function ArchivePanel() {
 
   useEffect(() => {
     reload();
-    // Refresh periodically so newly-captured tracks appear without a manual reload.
-    const timer = window.setInterval(reload, 10000);
+    // Poll so queue progress + newly-finished downloads appear live.
+    const timer = window.setInterval(reload, 5000);
     return () => window.clearInterval(timer);
   }, [reload]);
 
+  const pending = jobs.filter((j) => j.status === "queued" || j.status === "downloading");
+  const failed = jobs.filter((j) => j.status === "failed");
+
   return (
-    <section className="panel" aria-label="Archive">
+    <section className="panel archive-panel" aria-label="Archive">
       <div className="panel-head-row">
         <h2>Archive</h2>
         <button className="ghost-button" onClick={reload} aria-label="Refresh archive">Refresh</button>
       </div>
-      <p className="empty-copy">Tracks saved as lossless FLAC while they played on the Squeezebox.</p>
+      <p className="panel-subtitle">Lossless FLAC copies, downloaded in the background. Queue songs from search or the player — no need to play them.</p>
       {error && <div className="action-error" role="alert">{error}</div>}
+
+      {pending.length > 0 && (
+        <div className="archive-queue">
+          <h3 className="archive-section-title">In progress</h3>
+          <ul className="archive-list">
+            {pending.map((job) => (
+              <li key={job.id} className="archive-row">
+                <div className="archive-meta">
+                  <strong>{job.title}</strong>
+                  <span>{job.artist}</span>
+                </div>
+                <span className={`archive-badge ${job.status}`}>{ARCHIVE_STATUS_LABEL[job.status]}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <h3 className="archive-section-title">Saved{files.length ? ` · ${files.length}` : ""}</h3>
       {loading && files.length === 0 ? (
         <p className="empty-copy">Loading…</p>
       ) : files.length === 0 ? (
-        <p className="empty-copy">Nothing archived yet. Play a track on the archive-scoped Squeezebox to capture it.</p>
+        <p className="empty-copy">Nothing saved yet. Click the archive icon on any song to queue it.</p>
       ) : (
         <ul className="archive-list">
           {files.map((file) => (
             <li key={file.filename} className="archive-row">
+              <div className="archive-thumb"><Music2 size={18} /></div>
               <div className="archive-meta">
                 <strong>{file.title || file.filename}</strong>
                 <span>{file.artist}</span>
@@ -560,6 +615,10 @@ function ArchivePanel() {
             </li>
           ))}
         </ul>
+      )}
+
+      {failed.length > 0 && (
+        <p className="archive-failed-note">{failed.length} download{failed.length > 1 ? "s" : ""} failed — re-queue to retry.</p>
       )}
     </section>
   );
@@ -1112,11 +1171,24 @@ function SpotifyGroupSection({
   );
 }
 
+function usableArt(art?: string | null): string | undefined {
+  // Only URLs the browser can actually load: http(s) or our proxied "api/..." paths.
+  // Spotty hands back relative LMS placeholder paths (e.g. "plugins/Spotty/...") for
+  // items with no cover — those 404 against this origin, so treat them as no art.
+  if (!art) return undefined;
+  return /^(https?:|api\/|\/)/.test(art) ? art : undefined;
+}
+
+function FallbackArt({ kind }: { kind?: string }) {
+  const Icon = kind === "playlist" ? ListMusic : kind === "artist" ? Radio : Music2;
+  return <Icon size={18} className="art-fallback-icon" />;
+}
+
 function SpotifyBrowseRow({ track, onOpen }: { track: Track; onOpen: () => void }) {
-  const art = track.art || track.artwork;
+  const art = usableArt(track.art || track.artwork);
   return (
     <button className="result-row browse-row" onClick={onOpen}>
-      <div className="cover-thumb">{art && <img src={art} alt="" />}</div>
+      <div className="cover-thumb">{art ? <img src={art} alt="" /> : <FallbackArt kind={track.kind} />}</div>
       <div>
         <strong>{track.title}</strong>
         <small>{track.artist || track.album || track.source}</small>
@@ -1166,10 +1238,10 @@ function SpotifyDetail({
 
 function SearchResultRow({ track, requestsOpen, onRefresh, onAction }: { track: Track; requestsOpen: boolean; onRefresh: () => void; onAction: ActionRunner }) {
   const playable = !track.kind || track.kind === "track" || Boolean(track.path || track.lmsTrackId);
-  const art = track.art || track.artwork;
+  const art = usableArt(track.art || track.artwork);
   return (
     <div className="result-row">
-      <div className="cover-thumb">{art && <img src={art} alt="" />}</div>
+      <div className="cover-thumb">{art ? <img src={art} alt="" /> : <FallbackArt kind={track.kind} />}</div>
       <div>
         <strong>{track.title}</strong>
         <small>
@@ -1183,6 +1255,7 @@ function SearchResultRow({ track, requestsOpen, onRefresh, onAction }: { track: 
         {playable && <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("play-next", track); await onRefresh(); })}>Play next</button>}
         {playable && <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("add-queue", track); await onRefresh(); })}>Queue</button>}
         {playable && <AddToPlaylistButton track={track} />}
+        {(!track.kind || track.kind === "track") && (track.uri || track.id)?.toString().includes("spotify:") && <ArchiveTrackButton track={track} />}
         <CurationButtons track={track} onAction={onAction} />
       </div>
     </div>

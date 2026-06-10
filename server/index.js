@@ -21,7 +21,7 @@ if (process.env.NODE_ENV === "production") {
 
 app.listen(config.port, () => {
   console.log(`Squeezebox Cloud API listening on http://127.0.0.1:${config.port}`);
-  startArchiveService(lms);
+  startArchiveService();
   prewarmSpotifySearchCaches(lms).catch(() => null);
   for (const delayMs of [5000, 20000]) {
     const timer = setTimeout(() => {

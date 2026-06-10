@@ -430,12 +430,40 @@ export function archiveDownloadUrl(filename: string): string {
   return `${apiBase}/archive/file/${encodeURIComponent(filename)}`;
 }
 
-export async function archiveCurrentTrack(): Promise<{ archiving: boolean; track?: string; filename?: string }> {
-  const response = await fetch(`${apiBase}/archive`, { method: "POST" });
-  return responseJson(response, "Could not start archiving");
+export interface ArchiveJob {
+  id: string;
+  artist: string;
+  title: string;
+  status: "queued" | "downloading" | "done" | "failed";
+  error: string | null;
+  queuedAt: string;
 }
 
-export async function fetchArchiveStatus(): Promise<{ archiving: boolean; track?: string }> {
+export interface ArchiveQueueStatus {
+  cooldownMs: number;
+  dailyCap: number;
+  downloadedToday: number;
+  current: string | null;
+  jobs: ArchiveJob[];
+}
+
+/** Queue the currently-playing track for background archival. */
+export async function archiveCurrentTrack(): Promise<{ queued: boolean; reason?: string }> {
+  const response = await fetch(`${apiBase}/archive`, { method: "POST" });
+  return responseJson(response, "Could not queue archive");
+}
+
+/** Queue an explicit track (from search results / a playlist). */
+export async function archiveTrack(track: { uri?: string; id?: string; artist?: string; title?: string }): Promise<{ queued: boolean; reason?: string }> {
+  const response = await fetch(`${apiBase}/archive/track`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ uri: track.uri || track.id, artist: track.artist, title: track.title })
+  });
+  return responseJson(response, "Could not queue archive");
+}
+
+export async function fetchArchiveStatus(): Promise<ArchiveQueueStatus> {
   const response = await fetch(`${apiBase}/archive/status`);
   return response.json();
 }

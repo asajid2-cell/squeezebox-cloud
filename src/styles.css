@@ -464,6 +464,49 @@ input[type="range"] {
   color: var(--rose);
   border-color: var(--rose);
 }
+.archive-panel {
+  grid-area: now;
+  padding: 24px 22px;
+  min-height: 382px;
+}
+.panel-subtitle {
+  margin: 6px 0 18px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: 60ch;
+}
+.archive-section-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin: 20px 0 10px;
+}
+.archive-section-title:first-of-type { margin-top: 4px; }
+.archive-queue + .archive-section-title { margin-top: 22px; }
+.archive-thumb {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: radial-gradient(circle at 50% 120%, rgba(255, 95, 131, .22), transparent 55%), #12131b;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.archive-badge {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line-soft);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.archive-badge.downloading { color: var(--rose); border-color: var(--rose); }
+.archive-failed-note { margin-top: 14px; color: var(--muted); font-size: 12px; }
+.art-fallback-icon { color: var(--muted); opacity: 0.7; }
 .archive-action {
   display: flex;
   align-items: center;
@@ -521,6 +564,7 @@ input[type="range"] {
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+  flex: 1 1 auto;
 }
 .archive-meta strong {
   font-size: 14px;

@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { LmsClient } from "./lmsClient.js";
-import { requestArchive, getArchiveStatus } from "./archiveService.js";
+import { enqueueNowPlaying, enqueueTrack, getQueueStatus, removeJob } from "./archiveService.js";
 import {
   addQueueItem,
   addQueueItemNext,
@@ -1619,20 +1619,46 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     res.json(appState.admin);
   });
 
-  // Promote the currently-playing track from the transient capture buffer to a
-  // permanent archive file. This is the ONLY thing that persists audio — it runs
-  // only when the user clicks "Archive" on the player screen.
+  // Queue the currently-playing track for background archival (independent of
+  // playback — see archiveService.js).
   app.post("/api/archive", async (_req, res) => {
     try {
-      const result = await requestArchive(lms);
+      const result = await enqueueNowPlaying(lms);
       res.json(result);
     } catch (error) {
       res.status(400).json({ error: error.message });
     }
   });
 
+  // Queue an explicit track (e.g. from search results / a playlist).
+  app.post("/api/archive/track", (req, res) => {
+    try {
+      const { uri, artist, title } = req.body || {};
+      res.json(enqueueTrack({ uri, artist, title }));
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  // Queue many tracks at once (whole playlist/album).
+  app.post("/api/archive/tracks", (req, res) => {
+    const tracks = Array.isArray(req.body?.tracks) ? req.body.tracks : [];
+    let queued = 0, skipped = 0;
+    for (const t of tracks) {
+      try {
+        const r = enqueueTrack({ uri: t.uri, artist: t.artist, title: t.title });
+        r.queued ? queued++ : skipped++;
+      } catch { skipped++; }
+    }
+    res.json({ queued, skipped, total: tracks.length });
+  });
+
   app.get("/api/archive/status", (_req, res) => {
-    res.json(getArchiveStatus());
+    res.json(getQueueStatus());
+  });
+
+  app.delete("/api/archive/queue/:id", (req, res) => {
+    res.json(removeJob(String(req.params.id || "")));
   });
 
   app.get("/api/archive/file/:name", async (req, res) => {

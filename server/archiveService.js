@@ -1,35 +1,38 @@
 /**
- * archiveService.js
+ * archiveService.js — queue-based, playback-independent Spotify archival.
  *
- * On-demand archival of the currently-playing track.
+ * Each track is downloaded on its own via a separate `spotty --single-track`
+ * fetch (verified ~8x faster than realtime and does NOT interrupt the active
+ * Spotify session), piped through ffmpeg to a lossless FLAC. A strictly
+ * SEQUENTIAL worker drains the queue with a cooldown between tracks and a
+ * daily cap, so the account is paced gently — this is for archiving, not
+ * mass downloading.
  *
- * Capture model (why it works this way):
- *   - LMS plays Spotify through a single spotty→flac transcode. We tee that
- *     transcode to a TRANSIENT buffer file ($ARCHIVE_DIR/_current.flac) that is
- *     overwritten at the start of every track. Nothing in that buffer is ever
- *     kept unless the user explicitly asks for it.
- *   - We do NOT open a second Spotify stream to capture, because Spotify allows
- *     only one active stream per account — a second one would interrupt the
- *     user's playback. Teeing the existing stream avoids that entirely.
- *
- * On-demand archive (requestArchive):
- *   - Copies whatever the buffer holds for the current track, then tails the
- *     buffer's growth into the destination until the track ends (track change
- *     detected via the LMS CLI, buffer truncation, or growth going idle).
- *   - The finished file is named "Artist - Title.flac" and tagged.
- *
- * A lightweight LMS CLI subscription tracks only the current track id per
- * player, so a finalize can stop exactly when the track changes. It does NOT
- * archive anything on its own.
+ * Independence: because each download is its own fetch (not a tap on the live
+ * playback stream), skipping/stopping the current song cannot corrupt it, and
+ * you can queue many tracks (or a whole playlist) and walk away.
  */
 
-import net from "node:net";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 
 const ARCHIVE_DIR = resolveArchiveDir();
-const PLAYER_MAC = (process.env.ARCHIVE_PLAYER_MAC || "").toLowerCase().trim();
-const BUFFER_FILE = "_current.flac";
+const QUEUE_FILE = path.join(ARCHIVE_DIR, "queue.json");
+const CACHE_DIR = path.join(ARCHIVE_DIR, ".spotty-cache");
+const CONFIG_DIR = process.env.LMS_CONFIG_DIR || "/config";
+
+// Rate limits — conservative by design. Override via env if ever needed.
+const COOLDOWN_MS = Number(process.env.ARCHIVE_COOLDOWN_MS) || 45000; // gap between downloads
+const DAILY_CAP = Number(process.env.ARCHIVE_DAILY_CAP) || 50;        // max tracks/day
+const RETRY_PAUSE_MS = 60 * 60 * 1000;                                // re-check hourly when capped
+
+let queue = [];
+let dailyCount = { date: "", count: 0 };
+let workerRunning = false;
+let currentId = null;
 
 function resolveArchiveDir() {
   const raw = process.env.ARCHIVE_DIR || "./archive";
@@ -40,180 +43,234 @@ function resolveArchiveDir() {
 }
 
 // ---------------------------------------------------------------------------
-// Current-track tracking (read-only; never archives on its own)
+// Startup
 // ---------------------------------------------------------------------------
 
-const currentTrackByPlayer = new Map(); // playerId -> last seen track token
-let reconnectTimer = null;
-
-/** Start the CLI subscription used only to know when a track changes. */
-export function startArchiveService(lms) {
-  if (!PLAYER_MAC) {
-    console.log("[archive] ARCHIVE_PLAYER_MAC not set — on-demand archive service idle.");
-    return;
+export async function startArchiveService() {
+  await fs.mkdir(ARCHIVE_DIR, { recursive: true }).catch(() => {});
+  await fs.mkdir(CACHE_DIR, { recursive: true }).catch(() => {});
+  await loadQueue();
+  // Recover from a crash: any job left "downloading" goes back to "queued".
+  let changed = false;
+  for (const job of queue) {
+    if (job.status === "downloading") { job.status = "queued"; changed = true; }
   }
-  fs.mkdir(ARCHIVE_DIR, { recursive: true }).catch((err) =>
-    console.error("[archive] Could not create ARCHIVE_DIR:", err.message)
-  );
-  connectAndTrack(lms);
-}
+  if (changed) await saveQueue();
 
-function connectAndTrack(lms) {
-  const host = lms.host || "127.0.0.1";
-  const port = lms.port || 9090;
-  const socket = net.createConnection({ host, port });
-  let buffer = "";
-
-  socket.setEncoding("utf8");
-  socket.on("connect", () => {
-    console.log(`[archive] Tracking current track via LMS CLI ${host}:${port}.`);
-    socket.write("listen 1\n");
-    socket.write("subscribe playlist\n");
-  });
-  socket.on("data", (chunk) => {
-    buffer += chunk;
-    const lines = buffer.split("\n");
-    buffer = lines.pop();
-    for (const line of lines) trackLine(line.trim());
-  });
-  socket.on("error", (err) => console.error("[archive] CLI socket error:", err.message));
-  socket.on("close", () => {
-    if (reconnectTimer) return;
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      connectAndTrack(lms);
-    }, 10000);
-    reconnectTimer.unref?.();
-  });
-}
-
-function trackLine(line) {
-  if (!line) return;
-  const spaceIdx = line.indexOf(" ");
-  if (spaceIdx < 0) return;
-  let playerId;
-  try {
-    playerId = decodeURIComponent(line.slice(0, spaceIdx)).toLowerCase().trim();
-  } catch {
-    return;
+  const credsOk = await prepareCredentials();
+  if (!credsOk) {
+    console.warn("[archive] Spotty credentials not found — downloads will fail until Spotty is authed.");
   }
-  const rest = line.slice(spaceIdx + 1);
-  // "playlist newsong <title> <index>" — the index/token marks a track change.
-  if (rest.startsWith("playlist newsong")) {
-    currentTrackByPlayer.set(playerId, rest);
-  }
+  console.log(`[archive] queue service ready (${queue.filter(j => j.status === "queued").length} queued, cooldown ${COOLDOWN_MS}ms, cap ${DAILY_CAP}/day).`);
+  kickWorker();
 }
 
 // ---------------------------------------------------------------------------
-// On-demand archive
+// Public API (used by routes)
 // ---------------------------------------------------------------------------
 
-let activeJob = null; // { trackKey, dest, status } — one at a time
+/** Enqueue an explicit track. {uri, artist, title} */
+export function enqueueTrack({ uri, artist, title } = {}) {
+  const normalized = normalizeUri(uri);
+  if (!normalized) throw new Error("No archivable Spotify track was provided.");
 
-export function getArchiveStatus() {
-  return activeJob
-    ? { archiving: true, track: activeJob.label, state: activeJob.state }
-    : { archiving: false };
+  // Already downloaded? Already queued/downloading? Skip.
+  if (isAlreadyArchived(artist, title)) return { queued: false, reason: "already archived" };
+  if (queue.some((j) => normalizeUri(j.uri) === normalized && j.status !== "failed")) {
+    return { queued: false, reason: "already in queue" };
+  }
+
+  const job = {
+    id: crypto.randomUUID(),
+    uri: normalized,
+    artist: (artist || "Unknown Artist").trim(),
+    title: (title || "Unknown Title").trim(),
+    status: "queued",
+    queuedAt: new Date().toISOString(),
+    error: null
+  };
+  queue.push(job);
+  saveQueue();
+  kickWorker();
+  return { queued: true, job: publicJob(job) };
 }
 
-/**
- * Promote the currently-playing track from the transient buffer to a permanent
- * archive file. Resolves when archiving has STARTED (finalize continues async).
- */
-export async function requestArchive(lms, playerIdArg) {
-  const playerId = (playerIdArg || PLAYER_MAC).toLowerCase().trim();
-  if (!PLAYER_MAC) throw new Error("Archiving is not configured (ARCHIVE_PLAYER_MAC unset).");
-  if (activeJob) return { archiving: true, track: activeJob.label, already: true };
-
-  const track = await lms.nowPlaying(playerId).catch(() => null);
+/** Enqueue the track currently playing on the archive player. */
+export async function enqueueNowPlaying(lms, playerId) {
+  const pid = (playerId || process.env.ARCHIVE_PLAYER_MAC || "").trim();
+  const track = await lms.nowPlaying(pid).catch(() => null);
   if (!track || track.id === "idle") throw new Error("Nothing is playing to archive.");
-
-  const bufferPath = path.join(ARCHIVE_DIR, BUFFER_FILE);
-  try {
-    await fs.access(bufferPath);
-  } catch {
-    throw new Error("No capture buffer yet — give the track a moment to start, then try again.");
-  }
-
-  const artist = sanitize(track.artist || "Unknown Artist");
-  const title = sanitize(track.title || "Unknown Title");
-  const destName = `${artist} - ${title}.flac`;
-  const destPath = path.join(ARCHIVE_DIR, destName);
-  const trackKey = currentTrackByPlayer.get(playerId) || track.id;
-
-  activeJob = { trackKey, label: `${track.artist} – ${track.title}`, state: "capturing" };
-  // Run the copy/tail/finalize loop without blocking the HTTP response.
-  finalizeArchive({ lms, playerId, bufferPath, destPath, destName, trackKey, track }).catch((err) => {
-    console.error("[archive] finalize error:", err.message);
-    activeJob = null;
-  });
-
-  return { archiving: true, track: activeJob.label, filename: destName };
+  const uri = track.uri || track.id;
+  return enqueueTrack({ uri, artist: track.artist, title: track.title });
 }
 
-/**
- * Copy the buffer to the destination, then keep appending the buffer's growth
- * until the track ends. Track-end is detected by: CLI track-change, buffer
- * truncation (next song reset the file), or growth going idle for IDLE_MS.
- */
-async function finalizeArchive({ lms, playerId, bufferPath, destPath, destName, trackKey, track }) {
-  const POLL_MS = 1000;
-  const IDLE_MS = 5000; // buffer stopped growing this long => track fully captured
+export function getQueueStatus() {
+  return {
+    cooldownMs: COOLDOWN_MS,
+    dailyCap: DAILY_CAP,
+    downloadedToday: dailyCount.date === today() ? dailyCount.count : 0,
+    current: currentId,
+    jobs: queue.map(publicJob)
+  };
+}
 
-  let copied = 0;
-  let lastGrowth = Date.now();
-  const out = await fs.open(destPath, "w");
+/** Remove a job that hasn't started (or a finished/failed one) from the queue. */
+export function removeJob(id) {
+  if (id === currentId) return { removed: false, reason: "in progress" };
+  const before = queue.length;
+  queue = queue.filter((j) => j.id !== id);
+  if (queue.length !== before) saveQueue();
+  return { removed: queue.length !== before };
+}
 
+// ---------------------------------------------------------------------------
+// Worker
+// ---------------------------------------------------------------------------
+
+async function kickWorker() {
+  if (workerRunning) return;
+  workerRunning = true;
   try {
-    // eslint-disable-next-line no-constant-condition
     while (true) {
-      let size = 0;
+      const job = queue.find((j) => j.status === "queued");
+      if (!job) break;
+      if (!withinDailyCap()) break; // paused until the cap resets
+
+      job.status = "downloading";
+      currentId = job.id;
+      await saveQueue();
+
       try {
-        size = (await fs.stat(bufferPath)).size;
-      } catch {
-        break; // buffer vanished
+        await downloadOne(job);
+        job.status = "done";
+        job.finishedAt = new Date().toISOString();
+        bumpDailyCount();
+        console.log(`[archive] saved: ${job.artist} - ${job.title}`);
+      } catch (err) {
+        job.status = "failed";
+        job.error = String(err && err.message ? err.message : err).slice(0, 300);
+        console.error(`[archive] failed: ${job.artist} - ${job.title}: ${job.error}`);
       }
+      currentId = null;
+      await saveQueue();
 
-      if (size < copied) break; // truncation => next song started; we have the full track
-
-      if (size > copied) {
-        const fh = await fs.open(bufferPath, "r");
-        try {
-          const len = size - copied;
-          const buf = Buffer.allocUnsafe(len);
-          await fh.read(buf, 0, len, copied);
-          await out.write(buf);
-        } finally {
-          await fh.close();
-        }
-        copied = size;
-        lastGrowth = Date.now();
+      // Pace the next download.
+      if (queue.some((j) => j.status === "queued") && withinDailyCap()) {
+        await delay(COOLDOWN_MS);
       }
-
-      const trackChanged = (currentTrackByPlayer.get(playerId) || track.id) !== trackKey;
-      const idle = Date.now() - lastGrowth > IDLE_MS;
-      if (trackChanged || idle) break;
-
-      await delay(POLL_MS);
     }
   } finally {
-    await out.close();
+    workerRunning = false;
   }
 
-  // No post-processing: the copied bytes are exactly the FLAC stream the player
-  // decoded, so the file is valid by construction. Artist/title live in the
-  // filename (the API parses them back out). Embedded tagging was removed
-  // because hand-editing FLAC metadata blocks risked corrupting the stream;
-  // it can be re-added later via a real FLAC/ffmpeg dependency if wanted.
-  console.log(`[archive] Saved on demand: ${destName} (${copied} bytes)`);
-  activeJob = null;
+  // If we stopped only because of the daily cap, re-check later.
+  if (queue.some((j) => j.status === "queued") && !withinDailyCap()) {
+    const t = setTimeout(kickWorker, RETRY_PAUSE_MS);
+    t.unref?.();
+  }
 }
 
-function delay(ms) {
-  return new Promise((resolve) => {
-    const t = setTimeout(resolve, ms);
-    t.unref?.();
+/** spotty --single-track (S16LE PCM) | ffmpeg -> FLAC. */
+function downloadOne(job) {
+  const bin = locateSpottyBin();
+  if (!bin || !existsSync(bin)) {
+    return Promise.reject(new Error("spotty helper binary not found"));
+  }
+  const dest = path.join(ARCHIVE_DIR, `${sanitize(job.artist)} - ${sanitize(job.title)}.flac`);
+  const part = `${dest}.part`;
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const fail = (e) => { if (!settled) { settled = true; reject(e instanceof Error ? e : new Error(String(e))); } };
+
+    const spotty = spawn(bin, [
+      "-n", "ArchiveWorker",
+      "-c", CACHE_DIR,
+      "--single-track", job.uri,
+      "--bitrate", "320",
+      "--disable-discovery",
+      "--disable-audio-cache"
+    ]);
+    const ff = spawn("ffmpeg", [
+      "-hide_banner", "-loglevel", "error",
+      "-f", "s16le", "-ar", "44100", "-ac", "2",
+      "-i", "pipe:0",
+      "-c:a", "flac",
+      "-f", "flac",          // force the FLAC muxer ('.part' extension can't be inferred)
+      "-y", part
+    ]);
+
+    let errOut = "";
+    spotty.stderr.on("data", (d) => { errOut += d.toString().slice(0, 200); });
+    ff.stderr.on("data", (d) => { errOut += d.toString().slice(0, 200); });
+
+    spotty.on("error", fail);
+    ff.on("error", fail);
+    // Swallow pipe errors (e.g. EPIPE when one side closes first); the close
+    // handlers below decide success/failure.
+    spotty.stdout.on("error", () => {});
+    ff.stdin.on("error", () => {});
+    spotty.stdout.pipe(ff.stdin);
+    // If spotty dies, make sure ffmpeg's stdin closes.
+    spotty.on("close", () => { try { ff.stdin.end(); } catch {} });
+
+    ff.on("close", async (code) => {
+      if (settled) return;
+      settled = true;
+      if (code === 0 && existsSync(part)) {
+        try {
+          await fs.rename(part, dest);
+          resolve(dest);
+        } catch (e) {
+          reject(e);
+        }
+      } else {
+        await fs.unlink(part).catch(() => {});
+        reject(new Error(errOut.trim() || `encode failed (ffmpeg exit ${code})`));
+      }
+    });
   });
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function locateSpottyBin() {
+  if (process.env.ARCHIVE_SPOTTY_BIN) return process.env.ARCHIVE_SPOTTY_BIN;
+  const base = path.join(CONFIG_DIR, "cache/InstalledPlugins/Plugins/Spotty/Bin");
+  try {
+    for (const dir of readdirSync(base)) {
+      const p = path.join(base, dir, "spotty-x86_64");
+      if (existsSync(p)) return p;
+    }
+  } catch {}
+  return path.join(base, "i386-linux/spotty-x86_64");
+}
+
+async function prepareCredentials() {
+  const base = path.join(CONFIG_DIR, "cache/spotty");
+  try {
+    for (const dir of await fs.readdir(base)) {
+      const src = path.join(base, dir, "credentials.json");
+      if (existsSync(src)) {
+        await fs.copyFile(src, path.join(CACHE_DIR, "credentials.json"));
+        return true;
+      }
+    }
+  } catch {}
+  return false;
+}
+
+function normalizeUri(u) {
+  const s = String(u || "").trim();
+  const m = s.match(/spotify:(?:\/\/)?track:([A-Za-z0-9]+)/);
+  return m ? `spotify://track:${m[1]}` : "";
+}
+
+function isAlreadyArchived(artist, title) {
+  const name = `${sanitize(artist || "Unknown Artist")} - ${sanitize(title || "Unknown Title")}.flac`;
+  return existsSync(path.join(ARCHIVE_DIR, name));
 }
 
 function sanitize(value) {
@@ -224,4 +281,53 @@ function sanitize(value) {
       .trim()
       .slice(0, 100) || "Unknown"
   );
+}
+
+function publicJob(j) {
+  return { id: j.id, artist: j.artist, title: j.title, status: j.status, error: j.error, queuedAt: j.queuedAt };
+}
+
+function today() {
+  return new Date().toISOString().slice(0, 10);
+}
+function withinDailyCap() {
+  if (dailyCount.date !== today()) return true;
+  return dailyCount.count < DAILY_CAP;
+}
+function bumpDailyCount() {
+  const d = today();
+  if (dailyCount.date !== d) dailyCount = { date: d, count: 0 };
+  dailyCount.count += 1;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    const t = setTimeout(resolve, ms);
+    t.unref?.();
+  });
+}
+
+async function loadQueue() {
+  try {
+    const raw = await fs.readFile(QUEUE_FILE, "utf8");
+    const data = JSON.parse(raw);
+    queue = Array.isArray(data.queue) ? data.queue : [];
+    dailyCount = data.dailyCount && typeof data.dailyCount === "object" ? data.dailyCount : { date: "", count: 0 };
+  } catch {
+    queue = [];
+  }
+}
+
+let saveTimer = null;
+function saveQueue() {
+  // Debounce writes; keep only a bounded history of finished jobs.
+  if (saveTimer) return;
+  saveTimer = setTimeout(async () => {
+    saveTimer = null;
+    const done = queue.filter((j) => j.status === "done" || j.status === "failed");
+    const active = queue.filter((j) => j.status === "queued" || j.status === "downloading");
+    queue = [...active, ...done.slice(-200)];
+    await fs.writeFile(QUEUE_FILE, JSON.stringify({ queue, dailyCount }, null, 2)).catch(() => {});
+  }, 200);
+  saveTimer.unref?.();
 }
