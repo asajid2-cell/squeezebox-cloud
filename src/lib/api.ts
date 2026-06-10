@@ -412,6 +412,24 @@ export async function checkSpotify() {
   return response.json();
 }
 
+export interface ArchiveFile {
+  filename: string;
+  artist: string;
+  title: string;
+  size: number | null;
+  addedAt: string | null;
+}
+
+export async function fetchArchive(): Promise<ArchiveFile[]> {
+  const response = await fetch(`${apiBase}/archive`);
+  const data = await responseJson<{ files: ArchiveFile[] }>(response, "Could not load archive");
+  return data.files || [];
+}
+
+export function archiveDownloadUrl(filename: string): string {
+  return `${apiBase}/archive/file/${encodeURIComponent(filename)}`;
+}
+
 export async function getSpotifyConnect() {
   const response = await fetch(`${apiBase}/spotify/connect`);
   return response.json() as Promise<{ setupUrl: string; fallbackUrl: string; steps: string[] }>;

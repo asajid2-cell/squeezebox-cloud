@@ -1,5 +1,6 @@
 import { createApp, prewarmLibraryCaches, prewarmSpotifySearchCaches } from "./app.js";
 import { LmsClient } from "./lmsClient.js";
+import { startArchiveWatcher } from "./archiveWatcher.js";
 import { config } from "./state.js";
 import express from "express";
 import path from "node:path";
@@ -20,6 +21,7 @@ if (process.env.NODE_ENV === "production") {
 
 app.listen(config.port, () => {
   console.log(`Squeezebox Cloud API listening on http://127.0.0.1:${config.port}`);
+  startArchiveWatcher(lms);
   prewarmSpotifySearchCaches(lms).catch(() => null);
   for (const delayMs of [5000, 20000]) {
     const timer = setTimeout(() => {

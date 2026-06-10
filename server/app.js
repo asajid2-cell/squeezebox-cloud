@@ -1618,6 +1618,57 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     res.json(appState.admin);
   });
 
+  app.get("/api/archive/file/:name", async (req, res) => {
+    try {
+      const archiveDir = resolveArchiveDir();
+      // Resolve and confirm the requested file stays inside the archive dir
+      // (reject path traversal like ../../etc/passwd or absolute paths).
+      const requested = path.basename(String(req.params.name || ""));
+      if (!requested.endsWith(".flac") || requested === "_current.flac") {
+        res.status(400).json({ error: "Invalid file" });
+        return;
+      }
+      const filePath = path.join(archiveDir, requested);
+      if (path.dirname(filePath) !== path.resolve(archiveDir)) {
+        res.status(400).json({ error: "Invalid file" });
+        return;
+      }
+      await fs.promises.access(filePath);
+      res.download(filePath, requested);
+    } catch {
+      res.status(404).json({ error: "File not found" });
+    }
+  });
+
+  app.get("/api/archive", async (_req, res) => {
+    try {
+      const archiveDir = resolveArchiveDir();
+      await fs.promises.mkdir(archiveDir, { recursive: true });
+      const entries = await fs.promises.readdir(archiveDir);
+      const files = await Promise.all(
+        entries
+          .filter((name) => name.endsWith(".flac") && name !== "_current.flac")
+          .map(async (name) => {
+            const filePath = path.join(archiveDir, name);
+            const stat = await fs.promises.stat(filePath).catch(() => null);
+            const { artist, title } = parseArchiveFilename(name);
+            return {
+              filename: name,
+              artist,
+              title,
+              size: stat ? stat.size : null,
+              addedAt: stat ? stat.mtime.toISOString() : null
+            };
+          })
+      );
+      // Most-recently-added first.
+      files.sort((a, b) => (b.addedAt || "").localeCompare(a.addedAt || ""));
+      res.json({ files });
+    } catch (error) {
+      res.status(500).json({ error: error.message, files: [] });
+    }
+  });
+
   app.use("/api", (_req, res) => {
     res.status(404).json({ error: "API route not found" });
   });
@@ -3519,4 +3570,29 @@ function shuffleChangedOrder(items) {
   const changed = shuffled.some((item, index) => item !== items[index]);
   if (changed) return shuffled;
   return [shuffled.at(-1), ...shuffled.slice(0, -1)];
+}
+
+// ---------------------------------------------------------------------------
+// Archive helpers (used by GET /api/archive)
+// ---------------------------------------------------------------------------
+
+function resolveArchiveDir() {
+  const raw = process.env.ARCHIVE_DIR || "./archive";
+  return raw
+    .replace(/^~(?=$|[\\/])/, process.env.HOME || process.env.USERPROFILE || "")
+    .replace(/%USERPROFILE%/gi, process.env.USERPROFILE || "")
+    .replace(/\$HOME/g, process.env.HOME || process.env.USERPROFILE || "");
+}
+
+/**
+ * Parses "Artist - Title.flac" into { artist, title }.
+ * Falls back gracefully when the separator is absent.
+ */
+function parseArchiveFilename(name) {
+  const base = name.replace(/\.flac$/i, "");
+  const sepIdx = base.indexOf(" - ");
+  if (sepIdx >= 0) {
+    return { artist: base.slice(0, sepIdx).trim(), title: base.slice(sepIdx + 3).trim() };
+  }
+  return { artist: "", title: base.trim() };
 }

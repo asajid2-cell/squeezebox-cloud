@@ -7,6 +7,8 @@ import {
   ChevronDown,
   ChevronUp,
   EyeOff,
+  Download,
+  HardDriveDownload,
   ListMusic,
   ListPlus,
   LockKeyhole,
@@ -39,6 +41,8 @@ import {
   createPlaylist,
   curateLibraryItem,
   deletePlaylist,
+  fetchArchive,
+  archiveDownloadUrl,
   fetchCollectionTracks,
   clearAdminSession,
   fetchCollections,
@@ -71,6 +75,7 @@ import {
   updateQueueItem,
   uploadTrack,
 } from "./lib/api";
+import type { ArchiveFile } from "./lib/api";
 import type { AppState, ConnectionGuide, LibraryCollection, Playlist, PlaylistSummary, SpotifySearchGroups, Track } from "./types";
 import "./styles.css";
 
@@ -104,7 +109,8 @@ const navItems = [
   { label: "Now Playing", icon: Music2 },
   { label: "Queue", icon: ListMusic },
   { label: "Playlists", icon: Music2 },
-  { label: "Library", icon: Search }
+  { label: "Library", icon: Search },
+  { label: "Archive", icon: HardDriveDownload }
 ];
 
 type PublicScreenName = (typeof navItems)[number]["label"];
@@ -377,6 +383,15 @@ function PublicScreen({
     );
   }
 
+  if (activeScreen === "Archive") {
+    return (
+      <div className="content-grid focus-grid">
+        <ArchivePanel />
+        <RightRail state={state} />
+      </div>
+    );
+  }
+
   const hasTrack = state.nowPlaying.id !== "idle" && (state.nowPlaying.duration || 0) > 0;
   const controlsDisabled = !state.player.connected || Boolean(state.player.reconnecting) || actionPending;
   return (
@@ -444,6 +459,74 @@ function NowPlayingPanel({
           </div>
         </div>
       </section>
+  );
+}
+
+function formatBytes(bytes: number | null): string {
+  if (!bytes || bytes <= 0) return "—";
+  const mb = bytes / (1024 * 1024);
+  return mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+function ArchivePanel() {
+  const [files, setFiles] = useState<ArchiveFile[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const reload = useCallback(() => {
+    setLoading(true);
+    fetchArchive()
+      .then((list) => {
+        setFiles(list);
+        setError("");
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : "Could not load archive"))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    reload();
+    // Refresh periodically so newly-captured tracks appear without a manual reload.
+    const timer = window.setInterval(reload, 10000);
+    return () => window.clearInterval(timer);
+  }, [reload]);
+
+  return (
+    <section className="panel" aria-label="Archive">
+      <div className="panel-head-row">
+        <h2>Archive</h2>
+        <button className="ghost-button" onClick={reload} aria-label="Refresh archive">Refresh</button>
+      </div>
+      <p className="empty-copy">Tracks saved as lossless FLAC while they played on the Squeezebox.</p>
+      {error && <div className="action-error" role="alert">{error}</div>}
+      {loading && files.length === 0 ? (
+        <p className="empty-copy">Loading…</p>
+      ) : files.length === 0 ? (
+        <p className="empty-copy">Nothing archived yet. Play a track on the archive-scoped Squeezebox to capture it.</p>
+      ) : (
+        <ul className="archive-list">
+          {files.map((file) => (
+            <li key={file.filename} className="archive-row">
+              <div className="archive-meta">
+                <strong>{file.title || file.filename}</strong>
+                <span>{file.artist}</span>
+              </div>
+              <div className="archive-aux">
+                <span className="archive-size">{formatBytes(file.size)}</span>
+                <a
+                  className="icon-button"
+                  href={archiveDownloadUrl(file.filename)}
+                  download={file.filename}
+                  aria-label={`Download ${file.title || file.filename}`}
+                >
+                  <Download size={18} />
+                </a>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
