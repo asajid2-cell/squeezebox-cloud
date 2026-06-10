@@ -200,19 +200,11 @@ async function finalizeArchive({ lms, playerId, bufferPath, destPath, destName, 
     await out.close();
   }
 
-  // Tag the finished file in place, then it's a complete archive.
-  try {
-    const bytes = await fs.readFile(destPath);
-    const tagged = writeVorbisComments(bytes, {
-      artist: track.artist || "",
-      title: track.title || "",
-      album: track.album || ""
-    });
-    if (tagged !== bytes) await fs.writeFile(destPath, tagged);
-  } catch (err) {
-    console.error("[archive] tagging skipped:", err.message);
-  }
-
+  // No post-processing: the copied bytes are exactly the FLAC stream the player
+  // decoded, so the file is valid by construction. Artist/title live in the
+  // filename (the API parses them back out). Embedded tagging was removed
+  // because hand-editing FLAC metadata blocks risked corrupting the stream;
+  // it can be re-added later via a real FLAC/ffmpeg dependency if wanted.
   console.log(`[archive] Saved on demand: ${destName} (${copied} bytes)`);
   activeJob = null;
 }
@@ -232,76 +224,4 @@ function sanitize(value) {
       .trim()
       .slice(0, 100) || "Unknown"
   );
-}
-
-// ---------------------------------------------------------------------------
-// Minimal FLAC Vorbis comment writer (pure JS, no extra dependency)
-// ---------------------------------------------------------------------------
-
-const FLAC_MAGIC = Buffer.from("fLaC");
-const BLOCK_TYPE_VORBIS_COMMENT = 4;
-
-function writeVorbisComments(buf, { artist = "", title = "", album = "" } = {}) {
-  if (!Buffer.isBuffer(buf) || buf.length < 8) return buf;
-  if (!buf.subarray(0, 4).equals(FLAC_MAGIC)) return buf;
-
-  const vendorString = Buffer.from("cloud-squeeze-archive", "utf8");
-  const comments = [`ARTIST=${artist}`, `TITLE=${title}`, ...(album ? [`ALBUM=${album}`] : [])].map((s) =>
-    Buffer.from(s, "utf8")
-  );
-  const commentDataLen =
-    4 + vendorString.length + 4 + comments.reduce((n, c) => n + 4 + c.length, 0);
-  const commentData = Buffer.allocUnsafe(commentDataLen);
-  let pos = 0;
-  commentData.writeUInt32LE(vendorString.length, pos);
-  pos += 4;
-  vendorString.copy(commentData, pos);
-  pos += vendorString.length;
-  commentData.writeUInt32LE(comments.length, pos);
-  pos += 4;
-  for (const c of comments) {
-    commentData.writeUInt32LE(c.length, pos);
-    pos += 4;
-    c.copy(commentData, pos);
-    pos += c.length;
-  }
-
-  let offset = 4;
-  let vcBlockStart = -1;
-  let vcBlockTotalLen = 0;
-  let lastBlockHeaderOffset = -1;
-  let isLast = false;
-  while (offset + 4 <= buf.length && !isLast) {
-    const headerByte = buf[offset];
-    isLast = Boolean(headerByte & 0x80);
-    const blockType = headerByte & 0x7f;
-    const blockLen = (buf[offset + 1] << 16) | (buf[offset + 2] << 8) | buf[offset + 3];
-    lastBlockHeaderOffset = offset;
-    if (blockType === BLOCK_TYPE_VORBIS_COMMENT) {
-      vcBlockStart = offset;
-      vcBlockTotalLen = 4 + blockLen;
-    }
-    offset += 4 + blockLen;
-  }
-  const audioStart = offset;
-
-  function makeBlockHeader(type, len, lastFlag) {
-    const hdr = Buffer.allocUnsafe(4);
-    hdr[0] = (lastFlag ? 0x80 : 0x00) | (type & 0x7f);
-    hdr[1] = (len >> 16) & 0xff;
-    hdr[2] = (len >> 8) & 0xff;
-    hdr[3] = len & 0xff;
-    return hdr;
-  }
-
-  if (vcBlockStart >= 0) {
-    const originalIsLast = Boolean(buf[vcBlockStart] & 0x80);
-    const newHeader = makeBlockHeader(BLOCK_TYPE_VORBIS_COMMENT, commentDataLen, originalIsLast);
-    return Buffer.concat([buf.subarray(0, vcBlockStart), newHeader, commentData, buf.subarray(vcBlockStart + vcBlockTotalLen)]);
-  }
-  if (lastBlockHeaderOffset < 0) return buf;
-  const result = Buffer.from(buf);
-  result[lastBlockHeaderOffset] = result[lastBlockHeaderOffset] & 0x7f;
-  const newHeader = makeBlockHeader(BLOCK_TYPE_VORBIS_COMMENT, commentDataLen, true);
-  return Buffer.concat([result.subarray(0, audioStart), newHeader, commentData, result.subarray(audioStart)]);
 }
