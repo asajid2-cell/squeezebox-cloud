@@ -1356,12 +1356,19 @@ describe("Cloud Squeeze API", () => {
     expect(controls).toEqual([]);
   });
 
-  it("does not restart the current track when previous has no app history", async () => {
+  it("restarts the current track when previous has no app history", async () => {
+    appState.queue.splice(0, appState.queue.length);
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = {
+      id: "spotify://track:fresh", title: "Fresh Song", artist: "Someone", album: "", source: "Spotify",
+      duration: 200, elapsed: 5, canSeek: true, art: null, uri: "spotify:track:fresh"
+    };
     appState.playback = { ...appState.playback, previousTracks: [] };
     const controls: Array<{ action: string; value?: number }> = [];
     const lms = {
       ...mockLms,
+      async status() { return { id: "hot-player", connected: true, online: true, mode: "play" }; },
+      async nowPlaying() { return appState.nowPlaying; },
       async control(_playerId: string, action: string, value?: number) {
         controls.push({ action, value });
         return "ok";
@@ -1370,9 +1377,9 @@ describe("Cloud Squeeze API", () => {
 
     const response = await request(createApp({ lms })).post("/api/player/previous").expect(200);
 
-    expect(response.body.action).toBe("noop");
-    expect(controls).toEqual([]);
-    expect(controls.some((item) => item.action === "seek")).toBe(false);
+    // A fresh track with nothing before it should restart from 0, not no-op.
+    expect(response.body.action).toBe("restart");
+    expect(controls).toContainEqual({ action: "seek", value: 0 });
   });
 
   it("does not resume stale LMS playback when previous is pressed after stop", async () => {
@@ -1539,7 +1546,7 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.queue).toHaveLength(1);
   });
 
-  it("no-ops previous instead of restarting the current track when history only contains self entries", async () => {
+  it("restarts the current track (not a previous step) when history only contains self entries", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
     appState.nowPlaying = {
@@ -1561,18 +1568,24 @@ describe("Cloud Squeeze API", () => {
       ]
     };
     const played: string[] = [];
+    const controls: Array<{ action: string; value?: number }> = [];
     const lms = {
       ...mockLms,
       async playTrack(_playerId: string, track: { title?: string }) {
         played.push(String(track.title || ""));
+        return "ok";
+      },
+      async control(_playerId: string, action: string, value?: number) {
+        controls.push({ action, value });
         return "ok";
       }
     };
 
     const response = await request(createApp({ lms })).post("/api/player/previous").expect(200);
 
-    expect(response.body.action).toBe("noop");
-    expect(response.body.nowPlaying).toMatchObject({ title: "Current Track", path: "/music/current.mp3" });
+    // Only self-entries in history => nothing earlier to step to => restart current.
+    expect(response.body.action).toBe("restart");
+    expect(controls).toContainEqual({ action: "seek", value: 0 });
     expect(played).toEqual([]);
     expect(response.body.playback.previousTracks).toEqual([]);
   });
@@ -1738,7 +1751,9 @@ describe("Cloud Squeeze API", () => {
     const repeatedPrevious = await request(app).post("/api/player/previous").expect(200);
 
     expect(previous.body.action).toBe("app-previous");
-    expect(repeatedPrevious.body.action).toBe("noop");
+    // Second press: history is exhausted, so it restarts the (now-current) track
+    // rather than doing nothing — without re-touching the forward queue.
+    expect(repeatedPrevious.body.action).toBe("restart");
     expect(appState.queue).toEqual([expect.objectContaining({ title: "Current Forward", uri: "spotify:track:current" })]);
     expect(appState.playback.previousTracks).toEqual([]);
     expect(played).toEqual([
@@ -1995,6 +2010,9 @@ describe("Cloud Squeeze API", () => {
   it("no-ops previous with the hot player id without waiting on a fresh status call", async () => {
     appState.playback = { ...appState.playback, previousTracks: [] };
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true };
+    // Idle (nothing playing) => no track to restart and no previous => clean no-op,
+    // which is what lets us assert the status call is never made.
+    appState.nowPlaying = { id: "idle", title: "No track playing", artist: "", album: "", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null };
     const controls: Array<{ playerId: string; action: string }> = [];
     const lms = {
       ...mockLms,

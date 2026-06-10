@@ -1353,8 +1353,26 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     try {
       const playerId = await hotPlayerId(lms);
       logEvent("transport.previous.request", { queue: queueSummary(), playback: appState.playback, nowPlaying: trackSummary(appState.nowPlaying) });
-      const previous = peekPreviousTrackForCurrent(appState.nowPlaying);
-      if (previous) {
+      const current = appState.nowPlaying;
+      const hasRealTrack = Boolean(current && current.id !== "idle");
+      const isPlaying = appState.player.mode === "play";
+      const elapsed = Number(current?.elapsed) || 0;
+      const previous = peekPreviousTrackForCurrent(current);
+      // "Back" behaviour: if there's a previous track in history, step to it
+      // (existing behaviour). Otherwise — a fresh track with nothing before it —
+      // restart the current track from 0 instead of doing nothing.
+      void elapsed;
+      const shouldRestart = hasRealTrack && isPlaying && !previous;
+      let resultAction = "noop";
+
+      if (shouldRestart) {
+        await lms.control(playerId, "seek", 0);
+        updateNowPlaying({ elapsed: 0 });
+        markPendingSeek(0, true);
+        setMode("play");
+        pruneStalePreviousSelfEntries(current);
+        resultAction = "restart";
+      } else if (previous) {
         const currentBeforePrevious = appState.nowPlaying;
         await lms.playTrack(playerId, previous, "play-now");
         popPreviousTrackForCurrent(currentBeforePrevious);
@@ -1364,20 +1382,17 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
         setMode("play");
         markPendingPlayback(previous);
         updateNowPlaying(optimisticTrack(previous));
-      } else if (appState.player.mode === "stop" || appState.player.mode === "stopped") {
-        pruneStalePreviousSelfEntries(appState.nowPlaying);
-        logEvent("transport.previous.noop", { reason: "stopped", queue: queueSummary(), nowPlaying: trackSummary(appState.nowPlaying) });
+        resultAction = "app-previous";
       } else {
         pruneStalePreviousSelfEntries(appState.nowPlaying);
-        logEvent("transport.previous.noop", { reason: "empty-app-history", queue: queueSummary(), nowPlaying: trackSummary(appState.nowPlaying) });
+        logEvent("transport.previous.noop", { reason: appState.player.mode === "stop" ? "stopped" : "empty-app-history", queue: queueSummary(), nowPlaying: trackSummary(appState.nowPlaying) });
       }
-      if (previous && !process.env.VITEST) {
+      if (resultAction !== "noop" && !process.env.VITEST) {
         const refreshTimer = setTimeout(() => {
           refreshLms(lms, { force: true }).catch(() => null);
         }, 0);
         refreshTimer.unref?.();
       }
-      const resultAction = previous ? "app-previous" : "noop";
       logEvent("transport.previous.result", { action: resultAction, previous: trackSummary(previous), queue: queueSummary(), playback: appState.playback, nowPlaying: trackSummary(appState.nowPlaying) });
       res.json({ ok: true, action: resultAction, mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying, queue: appState.queue, playback: appState.playback });
     } catch (error) {
