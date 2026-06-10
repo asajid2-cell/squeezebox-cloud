@@ -464,6 +464,40 @@ input[type="range"] {
   color: var(--rose);
   border-color: var(--rose);
 }
+.archive-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+.archive-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 9px;
+  border: 1px solid var(--line-soft);
+  background: #05060a;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+.archive-button:hover:not(:disabled) {
+  border-color: var(--rose);
+  color: var(--rose);
+}
+.archive-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.archive-msg {
+  font-size: 12px;
+  color: var(--muted);
+}
+.archive-msg.error {
+  color: var(--rose);
+}
 .archive-list {
   list-style: none;
   margin: 16px 0 0;

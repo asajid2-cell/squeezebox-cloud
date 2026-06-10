@@ -243,7 +243,10 @@ export class LmsClient {
 
   async resolvePlayableTarget(track) {
     if (track.lmsTrackId) return { type: "track_id", value: track.lmsTrackId };
-    if (track.uri && (!track.path || isSpotifySource(track))) return { type: "uri", value: track.uri };
+    if (track.uri && (!track.path || isSpotifySource(track))) {
+      if (!isSpotifyTrackUri(track.uri)) return null;
+      return { type: "uri", value: track.uri };
+    }
     if (!track.path) return null;
 
     const indexed = await this.resolveIndexedTrack(track);

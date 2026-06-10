@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { LmsClient } from "./lmsClient.js";
+import { requestArchive, getArchiveStatus } from "./archiveService.js";
 import {
   addQueueItem,
   addQueueItemNext,
@@ -1616,6 +1617,22 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     }
     appState.admin = sanitizeAdminSettings({ ...appState.admin, ...parsed.data });
     res.json(appState.admin);
+  });
+
+  // Promote the currently-playing track from the transient capture buffer to a
+  // permanent archive file. This is the ONLY thing that persists audio — it runs
+  // only when the user clicks "Archive" on the player screen.
+  app.post("/api/archive", async (_req, res) => {
+    try {
+      const result = await requestArchive(lms);
+      res.json(result);
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/archive/status", (_req, res) => {
+    res.json(getArchiveStatus());
   });
 
   app.get("/api/archive/file/:name", async (req, res) => {

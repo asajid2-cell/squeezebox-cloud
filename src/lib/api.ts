@@ -430,6 +430,16 @@ export function archiveDownloadUrl(filename: string): string {
   return `${apiBase}/archive/file/${encodeURIComponent(filename)}`;
 }
 
+export async function archiveCurrentTrack(): Promise<{ archiving: boolean; track?: string; filename?: string }> {
+  const response = await fetch(`${apiBase}/archive`, { method: "POST" });
+  return responseJson(response, "Could not start archiving");
+}
+
+export async function fetchArchiveStatus(): Promise<{ archiving: boolean; track?: string }> {
+  const response = await fetch(`${apiBase}/archive/status`);
+  return response.json();
+}
+
 export async function getSpotifyConnect() {
   const response = await fetch(`${apiBase}/spotify/connect`);
   return response.json() as Promise<{ setupUrl: string; fallbackUrl: string; steps: string[] }>;

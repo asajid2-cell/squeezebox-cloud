@@ -43,6 +43,7 @@ import {
   deletePlaylist,
   fetchArchive,
   archiveDownloadUrl,
+  archiveCurrentTrack,
   fetchCollectionTracks,
   clearAdminSession,
   fetchCollections,
@@ -455,10 +456,44 @@ function NowPlayingPanel({
             </div>
             <PlaybackOptions state={state} disabled={controlsDisabled} onRefresh={onRefresh} onAction={onAction} />
             <VolumeControl volume={state.player.volume} onChange={(volume) => onAction(async () => { await setPlayerVolume(volume); await onRefresh(); })} />
+            <ArchiveButton hasTrack={hasTrack} />
             {!hasTrack && <p className="empty-copy">No live track yet. Connect the Squeezebox or add a local-library song.</p>}
           </div>
         </div>
       </section>
+  );
+}
+
+function ArchiveButton({ hasTrack }: { hasTrack: boolean }) {
+  const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [message, setMessage] = useState("");
+
+  async function onArchive() {
+    setStatus("saving");
+    setMessage("");
+    try {
+      const result = await archiveCurrentTrack();
+      setStatus("saved");
+      setMessage(result.track ? `Archiving “${result.track}”` : "Archiving current track");
+      window.setTimeout(() => setStatus("idle"), 6000);
+    } catch (err) {
+      setStatus("error");
+      setMessage(err instanceof Error ? err.message : "Could not archive");
+    }
+  }
+
+  return (
+    <div className="archive-action">
+      <button
+        className="archive-button"
+        disabled={!hasTrack || status === "saving"}
+        onClick={onArchive}
+      >
+        <HardDriveDownload size={18} />
+        {status === "saving" ? "Archiving…" : status === "saved" ? "Archiving started" : "Archive this song"}
+      </button>
+      {message && <span className={status === "error" ? "archive-msg error" : "archive-msg"}>{message}</span>}
+    </div>
   );
 }
 
