@@ -388,9 +388,8 @@ function PublicScreen({
 
   if (activeScreen === "Archive") {
     return (
-      <div className="content-grid focus-grid">
+      <div className="archive-screen">
         <ArchivePanel />
-        <RightRail state={state} />
       </div>
     );
   }

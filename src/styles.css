@@ -464,10 +464,14 @@ input[type="range"] {
   color: var(--rose);
   border-color: var(--rose);
 }
+.archive-screen {
+  display: block;
+  width: 100%;
+}
 .archive-panel {
-  grid-area: now;
-  padding: 24px 22px;
-  min-height: 382px;
+  padding: 26px 28px 30px;
+  min-height: 60vh;
+  max-width: 880px;
 }
 .panel-subtitle {
   margin: 6px 0 18px;
