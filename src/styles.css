@@ -202,6 +202,8 @@ nav button.active {
 }
 .status-dot.online { background: var(--green); box-shadow: 0 0 0 4px rgba(66, 216, 132, .08); }
 .status-dot.offline { background: var(--rose); box-shadow: 0 0 0 4px rgba(255, 95, 131, .08); }
+.status-dot.connecting { background: #f5b945; box-shadow: 0 0 0 4px rgba(245, 185, 69, .12); animation: status-pulse 1.1s ease-in-out infinite; }
+@keyframes status-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 
 .main {
   min-width: 0;

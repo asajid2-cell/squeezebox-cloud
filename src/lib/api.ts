@@ -11,6 +11,23 @@ async function responseJson<T = any>(response: Response, fallbackMessage: string
   return data as T;
 }
 
+// Bounded fetch so a hung LMS call (player asleep) can't freeze the UI controls.
+// On timeout the request aborts and the caller throws, clearing the pending state.
+async function fetchWithTimeout(input: string, init: RequestInit = {}, timeoutMs = 12000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("The player did not respond in time. Reconnecting…");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const fallbackState: AppState = {
   player: { id: "fallback", name: "Squeezebox Cloud Room", connected: false, online: false, mode: "stopped", volume: 68 },
   nowPlaying: {
@@ -278,7 +295,7 @@ export async function moveQueueItem(id: string, direction: "up" | "down") {
 }
 
 export async function playTrack(action: "play-now" | "play-next" | "add-queue", track: Partial<Track>) {
-  const response = await fetch(`${apiBase}/player/track`, {
+  const response = await fetchWithTimeout(`${apiBase}/player/track`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action, track: compactPlayableTrack(track) })
@@ -287,7 +304,7 @@ export async function playTrack(action: "play-now" | "play-next" | "add-queue", 
 }
 
 export async function playTracks(action: "play-next" | "add-queue", tracks: Partial<Track>[]) {
-  const response = await fetch(`${apiBase}/player/tracks`, {
+  const response = await fetchWithTimeout(`${apiBase}/player/tracks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action, tracks: tracks.map(compactPlayableTrack) })
@@ -305,7 +322,7 @@ function compactPlayableTrack(track: Partial<Track>) {
 }
 
 export async function playerAction(action: "play" | "pause" | "stop" | "next" | "previous") {
-  const response = await fetch(`${apiBase}/player/${action}`, { method: "POST" });
+  const response = await fetchWithTimeout(`${apiBase}/player/${action}`, { method: "POST" });
   return responseJson(response, "Player control failed");
 }
 
@@ -328,7 +345,7 @@ export async function smartShuffle(source: AppState["playback"]["smartShuffleSou
 }
 
 export async function setPlayerVolume(volume: number) {
-  const response = await fetch(`${apiBase}/player/volume`, {
+  const response = await fetchWithTimeout(`${apiBase}/player/volume`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ volume })
@@ -337,7 +354,7 @@ export async function setPlayerVolume(volume: number) {
 }
 
 export async function seekPlayer(seconds: number) {
-  const response = await fetch(`${apiBase}/player/seek`, {
+  const response = await fetchWithTimeout(`${apiBase}/player/seek`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ seconds })

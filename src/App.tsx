@@ -169,6 +169,9 @@ export default function App() {
       return result;
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Action failed");
+      // Re-sync connection state promptly so the UI recovers (or honestly shows
+      // reconnecting) right after a failed action instead of waiting for the poll.
+      fetchState().then(setState).catch(() => {});
       return undefined;
     } finally {
       actionPendingCount.current = Math.max(0, actionPendingCount.current - 1);
@@ -226,7 +229,8 @@ export default function App() {
 
   if (!state) return <div className="boot">Squeezebox Cloud</div>;
 
-  const speakerOnline = state.player.connected && state.player.online;
+  const reconnecting = Boolean(state.player.reconnecting);
+  const speakerOnline = state.player.connected && state.player.online && !reconnecting;
 
   return (
     <div className="desktop-shell">
@@ -263,9 +267,9 @@ export default function App() {
         </nav>
         <RecentPicks picks={state.recentPicks} />
         <div className="speaker-card">
-          <span className={speakerOnline ? "status-dot online" : "status-dot offline"} />
+          <span className={speakerOnline ? "status-dot online" : reconnecting ? "status-dot connecting" : "status-dot offline"} />
           <div>
-            <strong>{speakerOnline ? "Speaker online" : "Speaker offline"}</strong>
+            <strong>{speakerOnline ? "Speaker online" : reconnecting ? "Reconnecting…" : "Speaker offline"}</strong>
             <small>{speakerOnline ? state.player.name : state.player.detail || "LMS player not connected"}</small>
           </div>
           <Radio size={22} />
@@ -374,7 +378,7 @@ function PublicScreen({
   }
 
   const hasTrack = state.nowPlaying.id !== "idle" && (state.nowPlaying.duration || 0) > 0;
-  const controlsDisabled = !state.player.connected || actionPending;
+  const controlsDisabled = !state.player.connected || Boolean(state.player.reconnecting) || actionPending;
   return (
     <div className="content-grid">
       <NowPlayingPanel state={state} hasTrack={hasTrack} controlsDisabled={controlsDisabled} onRefresh={onRefresh} onAction={onAction} onPlayerAction={onPlayerAction} />

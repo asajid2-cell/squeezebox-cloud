@@ -36,6 +36,7 @@ export type AppState = {
     name: string;
     connected: boolean;
     online: boolean;
+    reconnecting?: boolean;
     mode: string;
     volume: number;
     detail?: string;

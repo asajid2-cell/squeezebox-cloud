@@ -50,7 +50,7 @@ describe("API client mutating requests", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(playerAction("stop")).resolves.toMatchObject({ ok: true, mode: "stop" });
-    expect(fetchMock).toHaveBeenCalledWith("/api/player/stop", { method: "POST" });
+    expect(fetchMock).toHaveBeenCalledWith("/api/player/stop", expect.objectContaining({ method: "POST" }));
   });
 
   it("throws backend errors for failed queue and playback mutations", async () => {

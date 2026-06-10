@@ -297,9 +297,16 @@ const transportActionPaths = new Set([
   "/api/player/next",
   "/api/player/previous"
 ]);
+// How long we keep showing a brief "reconnecting" hold after the LAST genuine
+// connection before reporting the player as truly offline, and how stale a cached
+// connected status may be before an action forces a fresh check (auto-wake).
+const playerReconnectGraceMs = Number(process.env.PLAYER_RECONNECT_GRACE_MS || 12000);
+const playerStatusMaxAgeMs = Number(process.env.PLAYER_STATUS_MAX_AGE_MS || 6000);
+
 const refreshState = {
   promise: null,
   updatedAt: 0,
+  lastConnectedAt: 0,
   servicesAt: 0,
   trackInfoAt: 0,
   trackKey: "",
@@ -784,8 +791,10 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
         res.json({ results: [] });
         return;
       }
-      const playerId = await hotPlayerId(lms);
-      const results = await lms.spotifySearch(playerId, query, limit);
+      const results = await withLmsRetry(lms, async () => {
+        const playerId = await hotPlayerId(lms);
+        return lms.spotifySearch(playerId, query, limit);
+      });
       rememberKnownSpotifyTracks(results);
       const visible = filterHiddenResults(results, curation);
       res.json({ results: visible, groups: groupSpotifyResults(visible) });
@@ -1617,10 +1626,31 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
 }
 
 async function hotPlayerId(lms) {
-  if (appState.player.connected && appState.player.id && appState.player.id !== "mock-player") return appState.player.id;
+  // Only trust the cached id when it came from a genuinely-connected status that
+  // is still fresh. Otherwise force a refresh first so a player that has been
+  // idle/reconnecting gets re-checked (auto-wake) instead of failing on a stale flag.
+  const fresh =
+    appState.player.connected &&
+    appState.player.id &&
+    appState.player.id !== "mock-player" &&
+    Date.now() - (refreshState.lastConnectedAt || 0) < playerStatusMaxAgeMs;
+  if (fresh) return appState.player.id;
   await refreshLms(lms, { force: true, skipTrackInfo: true });
-  if (!appState.player.id || appState.player.id === "mock-player") throw new Error("No LMS player connected");
+  if (!appState.player.connected || !appState.player.id || appState.player.id === "mock-player") {
+    throw new Error("No LMS player connected");
+  }
   return appState.player.id;
+}
+
+// Run an LMS-backed operation; on failure, force one reconnect refresh and retry
+// once. Lets a transient hiccup (player just woke) self-heal instead of erroring.
+async function withLmsRetry(lms, operation) {
+  try {
+    return await operation();
+  } catch (error) {
+    await refreshLms(lms, { force: true, skipTrackInfo: true }).catch(() => null);
+    return await operation();
+  }
 }
 
 async function withTransportLock(res, handler) {
@@ -2534,23 +2564,34 @@ function delay(ms) {
 }
 
 function updateStablePlayerStatus(status) {
-  const lastUpdate = Date.parse(appState.player.updatedAt || "");
-  const wasRecentlyConnected = appState.player.connected && Number.isFinite(lastUpdate) && Date.now() - lastUpdate < 20000;
-  if (!status.connected && wasRecentlyConnected) {
+  if (status.connected) {
+    refreshState.lastConnectedAt = Date.now();
+    updatePlayerStatus({ ...status, reconnecting: false });
+    return;
+  }
+  // Grace window is measured from the LAST GENUINE connection, not refreshed on
+  // each held poll — so after a real disconnect we stop claiming "connected"
+  // once the window elapses instead of holding it forever.
+  const sinceConnected = Date.now() - (refreshState.lastConnectedAt || 0);
+  if (refreshState.lastConnectedAt && sinceConnected < playerReconnectGraceMs) {
     updatePlayerStatus({
       ...appState.player,
-      online: true,
-      connected: true,
-      detail: `Last LMS poll missed the player; holding connection briefly. ${status.detail || ""}`.trim()
+      online: false,
+      connected: false,
+      reconnecting: true,
+      detail: status.detail || "Reconnecting to the player..."
     });
     return;
   }
-  updatePlayerStatus(status);
+  updatePlayerStatus({ ...status, reconnecting: false });
 }
 
 async function control(lms, action, value) {
   const modeMap = { play: "play", pause: "pause", stop: "stop", next: "play", previous: "play" };
-  await lms.control(appState.player.id, action, value);
+  // Resolve a verified, awake player id first so transport controls (pause/stop/
+  // volume/seek) don't silently fail against a stale id after the player has been idle.
+  const playerId = await hotPlayerId(lms);
+  await lms.control(playerId, action, value);
   if (modeMap[action]) setMode(modeMap[action]);
 }
 
