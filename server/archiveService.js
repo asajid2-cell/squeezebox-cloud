@@ -230,9 +230,29 @@ function fetchAndEncode(uri, outPath, encodeArgs, label = "Worker") {
 async function downloadOne(job) {
   const dest = path.join(ARCHIVE_DIR, `${sanitize(job.artist)} - ${sanitize(job.title)}.flac`);
   const part = `${dest}.part`;
-  await fetchAndEncode(job.uri, part, ["-c:a", "flac", "-f", "flac"], "ArchiveWorker");
+  const raw = `${dest}.raw`;
+  await fetchAndEncode(job.uri, raw, ["-c:a", "flac", "-f", "flac"], "ArchiveWorker");
+  // The streaming encode (pipe input) leaves total_samples unset, so LMS and
+  // browsers can't read the real duration / seek over HTTP. Re-encode from the
+  // now-complete file to stamp the correct sample count, then swap in.
+  await reencodeFlac(raw, part);
+  await fs.unlink(raw).catch(() => {});
   await fs.rename(part, dest);
   return dest;
+}
+
+/** Re-encode a complete FLAC so its STREAMINFO carries the real sample count. */
+function reencodeFlac(src, dst) {
+  return new Promise((resolve, reject) => {
+    const ff = spawn("ffmpeg", ["-hide_banner", "-loglevel", "error", "-i", src, "-c:a", "flac", "-f", "flac", "-y", dst]);
+    let err = "";
+    ff.stderr.on("data", (d) => { err += d.toString().slice(0, 200); });
+    ff.on("error", reject);
+    ff.on("close", (code) => {
+      if (code === 0 && existsSync(dst)) resolve(dst);
+      else { fs.unlink(dst).catch(() => {}); reject(new Error(err.trim() || `flac re-encode failed (exit ${code})`)); }
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
