@@ -28,6 +28,8 @@ import { clearLibraryCaches, getCollections, getCollectionTracks, saveUploadedTr
 import { enrichTrackArtwork, enrichTrackInfo } from "./trackInfo.js";
 import { defaultPlaylistStore, PlaylistError } from "./playlists.js";
 import { defaultCurationStore, CurationError } from "./curation.js";
+import { defaultListenerTasteStore } from "./listenerTaste.js";
+import { rankRecommendationCandidates, recommendationSeedArtists } from "./recommender.js";
 
 const requiredText = z.string().trim().min(1);
 const optionalText = z.preprocess(
@@ -376,7 +378,7 @@ const idleNowPlaying = {
   art: null
 };
 
-export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistStore, curation = defaultCurationStore } = {}) {
+export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistStore, curation = defaultCurationStore, taste = defaultListenerTasteStore } = {}) {
   const app = express();
   const adminAuth = getAdminAuthConfig();
   appState.curation = curation.getState();
@@ -407,11 +409,11 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
   });
   if (process.env.NODE_ENV !== "test") {
     const shuffleMonitor = setInterval(() => {
-      if (appState.playback.smartQueue || appState.queue.length > 0) refreshLms(lms, { maintainPlayback: true }).catch(() => null);
+      if (appState.playback.smartQueue || appState.queue.length > 0) refreshLms(lms, { maintainPlayback: true, taste }).catch(() => null);
     }, 8000);
     shuffleMonitor.unref?.();
     const startupRefresh = setTimeout(() => {
-      refreshLms(lms, { force: true, skipTrackInfo: true }).catch(() => null);
+      refreshLms(lms, { force: true, skipTrackInfo: true, taste }).catch(() => null);
     }, 250);
     startupRefresh.unref?.();
   }
@@ -433,7 +435,8 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     await refreshLms(lms, {
       minAgeMs: appState.player.mode === "play" ? 650 : 1600,
       waitForFresh: !refreshState.updatedAt || !appState.player.connected,
-      maintainPlayback: shouldMaintainQueueOnPoll()
+      maintainPlayback: shouldMaintainQueueOnPoll(),
+      taste
     });
     res.json(getPublicState());
   });
@@ -441,13 +444,14 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
   app.get("/api/speaker/status", async (_req, res) => {
     const status = await refreshLms(lms, {
       minAgeMs: 1600,
-      waitForFresh: !refreshState.updatedAt || !appState.player.connected
+      waitForFresh: !refreshState.updatedAt || !appState.player.connected,
+      taste
     });
     res.json(status);
   });
 
   app.get("/api/speaker/connect-guide", async (_req, res) => {
-    const player = await refreshLms(lms);
+    const player = await refreshLms(lms, { taste });
     const lmsWeb = await checkUrl(config.lmsHttpUrl);
     res.json({
       serverHost: config.publicLmsHost,
@@ -695,7 +699,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
         updateNowPlaying(optimistic);
         await refreshPlayedTrackMetadata(lms, playerId, track);
         logEvent("track.play-now", { track: trackSummary(track), queue: queueSummary() });
-        refreshLms(lms, { force: true }).catch(() => null);
+        refreshLms(lms, { force: true, taste }).catch(() => null);
       }
       res.json({ ok: true, action, queued, queue: appState.queue, player: appState.player, nowPlaying: appState.nowPlaying, playback: appState.playback });
     } catch (error) {
@@ -756,7 +760,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
         for (const t of limited) addQueueItem({ ...t, requestedBy: "playlist" });
         markQueueManagedPlayback();
         await refreshPlayedTrackMetadata(lms, playerId, startTrack);
-        refreshLms(lms, { force: true }).catch(() => null);
+        refreshLms(lms, { force: true, taste }).catch(() => null);
         logEvent("playlist.play", { start: trackSummary(startTrack), count: limited.length, shuffle: wantShuffle });
         res.json({ ok: true, queued: limited.length, shuffle: wantShuffle, queue: appState.queue, player: appState.player, nowPlaying: appState.nowPlaying, playback: appState.playback });
       } catch (error) {
@@ -1322,7 +1326,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
         await control(lms, "play");
         updatePlayback({ appManagedPlayback: Boolean(appState.playback.appManagedPlayback && appState.queue.length > 0) });
       }
-      refreshLms(lms, { force: true }).catch(() => null);
+      refreshLms(lms, { force: true, taste }).catch(() => null);
       res.json({ ok: true, action: played ? "visible-queue-play" : "play", mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying, queue: appState.queue, playback: appState.playback });
     } catch (error) {
       res.status(502).json({ error: error.message, mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying, queue: appState.queue });
@@ -1347,6 +1351,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     return withTransportLock(res, async () => {
     try {
       await control(lms, "stop");
+      recordListeningSkip(taste, appState.nowPlaying, "transport.stop");
       cancelPendingVisibleQueueAdvance();
       markQueueCleared();
       for (const item of [...appState.queue]) {
@@ -1381,6 +1386,8 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     try {
       const playerId = await hotPlayerId(lms);
       logEvent("transport.next.request", { queue: queueSummary(), playback: appState.playback, nowPlaying: trackSummary(appState.nowPlaying) });
+      const currentBeforeNextRequest = appState.nowPlaying;
+      recordListeningSkip(taste, currentBeforeNextRequest, "transport.next");
       const played = await playNextVisibleQueueItem(lms, playerId);
       const emptyAppManagedQueue =
         !played &&
@@ -1405,7 +1412,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
         await control(lms, "next");
         rememberPreviousTrack(currentBeforeNext);
       }
-      if (!stoppedWithEmptyManualQueue && !emptyAppManagedQueue) refreshLms(lms, { force: true }).catch(() => null);
+      if (!stoppedWithEmptyManualQueue && !emptyAppManagedQueue) refreshLms(lms, { force: true, taste }).catch(() => null);
       const resultAction = played ? "visible-queue-next" : stoppedEmptyAppManagedQueue ? "stop-empty-queue" : (stoppedWithEmptyManualQueue || emptyAppManagedQueue) ? "noop" : "next";
       logEvent("transport.next.result", { action: played ? "visible-queue-next" : stoppedEmptyAppManagedQueue ? "stop-empty-queue" : (stoppedWithEmptyManualQueue || emptyAppManagedQueue) ? "noop" : "lms-next", played: trackSummary(played), queue: queueSummary(), playback: appState.playback });
       res.json({ ok: true, action: resultAction, queue: appState.queue, player: appState.player, nowPlaying: appState.nowPlaying, playback: appState.playback });
@@ -1434,6 +1441,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       let resultAction = "noop";
 
       if (shouldRestart) {
+        recordListeningReplay(taste, current, "transport.previous.restart");
         await lms.control(playerId, "seek", 0);
         updateNowPlaying({ elapsed: 0 });
         markPendingSeek(0, true);
@@ -1442,6 +1450,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
         resultAction = "restart";
       } else if (previous) {
         const currentBeforePrevious = appState.nowPlaying;
+        recordListeningSkip(taste, currentBeforePrevious, "transport.previous");
         await lms.playTrack(playerId, previous, "play-now");
         popPreviousTrackForCurrent(currentBeforePrevious);
         removeQueuedPlaybackMatch(previous);
@@ -1457,7 +1466,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       }
       if (resultAction !== "noop" && !process.env.VITEST) {
         const refreshTimer = setTimeout(() => {
-          refreshLms(lms, { force: true }).catch(() => null);
+          refreshLms(lms, { force: true, taste }).catch(() => null);
         }, 0);
         refreshTimer.unref?.();
       }
@@ -1512,7 +1521,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
         }
         setMode("play");
       }
-      refreshLms(lms, { force: true, maintainPlayback: false }).catch(() => null);
+      refreshLms(lms, { force: true, maintainPlayback: false, taste }).catch(() => null);
       res.json({ ok: true, seconds, player: appState.player, nowPlaying: appState.nowPlaying });
     } catch (error) {
       res.status(502).json({ error: error.message, seconds, seekApplied: false, player: appState.player, nowPlaying: appState.nowPlaying });
@@ -1626,7 +1635,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       updatePlayback(next);
       let queued = [];
       if (queueModeChanged && appState.playback.smartQueue) {
-        queued = await activateGeneratedQueue(lms, playerId, { smart: true, mode: appState.playback.smartShuffleSource, controlsReady: true });
+        queued = await activateGeneratedQueue(lms, playerId, { smart: true, mode: appState.playback.smartShuffleSource, controlsReady: true, taste });
         if (generatedQueueRollback && queued.length === 0) {
           appState.queue.splice(0, appState.queue.length, ...generatedQueueRollback.queue);
           updatePlayback(generatedQueueRollback.playback);
@@ -1644,7 +1653,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
           updatePlayback({ manualShuffle: true });
           queued = [...appState.queue];
         } else if (!appState.playback.manualShuffle) {
-          queued = await activateGeneratedQueue(lms, playerId, { shuffle: true, mode: appState.playback.smartShuffleSource, controlsReady: true });
+          queued = await activateGeneratedQueue(lms, playerId, { shuffle: true, mode: appState.playback.smartShuffleSource, controlsReady: true, taste });
         }
       }
       if (queueAddStaleAfterClear(clearEpochAtRequest)) {
@@ -1680,7 +1689,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
         });
         return;
       }
-      const status = await refreshLms(lms);
+      const status = await refreshLms(lms, { taste });
       const body = parsed.data;
       const mode = body.source || appState.playback.smartShuffleSource;
       if (mode === "spotify" && !spotifyBrowsingAvailable()) {
@@ -1690,8 +1699,8 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       const count = body.count || 5;
       const seed = String(body.seed || appState.nowPlaying.artist || appState.nowPlaying.title || "").trim();
       logEvent("smart-shuffle.request", { mode, count, seed, queue: queueSummary() });
-      const queued = await activateGeneratedQueue(lms, status.id, { smart: true, mode, count, seed });
-      await refreshLms(lms);
+      const queued = await activateGeneratedQueue(lms, status.id, { smart: true, mode, count, seed, taste });
+      await refreshLms(lms, { taste });
       logEvent("smart-shuffle.result", { queued: queued.map(trackSummary), queue: queueSummary(), playback: appState.playback });
       res.json({ ok: true, mode, seed, queued, queue: appState.queue, playback: appState.playback });
     } catch (error) {
@@ -1975,6 +1984,53 @@ function trackSummary(track) {
     path: track.path,
     lmsTrackId: track.lmsTrackId
   };
+}
+
+function listeningCaptureContext(track, reason) {
+  const playbackMode = appState.playback.smartQueue
+    ? "smartQueue"
+    : appState.playback.shuffle
+      ? appState.playback.manualShuffle ? "manualShuffle" : "shuffle"
+      : appState.playback.appManagedPlayback ? "appManaged" : "direct";
+  return {
+    listenerId: track?.requestedBy,
+    requestedBy: track?.requestedBy,
+    playbackMode,
+    smartShuffleSource: appState.playback.smartShuffleSource,
+    seed: appState.playback.lastShuffleSeed,
+    generated: isGeneratedQueueItem(track),
+    queueLength: appState.queue.length,
+    reason,
+    source: track?.source
+  };
+}
+
+function observeListeningPlayback(taste, status, track, reason) {
+  try {
+    taste?.observePlayback?.({
+      status,
+      track,
+      context: listeningCaptureContext(track, reason)
+    });
+  } catch (error) {
+    logEvent("listening.capture-error", { reason, error: error.message, track: trackSummary(track) });
+  }
+}
+
+function recordListeningSkip(taste, track, reason) {
+  try {
+    taste?.recordSkip?.(track, { reason, context: listeningCaptureContext(track, reason) });
+  } catch (error) {
+    logEvent("listening.capture-error", { reason, error: error.message, track: trackSummary(track) });
+  }
+}
+
+function recordListeningReplay(taste, track, reason) {
+  try {
+    taste?.recordReplay?.(track, { reason, context: listeningCaptureContext(track, reason) });
+  } catch (error) {
+    logEvent("listening.capture-error", { reason, error: error.message, track: trackSummary(track) });
+  }
 }
 
 async function rescanLibraryOnce() {
@@ -2623,7 +2679,7 @@ async function spotifyArtworkForTrack(lms, track) {
   return exact?.art || null;
 }
 
-async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force = false, skipTrackInfo = false, waitForFresh = true, queueAdvanceEpoch = visibleQueueCancelState.epoch } = {}) {
+async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force = false, skipTrackInfo = false, waitForFresh = true, queueAdvanceEpoch = visibleQueueCancelState.epoch, taste = null } = {}) {
   const now = Date.now();
   if (!force && refreshState.promise) return waitForFresh ? refreshState.promise : appState.player;
   if (!force && minAgeMs > 0 && now - refreshState.updatedAt < minAgeMs) return appState.player;
@@ -2643,6 +2699,7 @@ async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force =
       updateStablePlayerStatus(status);
       if (status.connected) {
         const track = estimateContinuousElapsed(applyPendingSeek(await lms.nowPlaying(status.id)), status);
+        observeListeningPlayback(taste, status, track, "poll");
         const key = trackKey(track);
         const trackInfoCandidate = isTrackInfoCandidate(track);
         const shouldRefreshTrackInfo =
@@ -2658,7 +2715,7 @@ async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force =
           prewarmShuffleCandidates(lms, status.id, track);
           prewarmSpotifyLibrary(lms, status.id);
         }
-        if (maintainPlayback) await maintainVisiblePlaybackQueue(lms, status, track, { observedTrackChanged, queueAdvanceEpoch });
+        if (maintainPlayback) await maintainVisiblePlaybackQueue(lms, status, track, { observedTrackChanged, queueAdvanceEpoch, taste });
         const waitingForVisibleQueueAdvance = appState.queue.length > 0;
         if (!trackInfoCandidate && appState.nowPlaying?.id === "idle" && !waitingForVisibleQueueAdvance) {
           const idlePlayback = { history: [], previousTracks: [], appManagedPlayback: false };
@@ -2821,7 +2878,7 @@ async function control(lms, action, value) {
   if (modeMap[action]) setMode(modeMap[action]);
 }
 
-async function activateGeneratedQueue(lms, playerId, { smart = false, shuffle: shuffleOn = false, mode = appState.playback.smartShuffleSource, count = 5, seed, controlsReady = false } = {}) {
+async function activateGeneratedQueue(lms, playerId, { smart = false, shuffle: shuffleOn = false, mode = appState.playback.smartShuffleSource, count = 5, seed, controlsReady = false, taste = defaultListenerTasteStore } = {}) {
   if (!playerId || (!smart && !shuffleOn)) return [];
   const currentSeed = isTrackInfoCandidate(appState.nowPlaying)
     ? (appState.nowPlaying.artist || appState.nowPlaying.title)
@@ -2848,19 +2905,19 @@ async function activateGeneratedQueue(lms, playerId, { smart = false, shuffle: s
     lastSmartQueueBase: trackKey(appState.nowPlaying),
     history
   });
-  const queued = await buildGeneratedQueue(lms, playerId, queueSeed, mode, count, requestType, { allowLocalWideFallback: !hasFocusedSeed });
+  const queued = await buildGeneratedQueue(lms, playerId, queueSeed, mode, count, requestType, { allowLocalWideFallback: !hasFocusedSeed, taste });
   updatePlayback(smart ? { lastShuffleRefillAt: Date.now(), repeat: "off" } : { lastShuffleRefillAt: Date.now() });
   logEvent("queue.activate-generated", { type: smart ? "smart shuffle" : "shuffle", mode, queued: queued.map(trackSummary), queue: queueSummary() });
   return queued;
 }
 
-async function buildGeneratedQueue(lms, playerId, seed, mode, count, requestedBy, { allowLocalWideFallback = true } = {}) {
+async function buildGeneratedQueue(lms, playerId, seed, mode, count, requestedBy, { allowLocalWideFallback = true, taste = defaultListenerTasteStore } = {}) {
   if (!generatedRequestActive(requestedBy)) return [];
   const normalizedSeed = seed || "drake";
   const exclude = shuffleExclusionSet();
   const hardExclude = currentAndQueueExclusionSet();
   const [spotify, localFocused, localWide] = await Promise.all([
-    mode !== "local" && spotifyBrowsingAvailable() ? spotifyShuffleCandidates(lms, playerId, normalizedSeed, count).catch(() => []) : [],
+    mode !== "local" && spotifyBrowsingAvailable() ? spotifyRecommenderCandidates(lms, playerId, normalizedSeed, count, taste).catch(() => []) : [],
     mode !== "spotify" ? searchLibrary(normalizedSeed, undefined, 120).catch(() => []) : [],
     mode !== "spotify" ? searchLibrary("", undefined, 500).catch(() => []) : []
   ]);
@@ -2869,7 +2926,7 @@ async function buildGeneratedQueue(lms, playerId, seed, mode, count, requestedBy
     ? [...localFocused, ...shuffle(localWide).slice(0, 180)]
     : localFocused;
   const localTracks = uniqueTracks(localCandidates).filter((track) => track.path);
-  const spotifyPool = shuffle(preferFreshTracks(spotifyTracks, exclude, hardExclude));
+  const spotifyPool = preferFreshTracks(spotifyTracks, exclude, hardExclude);
   const localPool = shuffle(preferFreshTracks(localTracks, exclude, hardExclude));
   const picks = [];
   for (let index = 0; picks.length < count && (spotifyPool.length || localPool.length); index += 1) {
@@ -2936,17 +2993,45 @@ async function spotifyShuffleCandidates(lms, playerId, seed, count = 5) {
   return batches.flat();
 }
 
-async function maintainSmartShuffle(lms, status, track, { observedTrackChanged = false } = {}) {
+async function spotifyRecommenderCandidates(lms, playerId, seed, count = 5, taste = defaultListenerTasteStore) {
+  const tasteState = taste?.getState?.() || {};
+  const seedArtists = recommendationSeedArtists(tasteState, appState.nowPlaying, seed, 6);
+  const candidateLimit = Math.max(40, count * 24);
+  const graphCandidates = typeof lms.spotifyRecommendationCandidates === "function"
+    ? await lms.spotifyRecommendationCandidates(playerId, seedArtists, {
+      limit: candidateLimit,
+      relatedArtistsPerSeed: 3,
+      relatedTracksPerArtist: Math.max(12, count * 4),
+      fallbackLimit: Math.max(20, count * 8)
+    }).catch(() => [])
+    : [];
+  const fallbackCandidates = graphCandidates.length > 0
+    ? []
+    : await spotifyShuffleCandidates(lms, playerId, seed, Math.max(count, 8)).catch(() => []);
+  const ranked = rankRecommendationCandidates(
+    graphCandidates.length > 0 ? graphCandidates : fallbackCandidates,
+    {
+      tasteState,
+      nowPlaying: appState.nowPlaying,
+      queue: appState.queue,
+      history: appState.playback.history,
+      limit: Math.max(count * 4, 12)
+    }
+  );
+  return ranked.length > 0 ? ranked : fallbackCandidates;
+}
+
+async function maintainSmartShuffle(lms, status, track, { observedTrackChanged = false, taste = defaultListenerTasteStore } = {}) {
   if (!appState.playback.shuffle || !status?.id) return;
   syncVisibleQueueWithCurrentTrack(track, { includeManual: observedTrackChanged });
   const needsPlaybackNudge = shouldNudgePlayback(status, track);
-  const queued = await ensureSmartShuffleQueue(lms, status.id, { force: needsPlaybackNudge });
+  const queued = await ensureSmartShuffleQueue(lms, status.id, { force: needsPlaybackNudge, taste });
   if (needsPlaybackNudge && queued.length > 0) {
     await playNextVisibleQueueItem(lms, status.id, { generatedOnly: true });
   }
 }
 
-async function maintainVisiblePlaybackQueue(lms, status, track, { observedTrackChanged = false, queueAdvanceEpoch = visibleQueueCancelState.epoch } = {}) {
+async function maintainVisiblePlaybackQueue(lms, status, track, { observedTrackChanged = false, queueAdvanceEpoch = visibleQueueCancelState.epoch, taste = defaultListenerTasteStore } = {}) {
   if (!status?.id) return;
   syncVisibleQueueWithCurrentTrack(track, { includeManual: observedTrackChanged });
   if (appState.playback.smartQueue || appState.playback.shuffle) {
@@ -2958,7 +3043,7 @@ async function maintainVisiblePlaybackQueue(lms, status, track, { observedTrackC
     }
   }
   clearManualShuffleWhenQueueExhausted();
-  await topOffGeneratedQueue(lms, status.id);
+  await topOffGeneratedQueue(lms, status.id, { taste });
   const needsPlaybackNudge = shouldNudgePlayback(status, track);
   const missedEndedTrack =
     (status.mode === "stop" || status.mode === "stopped") &&
@@ -2977,7 +3062,7 @@ export async function maintainVisiblePlaybackQueueForTests(lms, status, track, o
   return maintainVisiblePlaybackQueue(lms, status, track, options);
 }
 
-async function ensureSmartShuffleQueue(lms, playerId, { force = false } = {}) {
+async function ensureSmartShuffleQueue(lms, playerId, { force = false, taste = defaultListenerTasteStore } = {}) {
   if (!appState.playback.smartQueue || !playerId) return [];
   const now = Date.now();
   const requestType = "smart shuffle";
@@ -2990,14 +3075,14 @@ async function ensureSmartShuffleQueue(lms, playerId, { force = false } = {}) {
     : "";
   const hasFocusedSeed = Boolean(String(currentSeed || appState.playback.lastShuffleSeed || "").trim());
   const seed = String(currentSeed || appState.playback.lastShuffleSeed || "drake").trim();
-  const queued = await buildGeneratedQueue(lms, playerId, seed, appState.playback.smartShuffleSource, desired, requestType, { allowLocalWideFallback: !hasFocusedSeed });
+  const queued = await buildGeneratedQueue(lms, playerId, seed, appState.playback.smartShuffleSource, desired, requestType, { allowLocalWideFallback: !hasFocusedSeed, taste });
   if (!generatedRequestActive(requestType)) return queued;
   updatePlayback({ lastShuffleRefillAt: now, lastShuffleSeed: seed });
   if (queued.length > 0) logEvent("queue.refill", { requestType, desired, queued: queued.map(trackSummary), queue: queueSummary() });
   return queued;
 }
 
-async function topOffGeneratedQueue(lms, playerId) {
+async function topOffGeneratedQueue(lms, playerId, { taste = defaultListenerTasteStore } = {}) {
   if ((!appState.playback.smartQueue && !appState.playback.shuffle) || !playerId) return [];
   const requestType = appState.playback.smartQueue ? "smart shuffle" : "shuffle";
   if (requestType === "shuffle" && appState.playback.manualShuffle) return [];
@@ -3006,12 +3091,12 @@ async function topOffGeneratedQueue(lms, playerId) {
   if (generatedCount >= 4) return [];
   updatePlayback({ lastShuffleRefillAt: 0 });
   logEvent("queue.top-off.request", { requestType, generatedCount, queue: queueSummary() });
-  if (appState.playback.smartQueue) return ensureSmartShuffleQueue(lms, playerId, { force: true });
+  if (appState.playback.smartQueue) return ensureSmartShuffleQueue(lms, playerId, { force: true, taste });
   const desired = Math.max(1, 5 - generatedCount);
   const topOffSeed = appState.nowPlaying?.artist || appState.nowPlaying?.title || appState.playback.lastShuffleSeed;
   const hasFocusedSeed = Boolean(String(topOffSeed || "").trim());
   const seed = String(topOffSeed || "drake").trim();
-  const queued = await buildGeneratedQueue(lms, playerId, seed, appState.playback.smartShuffleSource, desired, requestType, { allowLocalWideFallback: !hasFocusedSeed });
+  const queued = await buildGeneratedQueue(lms, playerId, seed, appState.playback.smartShuffleSource, desired, requestType, { allowLocalWideFallback: !hasFocusedSeed, taste });
   if (!generatedRequestActive(requestType)) return queued;
   updatePlayback({ lastShuffleRefillAt: Date.now(), lastShuffleSeed: seed });
   if (queued.length > 0) logEvent("queue.refill", { requestType, desired, queued: queued.map(trackSummary), queue: queueSummary() });

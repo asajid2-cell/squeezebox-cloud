@@ -513,6 +513,124 @@ export class LmsClient {
     });
   }
 
+  async spotifyRecommendationCandidates(playerId, seedArtists = [], options = {}) {
+    if (!playerId) return [];
+    const seeds = uniqueSearchTerms(Array.isArray(seedArtists) ? seedArtists : [seedArtists]).slice(0, 5);
+    if (seeds.length === 0) return [];
+    const limit = Math.max(1, Math.min(250, Number(options.limit) || 80));
+    const relatedArtistsPerSeed = Math.max(0, Math.min(6, Number(options.relatedArtistsPerSeed) || 3));
+    const relatedTracksPerArtist = Math.max(0, Math.min(60, Number(options.relatedTracksPerArtist) || 18));
+    const fallbackLimit = Math.max(0, Math.min(80, Number(options.fallbackLimit) || Math.min(40, limit)));
+    const cacheKey = `spotifyRecommendationCandidates:${playerId}:${seeds.map((seed) => seed.toLowerCase()).join("|")}:${limit}:${relatedArtistsPerSeed}:${relatedTracksPerArtist}:${fallbackLimit}`;
+    const cached = this.getCached(cacheKey);
+    if (cached) return cached;
+
+    const request = this.once(cacheKey, async () => {
+      const pool = [];
+      for (const seed of seeds) {
+        if (pool.length >= limit) break;
+        const artist = await this.findSpotifyArtistForSeed(playerId, seed).catch(() => null);
+        if (!artist?.browseId) continue;
+        const detail = await this.spotifyBrowseItems(playerId, artist.browseId, 16).catch(() => null);
+        const detailItems = spottyLoop(detail);
+        const artistRadio = findSpottyItemByText(detailItems, "artist radio");
+        const topTracks = findSpottyItemByText(detailItems, "top tracks");
+        const relatedArtists = findSpottyItemByText(detailItems, "related artists");
+
+        const radioTracks = await this.spotifyTracksFromBrowseItem(playerId, artistRadio, Math.min(200, Math.max(limit * 2, 60)), {
+          seed,
+          recommendationSource: "artist-radio"
+        });
+        const radioLead = relatedArtistsPerSeed > 0 ? Math.min(radioTracks.length, Math.max(16, Math.ceil(limit * 0.7))) : radioTracks.length;
+        pool.push(...radioTracks.slice(0, radioLead));
+        if (pool.length < Math.max(12, limit / 2)) {
+          pool.push(...await this.spotifyTracksFromBrowseItem(playerId, topTracks, 20, { seed, recommendationSource: "artist-top-tracks" }));
+        }
+
+        if (relatedArtistsPerSeed > 0) {
+          const related = await this.spotifyBrowseItemTracksOrContainers(playerId, relatedArtists, 25, "artist").catch(() => []);
+          const relatedPool = related.slice(0, relatedArtistsPerSeed);
+          for (const relatedArtist of relatedPool) {
+            const relatedDetail = await this.spotifyBrowseItems(playerId, relatedArtist.browseId, 16).catch(() => null);
+            const relatedDetailItems = spottyLoop(relatedDetail);
+            const relatedTopTracks = findSpottyItemByText(relatedDetailItems, "top tracks");
+            const relatedRadio = findSpottyItemByText(relatedDetailItems, "artist radio");
+            pool.push(...await this.spotifyTracksFromBrowseItem(playerId, relatedTopTracks, Math.min(20, relatedTracksPerArtist), {
+              seed,
+              recommendationSource: "related-artist-top-tracks",
+              relatedArtist: relatedArtist.title
+            }));
+            if (pool.length < limit) {
+              pool.push(...await this.spotifyTracksFromBrowseItem(playerId, relatedRadio, relatedTracksPerArtist, {
+                seed,
+                recommendationSource: "related-artist-radio",
+                relatedArtist: relatedArtist.title
+              }));
+            }
+          }
+        }
+        pool.push(...radioTracks.slice(radioLead));
+      }
+
+      let candidates = uniqueTrackCandidates(pool).slice(0, limit);
+      if (candidates.length < Math.min(limit, 12) && fallbackLimit > 0) {
+        const fallbackBatches = await Promise.all(
+          seeds.slice(0, 3).map((seed) => this.spotifySearch(playerId, seed, fallbackLimit).catch(() => []))
+        );
+        candidates = uniqueTrackCandidates([
+          ...candidates,
+          ...fallbackBatches.flat().map((track) => ({ ...track, recommendationSource: "global-search-fallback" }))
+        ]).slice(0, limit);
+      }
+      if (candidates.length > 0) {
+        this.rememberSpotifyBrowseIds(candidates);
+        this.setCached(cacheKey, candidates, spotifyBrowseCacheMs);
+      }
+      return candidates;
+    });
+
+    const stale = this.getCached(cacheKey, { allowExpired: true }) || [];
+    const results = stale.length > 0
+      ? await withDeadline(request, spotifyBrowseDeadlineMs, stale)
+      : await request;
+    return results || [];
+  }
+
+  async findSpotifyArtistForSeed(playerId, seed) {
+    const search = normalizeSearchQuery(seed);
+    if (!search || looksLikeRandomSingleTokenNoise(search)) return null;
+    const response = await this.spotifyBrowseItems(playerId, "1.0", 30, 0, [`search:${search}`, "cachesearch:1"]);
+    const items = spottyLoop(response);
+    const artistsBucket = findSpottyItemByText(items, "artists");
+    const artists = await this.spotifyBrowseItemTracksOrContainers(playerId, artistsBucket, 20, "artist");
+    if (artists.length === 0) return null;
+    return bestArtistMatch(artists, search) || artists[0];
+  }
+
+  async spotifyBrowseItems(playerId, itemId, limit = 50, offset = 0, extraParams = []) {
+    if (!playerId || !itemId) return null;
+    const count = Math.max(1, Math.min(300, Number(limit) || 50));
+    const start = Math.max(0, Number(offset) || 0);
+    return this.jsonRequest([
+      playerId,
+      ["spotty", "items", start, count, "menu:spotty", `item_id:${itemId}`, ...extraParams]
+    ]);
+  }
+
+  async spotifyTracksFromBrowseItem(playerId, item, limit, metadata = {}) {
+    return this.spotifyBrowseItemTracksOrContainers(playerId, item, limit, "track", metadata);
+  }
+
+  async spotifyBrowseItemTracksOrContainers(playerId, item, limit = 50, kind = "track", metadata = {}) {
+    const itemId = spottyItemId(item);
+    if (!itemId) return [];
+    const response = await this.spotifyBrowseItems(playerId, itemId, limit);
+    const items = spottyLoop(response);
+    return spotifyPlayableItems(items, kind)
+      .map((entry) => ({ ...spotifyItemToTrack(entry), ...metadata }))
+      .filter((track) => kind !== "track" || (track.kind === "track" && String(track.uri || "").includes(":track:")));
+  }
+
   async spotifyLibrary(playerId, type = "playlists", limit = 50, offset = 0) {
     if (!playerId) return [];
     const count = Math.max(1, Math.min(100, Number(limit) || 50));
@@ -954,6 +1072,37 @@ function spotifyItemToTrack(item) {
   };
 }
 
+function spottyLoop(response) {
+  const loop = response?.result?.item_loop || response?.result?.loop_loop || [];
+  return Array.isArray(loop) ? loop : [];
+}
+
+function spottyItemId(item) {
+  return String(item?.actions?.go?.params?.item_id || item?.params?.item_id || item?.presetParams?.item_id || "").trim();
+}
+
+function spottyItemText(item) {
+  return String(item?.text || item?.name || item?.presetParams?.favorites_title || "").split(/\n/)[0].trim();
+}
+
+function findSpottyItemByText(items, label) {
+  const target = comparableSpotifyText(label);
+  return (items || []).find((item) => comparableSpotifyText(spottyItemText(item)) === target) ||
+    (items || []).find((item) => comparableSpotifyText(spottyItemText(item)).includes(target)) ||
+    null;
+}
+
+function bestArtistMatch(artists, seed) {
+  const target = comparableSpotifyText(seed);
+  if (!target) return null;
+  return artists.find((artist) => comparableSpotifyText(artist.title) === target) ||
+    artists.find((artist) => {
+      const title = comparableSpotifyText(artist.title);
+      return title && (title.includes(target) || target.includes(title));
+    }) ||
+    null;
+}
+
 function spotifyPlayableItems(items, kind = "track") {
   return items
     .filter((item) => item.presetParams?.favorites_url)
@@ -1000,6 +1149,18 @@ function uniqueByUri(items) {
     const uri = item.presetParams?.favorites_url;
     if (!uri || seen.has(uri)) return false;
     seen.add(uri);
+    return true;
+  });
+}
+
+function uniqueTrackCandidates(items) {
+  const seen = new Set();
+  return (items || []).filter((track) => {
+    const uri = normalizedSpotifyUri(track?.uri);
+    const fallback = `${comparableSpotifyText(track?.title)}:${comparableSpotifyText(track?.artist)}`;
+    const key = uri || fallback;
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
 }

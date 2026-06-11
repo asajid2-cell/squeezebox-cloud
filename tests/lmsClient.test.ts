@@ -174,6 +174,53 @@ describe("LMS client parsing", () => {
     });
   });
 
+  it("builds Spotify recommendation candidates from artist radio and related artists", async () => {
+    const client = new LmsClient();
+    const browsed: string[] = [];
+    const nav = (text: string, itemId: string) => ({ text, params: { item_id: itemId }, actions: { go: { params: { item_id: itemId } } } });
+    const playable = (title: string, artist: string, uri: string, itemId: string, kind = "audio") => ({
+      text: `${title}\n${artist} • Album`,
+      params: { item_id: itemId },
+      actions: { go: { params: { item_id: itemId } } },
+      presetParams: {
+        favorites_title: `${title} by ${artist} from Album`,
+        favorites_type: kind,
+        favorites_url: uri,
+        icon: "https://i.scdn.co/image/test"
+      }
+    });
+    client.jsonRequest = async (params: unknown[]) => {
+      const command = params[1] as string[];
+      const itemId = String(command.find((part) => String(part).startsWith("item_id:")) || "").replace(/^item_id:/, "");
+      browsed.push(itemId);
+      if (itemId === "1.0") return { result: { item_loop: [nav("Artists", "search-artists")] } };
+      if (itemId === "search-artists") return { result: { item_loop: [playable("Seed Artist", "", "spotify:artist:seed", "artist-detail")] } };
+      if (itemId === "artist-detail") return { result: { item_loop: [nav("Artist Radio", "artist-radio"), nav("Related Artists", "related-artists"), nav("Top Tracks", "top-tracks")] } };
+      if (itemId === "artist-radio") return { result: { item_loop: [
+        playable("Known Good", "Seed Artist", "spotify:track:known-good", "r1"),
+        playable("Fresh Find", "Adjacent Artist", "spotify:track:fresh-find", "r2")
+      ] } };
+      if (itemId === "related-artists") return { result: { item_loop: [playable("Adjacent Artist", "", "spotify:artist:adjacent", "adjacent-detail")] } };
+      if (itemId === "adjacent-detail") return { result: { item_loop: [nav("Top Tracks", "adjacent-top"), nav("Artist Radio", "adjacent-radio")] } };
+      if (itemId === "adjacent-top") return { result: { item_loop: [playable("Related Hit", "Adjacent Artist", "spotify:track:related-hit", "rt1")] } };
+      if (itemId === "adjacent-radio") return { result: { item_loop: [playable("Deep Cut", "Adjacent Artist", "spotify:track:deep-cut", "rr1")] } };
+      return { result: { item_loop: [] } };
+    };
+
+    const candidates = await client.spotifyRecommendationCandidates("player-1", ["Seed Artist"], { limit: 6, relatedArtistsPerSeed: 1, relatedTracksPerArtist: 2 });
+
+    expect(candidates.map((track) => track.uri)).toEqual([
+      "spotify:track:known-good",
+      "spotify:track:fresh-find",
+      "spotify:track:related-hit",
+      "spotify:track:deep-cut"
+    ]);
+    expect(candidates[0]).toMatchObject({ source: "Spotify", recommendationSource: "artist-radio" });
+    expect(browsed).toContain("search-artists");
+    expect(browsed).toContain("artist-radio");
+    expect(browsed).toContain("related-artists");
+  });
+
   it("normalizes Spotty ids when now-playing falls back to CLI metadata", async () => {
     const client = new LmsClient();
     client.command = async (command: string) => {

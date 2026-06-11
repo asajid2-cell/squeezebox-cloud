@@ -3824,6 +3824,39 @@ describe("Cloud Squeeze API", () => {
     }
   });
 
+  it("uses Spotty browse-graph recommendations for generated smart shuffle", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "spotify", history: [] };
+    appState.services.spotify = { configured: true, reachable: true, detail: "Spotty detected" };
+    const seeds: string[][] = [];
+    const searchCalls: string[] = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async spotifyRecommendationCandidates(_playerId: string, seedArtists: string[]) {
+          seeds.push(seedArtists);
+          return [
+            { title: "Graph Pick One", artist: "Test Artist", album: "Graph Album", source: "Spotify", uri: "spotify:track:graph000000000000001", kind: "track" },
+            { title: "Graph Pick Two", artist: "Adjacent Artist", album: "Graph Album", source: "Spotify", uri: "spotify:track:graph000000000000002", kind: "track" },
+            { title: "Graph Pick Three", artist: "New Artist", album: "Graph Album", source: "Spotify", uri: "spotify:track:graph000000000000003", kind: "track" }
+          ];
+        },
+        async spotifySearch(_playerId: string, query: string) {
+          searchCalls.push(query);
+          return [];
+        }
+      },
+      taste: { getState: () => ({ version: 1, listeners: {}, events: [] }) }
+    });
+
+    const response = await request(app).post("/api/player/smart-shuffle").send({ source: "spotify", seed: "Manual Seed", count: 2 }).expect(200);
+
+    expect(seeds[0]).toEqual(["Test Artist", "Manual Seed"]);
+    expect(searchCalls).toEqual([]);
+    expect(response.body.queued.map((track: { title: string }) => track.title)).toEqual(["Graph Pick Two", "Graph Pick Three"]);
+    expect(appState.queue.every((item: { requestedBy: string }) => item.requestedBy === "smart shuffle")).toBe(true);
+  });
+
   it("serializes transport queue consumption with concurrent batch additions", async () => {
     appState.queue.splice(0, appState.queue.length);
     appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
