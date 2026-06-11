@@ -104,6 +104,7 @@ describe("API client mutating requests", () => {
     const singleBody = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
     const batchBody = JSON.parse(String(fetchMock.mock.calls[1][1]?.body));
     expect(singleBody.track).toEqual({
+      id: "local:one",
       title: "One",
       artist: "Tester",
       album: "Album",
@@ -112,6 +113,7 @@ describe("API client mutating requests", () => {
       duration: 120
     });
     expect(batchBody.tracks[0]).toEqual({
+      id: "local:two",
       title: "Two",
       artist: "Tester",
       source: "Local library",

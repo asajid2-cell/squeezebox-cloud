@@ -64,6 +64,7 @@ import {
   playlistTrackKey,
   playTrack,
   playTracks,
+  playPlaylistFrom,
   removePlaylistTrack,
   removeQueueItem,
   renamePlaylist,
@@ -1289,7 +1290,7 @@ function SpotifyDetail({
   );
 }
 
-function SearchResultRow({ track, requestsOpen, onRefresh, onAction }: { track: Track; requestsOpen: boolean; onRefresh: () => void; onAction: ActionRunner }) {
+function SearchResultRow({ track, requestsOpen, onRefresh, onAction, siblingTracks }: { track: Track; requestsOpen: boolean; onRefresh: () => void; onAction: ActionRunner; siblingTracks?: Track[] }) {
   const { mode } = usePlaybackMode();
   const local = useLocalPlayerContext();
   const isLocal = mode === "local";
@@ -1300,8 +1301,17 @@ function SearchResultRow({ track, requestsOpen, onRefresh, onAction }: { track: 
   const isArchived = String(track.id || "").startsWith("archive:");
   const playable = isLocal ? streamable : (isArchived || !track.kind || track.kind === "track" || Boolean(track.path || track.lmsTrackId));
   const art = usableArt(track.art || track.artwork);
+  // Inside a playlist, "play now" scopes the queue to that whole playlist
+  // (in order, or shuffled per the shuffle toggle).
+  const playlist = siblingTracks && siblingTracks.length > 1 ? siblingTracks : null;
 
   function run(kind: "play-now" | "play-next" | "add-queue") {
+    if (kind === "play-now" && playlist) {
+      const at = Math.max(0, playlist.findIndex((t) => t.id === track.id));
+      if (isLocal) local.playTracks(playlist, at);
+      else onAction(async () => { await playPlaylistFrom(playlist, at); await onRefresh(); });
+      return;
+    }
     if (isLocal) {
       if (kind === "play-now") local.playNow(track);
       else if (kind === "play-next") local.playNext(track);
@@ -1988,7 +1998,7 @@ function PlaylistTracks({
       {!loading && tracks.length === 0 && <EmptyState title="No songs found" detail="This playlist did not expose tracks yet." />}
       <div className="result-list">
         {tracks.map((track) => (
-          <SearchResultRow key={track.id} track={track} requestsOpen={requestsOpen} onRefresh={onRefresh} onAction={onAction} />
+          <SearchResultRow key={track.id} track={track} requestsOpen={requestsOpen} onRefresh={onRefresh} onAction={onAction} siblingTracks={tracks} />
         ))}
       </div>
       {hasMore && (

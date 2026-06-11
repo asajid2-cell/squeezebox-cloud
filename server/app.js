@@ -104,6 +104,13 @@ const playbackTracksSchema = z.object({
   tracks: z.array(playbackTrackInputSchema).min(1).max(300)
 }).strict();
 
+// Play one track from a playlist and scope the queue to that playlist (the rest
+// of its tracks, in order or shuffled per the shuffle toggle).
+const playlistPlaySchema = z.object({
+  startIndex: z.number().int().min(0).optional().default(0),
+  tracks: z.array(playbackTrackInputSchema).min(1).max(500)
+}).strict();
+
 const volumeSchema = z.object({
   volume: z.number().finite().min(0).max(100)
 }).strict();
@@ -694,6 +701,67 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     } catch (error) {
       res.status(502).json({ error: error.message });
     }
+    });
+  });
+
+  // Play a track from a playlist and make the queue ONLY that playlist: clear the
+  // current queue, play the chosen track now, and load the rest as a manual queue
+  // (so the global shuffle/radio engine doesn't override it). Order vs shuffle
+  // follows the server's shuffle toggle.
+  app.post("/api/player/playlist", async (req, res) => {
+    return withQueueMutationLock(async () => {
+      const parsed = playlistPlaySchema.safeParse(req.body || {});
+      if (!parsed.success) {
+        res.status(400).json({ error: "A track list (and optional startIndex) is required", issues: parsed.error.issues });
+        return;
+      }
+      if (!publicRequestsOpen()) {
+        res.status(403).json(queueErrorPayload(publicRequestsClosedMessage()));
+        return;
+      }
+      const playable = parsed.data.tracks.filter(isPlayableTrackInput);
+      if (!playable.length) {
+        res.status(400).json({ error: "No playable tracks were provided" });
+        return;
+      }
+      if (!spotifyTracksAreKnown(playable)) {
+        res.status(400).json({ error: "Spotify tracks must come from Cloud Squeeze search, playlist, or library results" });
+        return;
+      }
+      const start = Math.min(Math.max(0, parsed.data.startIndex || 0), playable.length - 1);
+      const startTrack = playable[start];
+      const wantShuffle = Boolean(appState.playback.shuffle);
+      let rest = [...playable.slice(start + 1), ...playable.slice(0, start)];
+      if (wantShuffle) rest = shuffleArray(rest);
+      try {
+        const playerId = await hotPlayerId(lms);
+        // Replace the current queue with this playlist.
+        cancelPendingVisibleQueueAdvance();
+        markQueueCleared();
+        for (const item of [...appState.queue]) removeQueueItem(item.id);
+        stopGeneratedPlayback();
+        await turnRepeatOffForVisibleQueue(lms);
+        // Play the chosen track now.
+        const previousTrack = appState.nowPlaying;
+        rememberPlaybackMetadata(startTrack);
+        await lms.playTrack(playerId, startTrack, "play-now");
+        setMode("play");
+        rememberPreviousTrack(previousTrack);
+        // Preserve the user's shuffle toggle (stopGeneratedPlayback clears it).
+        updatePlayback({ appManagedPlayback: true, shuffle: wantShuffle });
+        markPendingPlayback(startTrack);
+        updateNowPlaying(optimisticTrack(startTrack));
+        // Queue the rest of the playlist as a manual queue.
+        const limited = rest.slice(0, 300);
+        for (const t of limited) addQueueItem({ ...t, requestedBy: "playlist" });
+        markQueueManagedPlayback();
+        await refreshPlayedTrackMetadata(lms, playerId, startTrack);
+        refreshLms(lms, { force: true }).catch(() => null);
+        logEvent("playlist.play", { start: trackSummary(startTrack), count: limited.length, shuffle: wantShuffle });
+        res.json({ ok: true, queued: limited.length, shuffle: wantShuffle, queue: appState.queue, player: appState.player, nowPlaying: appState.nowPlaying, playback: appState.playback });
+      } catch (error) {
+        res.status(502).json({ error: error.message });
+      }
     });
   });
 
@@ -2700,6 +2768,15 @@ function prewarmSpotifyLibrary(lms, playerId) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function shuffleArray(items) {
+  const arr = [...items];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
 }
 
 function updateStablePlayerStatus(status) {

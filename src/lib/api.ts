@@ -312,9 +312,20 @@ export async function playTracks(action: "play-next" | "add-queue", tracks: Part
   return responseJson(response, "Batch playback failed");
 }
 
+/** Play one track from a playlist and scope the Squeezebox queue to that playlist. */
+export async function playPlaylistFrom(tracks: Partial<Track>[], startIndex: number) {
+  const response = await fetchWithTimeout(`${apiBase}/player/playlist`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ startIndex, tracks: tracks.map(compactPlayableTrack) })
+  });
+  return responseJson(response, "Playlist playback failed");
+}
+
 function compactPlayableTrack(track: Partial<Track>) {
   const compact: Partial<Track> = {};
-  for (const key of ["title", "artist", "album", "source", "path", "uri", "kind", "lmsTrackId", "uploaded", "duration"] as const) {
+  // `id` carries archive:/spotify: ids the backend needs to resolve playback.
+  for (const key of ["id", "title", "artist", "album", "source", "path", "uri", "kind", "lmsTrackId", "uploaded", "duration"] as const) {
     const value = track[key];
     if (value !== undefined && value !== null && value !== "") compact[key] = value as never;
   }
