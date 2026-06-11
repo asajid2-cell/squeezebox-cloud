@@ -85,7 +85,7 @@ import {
   LocalQueuePanel,
   usePlaybackMode,
   useLocalPlayerContext,
-  localStreamId
+  localStreamUrl
 } from "./lib/localPlayer";
 import type { AppState, ConnectionGuide, LibraryCollection, Playlist, PlaylistSummary, SpotifySearchGroups, Track } from "./types";
 import "./styles.css";
@@ -166,7 +166,7 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Track[]>([]);
   const [spotifyGroups, setSpotifyGroups] = useState<SpotifySearchGroups>(emptySpotifyGroups);
-  const [sourceFilter, setSourceFilter] = useState<"local" | "uploaded" | "spotify" | "playlists">("spotify");
+  const [sourceFilter, setSourceFilter] = useState<"local" | "uploaded" | "spotify" | "playlists" | "archived">("spotify");
   const [actionError, setActionError] = useState("");
   const [actionPending, setActionPending] = useState(false);
   const actionPendingCount = useRef(0);
@@ -224,6 +224,16 @@ export default function App() {
           const groups = await groupsPromise;
           if (!cancelled) {
             setSpotifyGroups((current) => ({ ...groups, artists: current.artists.length ? current.artists : groups.artists, albums: current.albums.length ? current.albums : groups.albums, playlists: current.playlists.length ? current.playlists : groups.playlists }));
+            setActionError("");
+          }
+        } else if (sourceFilter === "archived") {
+          const files = await fetchArchive().catch(() => []);
+          const q = query.trim().toLowerCase();
+          const mapped: Track[] = files
+            .filter((f) => !q || `${f.title} ${f.artist}`.toLowerCase().includes(q))
+            .map((f) => ({ id: `archive:${f.filename}`, title: f.title || f.filename, artist: f.artist, album: "", source: "Archived", kind: "track" as const, duration: null }));
+          if (!cancelled) {
+            setResults(mapped);
             setActionError("");
           }
         } else {
@@ -347,8 +357,8 @@ function PublicScreen({
   results: Track[];
   spotifyGroups: SpotifySearchGroups;
   setQuery: (value: string) => void;
-  sourceFilter: "local" | "uploaded" | "spotify" | "playlists";
-  setSourceFilter: (value: "local" | "uploaded" | "spotify" | "playlists") => void;
+  sourceFilter: "local" | "uploaded" | "spotify" | "playlists" | "archived";
+  setSourceFilter: (value: "local" | "uploaded" | "spotify" | "playlists" | "archived") => void;
   onRefresh: () => void;
   onAction: ActionRunner;
   actionPending: boolean;
@@ -968,8 +978,8 @@ function SearchPanel({
   results: Track[];
   spotifyGroups: SpotifySearchGroups;
   state: AppState;
-  sourceFilter: "local" | "uploaded" | "spotify" | "playlists";
-  setSourceFilter: (value: "local" | "uploaded" | "spotify" | "playlists") => void;
+  sourceFilter: "local" | "uploaded" | "spotify" | "playlists" | "archived";
+  setSourceFilter: (value: "local" | "uploaded" | "spotify" | "playlists" | "archived") => void;
   onRefresh: () => void;
   onAction: ActionRunner;
 }) {
@@ -1021,10 +1031,21 @@ function SearchPanel({
         <button className={sourceFilter === "uploaded" ? "primary-small" : ""} onClick={() => setSourceFilter("uploaded")}>
           Uploaded
         </button>
+        <button className={sourceFilter === "archived" ? "primary-small" : ""} onClick={() => setSourceFilter("archived")}>
+          Archived
+        </button>
         <button className={sourceFilter === "playlists" ? "primary-small" : ""} onClick={() => setSourceFilter("playlists")}>
           Playlists
         </button>
       </div>
+      {sourceFilter === "archived" && (
+        <div className="upload-box">
+          <div>
+            <strong>Archived songs</strong>
+            <small>Lossless FLAC copies saved by the background archiver. Play them on this device, or queue them.</small>
+          </div>
+        </div>
+      )}
       {sourceFilter === "uploaded" && (
         <div className="upload-box">
           <div>
@@ -1119,18 +1140,18 @@ function SearchPanel({
                   <span>{item.count} tracks</span>
                 </div>
               ))}
-            {(sourceFilter === "local" || sourceFilter === "uploaded") && results.length === 0 && (
+            {(sourceFilter === "local" || sourceFilter === "uploaded" || sourceFilter === "archived") && results.length === 0 && (
               <EmptyState
-                title={sourceFilter === "uploaded" ? "No uploaded songs" : "No local results"}
-                detail={sourceFilter === "uploaded" ? "Upload a supported music file to add it here." : "Add music to the configured LMS music folder or search another title."}
+                title={sourceFilter === "uploaded" ? "No uploaded songs" : sourceFilter === "archived" ? "Nothing archived yet" : "No local results"}
+                detail={sourceFilter === "uploaded" ? "Upload a supported music file to add it here." : sourceFilter === "archived" ? "Use the archive icon on a song to save a lossless copy here." : "Add music to the configured LMS music folder or search another title."}
               />
             )}
-            {(sourceFilter === "local" || sourceFilter === "uploaded") &&
+            {(sourceFilter === "local" || sourceFilter === "uploaded" || sourceFilter === "archived") &&
               visibleResults.map((track) => (
                 <SearchResultRow key={track.id} track={track} requestsOpen={requestsOpen} onRefresh={onRefresh} onAction={onAction} />
               ))}
           </div>
-          {(sourceFilter === "local" || sourceFilter === "uploaded") && results.length > 3 && (
+          {(sourceFilter === "local" || sourceFilter === "uploaded" || sourceFilter === "archived") && results.length > 3 && (
             <button className="link-button" onClick={() => setShowAllResults(!showAllResults)}>
               {showAllResults ? "Show fewer" : `View all ${results.length} results`}
             </button>
@@ -1258,10 +1279,12 @@ function SearchResultRow({ track, requestsOpen, onRefresh, onAction }: { track: 
   const { mode } = usePlaybackMode();
   const local = useLocalPlayerContext();
   const isLocal = mode === "local";
-  const streamable = Boolean(localStreamId(track));
-  // In local mode only Spotify tracks can stream to the browser; in Squeezebox
-  // mode anything LMS can play is fine.
-  const playable = isLocal ? streamable : (!track.kind || track.kind === "track" || Boolean(track.path || track.lmsTrackId));
+  const isArchived = String(track.id || "").startsWith("archive:");
+  const streamable = Boolean(localStreamUrl(track));
+  // Local mode plays anything with a browser stream URL (Spotify, uploaded/VPS
+  // files, archived FLACs). Squeezebox mode plays what LMS has — not archived
+  // FLACs (they live outside the LMS library).
+  const playable = isLocal ? streamable : (!isArchived && (!track.kind || track.kind === "track" || Boolean(track.path || track.lmsTrackId)));
   const art = usableArt(track.art || track.artwork);
 
   function run(kind: "play-now" | "play-next" | "add-queue") {

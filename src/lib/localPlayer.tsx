@@ -30,6 +30,25 @@ export function localStreamId(track: Track | null | undefined): string | null {
   return m ? m[1] : null;
 }
 
+function b64url(s: string): string {
+  return btoa(unescape(encodeURIComponent(s))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/**
+ * Browser-playable URL for a track, or null if it can't play locally:
+ *  - Spotify track  -> /api/local-stream/:id (fetched via spotty)
+ *  - Archived FLAC  -> /api/archive/file/:name  (id encoded as "archive:<filename>")
+ *  - Local file     -> /api/stream/<base64url(path)> (uploaded / VPS library)
+ */
+export function localStreamUrl(track: Track | null | undefined): string | null {
+  const raw = String(track?.uri || track?.id || "");
+  const m = raw.match(/track:([A-Za-z0-9]+)/);
+  if (m) return `${apiBase}/local-stream/${m[1]}`;
+  if (raw.startsWith("archive:")) return `${apiBase}/archive/file/${encodeURIComponent(raw.slice("archive:".length))}`;
+  if (track?.path) return `${apiBase}/stream/${b64url(track.path)}`;
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Playback mode (squeezebox | local)
 // ---------------------------------------------------------------------------
@@ -124,13 +143,13 @@ function useLocalPlayerEngine(): LocalPlayerApi {
     const q = queueRef.current;
     const audio = audioRef.current;
     if (!audio || i < 0 || i >= q.length) return;
-    const sid = localStreamId(q[i]);
-    if (!sid) return;
+    const url = localStreamUrl(q[i]);
+    if (!url) return;
     setIndex(i);
     indexRef.current = i;
     setElapsed(0);
     setLoading(true);
-    audio.src = `${apiBase}/local-stream/${sid}`;
+    audio.src = url;
     audio.play().catch(() => {});
   }, []);
 
@@ -191,14 +210,14 @@ function useLocalPlayerEngine(): LocalPlayerApi {
   }, []);
 
   const playTracks = useCallback((tracks: Track[], startAt = 0) => {
-    const playable = tracks.filter((t) => localStreamId(t));
+    const playable = tracks.filter((t) => localStreamUrl(t));
     if (!playable.length) return;
     setQueueBoth(playable);
     playAt(Math.min(Math.max(0, startAt), playable.length - 1));
   }, [playAt, setQueueBoth]);
 
   const playNow = useCallback((track: Track) => {
-    if (!localStreamId(track)) return;
+    if (!localStreamUrl(track)) return;
     const at = indexRef.current + 1;
     const q = [...queueRef.current];
     q.splice(at, 0, track);
@@ -207,14 +226,14 @@ function useLocalPlayerEngine(): LocalPlayerApi {
   }, [playAt, setQueueBoth]);
 
   const addToQueue = useCallback((track: Track) => {
-    if (!localStreamId(track)) return;
+    if (!localStreamUrl(track)) return;
     const q = [...queueRef.current, track];
     setQueueBoth(q);
     if (indexRef.current < 0) playAt(0);
   }, [playAt, setQueueBoth]);
 
   const playNext = useCallback((track: Track) => {
-    if (!localStreamId(track)) return;
+    if (!localStreamUrl(track)) return;
     const q = [...queueRef.current];
     q.splice(indexRef.current + 1, 0, track);
     setQueueBoth(q);
