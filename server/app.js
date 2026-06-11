@@ -75,8 +75,8 @@ const playbackTrackInputSchema = z.object({
   collection: optionalText,
   folder: optionalText
 }).strict().refine(
-  (value) => Boolean(value.path || value.lmsTrackId || value.uri),
-  { message: "Playable local path, LMS track id, or Spotify URI is required" }
+  (value) => Boolean(value.path || value.lmsTrackId || value.uri || String(value.id || "").startsWith("archive:")),
+  { message: "Playable local path, LMS track id, Spotify URI, or archive id is required" }
 );
 
 const queueUpdateSchema = z.object({
@@ -1945,6 +1945,7 @@ function optimisticTrack(track) {
 
 function isPlayableTrackInput(track) {
   if (!track || typeof track !== "object") return false;
+  if (String(track.id || "").startsWith("archive:")) return true;
   if (track.path || track.lmsTrackId) return true;
   if (!track.uri) return false;
   const kind = String(track.kind || "").toLowerCase();
@@ -2242,6 +2243,13 @@ function applySecurityHeaders(req, res, next) {
 }
 
 function forceHttpsRedirect(req, res, next) {
+  // Audio-fetch routes that LMS pulls over plain HTTP on the LAN must NOT be
+  // redirected to https — LMS can't follow the TLS hop to this self-hosted port.
+  // Browsers still reach these over https via the nginx proxy (x-forwarded-proto).
+  if (req.path.startsWith("/api/archive/file/") || req.path.startsWith("/api/local-stream/")) {
+    next();
+    return;
+  }
   if (process.env.CLOUD_SQUEEZE_FORCE_HTTPS !== "1" || isHttpsRequest(req) || !["GET", "HEAD"].includes(req.method)) {
     next();
     return;

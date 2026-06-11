@@ -236,12 +236,28 @@ export class LmsClient {
       "add-queue": "add"
     };
     const playableUri = spottyPlaybackUri(target.value);
-    const result = await this.command(`${encodeURIComponent(playerId)} playlist ${cmdMap[action] || "add"} ${playableUri}`);
+    // LMS accepts an optional title for the item — set it so archived HTTP
+    // streams show "Artist - Title" instead of the raw URL.
+    const titleArg = target.title ? ` ${encodeURIComponent(target.title)}` : "";
+    const result = await this.command(`${encodeURIComponent(playerId)} playlist ${cmdMap[action] || "add"} ${playableUri}${titleArg}`);
     if (action === "play-now") await this.control(playerId, "play");
     return result;
   }
 
   async resolvePlayableTarget(track) {
+    // Archived FLACs live outside the LMS library; play them as an HTTP stream
+    // served by our own /api/archive/file endpoint (exempt from the https redirect
+    // so LMS can pull it over plain HTTP on the LAN).
+    const archiveId = String(track.id || "");
+    if (archiveId.startsWith("archive:")) {
+      const filename = archiveId.slice("archive:".length);
+      const titleParts = [track.artist, track.title].filter(Boolean).join(" - ");
+      return {
+        type: "uri",
+        value: `http://${config.lanLmsHost}:${config.port}/api/archive/file/${encodeURIComponent(filename)}`,
+        title: titleParts || filename.replace(/\.flac$/i, "")
+      };
+    }
     if (track.lmsTrackId) return { type: "track_id", value: track.lmsTrackId };
     if (track.uri && (!track.path || isSpotifySource(track))) {
       if (!isSpotifyTrackUri(track.uri)) return null;

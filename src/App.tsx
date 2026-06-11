@@ -85,7 +85,9 @@ import {
   LocalQueuePanel,
   usePlaybackMode,
   useLocalPlayerContext,
-  localStreamUrl
+  localStreamUrl,
+  PlaybackModeProvider,
+  LocalPlayerProvider
 } from "./lib/localPlayer";
 import type { AppState, ConnectionGuide, LibraryCollection, Playlist, PlaylistSummary, SpotifySearchGroups, Track } from "./types";
 import "./styles.css";
@@ -161,6 +163,18 @@ function mergeStateFromAction(previous: AppState | null, result: unknown): AppSt
 }
 
 export default function App() {
+  // Providers live here (not just in main.tsx) so anything rendering <App/>
+  // directly — including tests — has the playback-mode and local-player contexts.
+  return (
+    <PlaybackModeProvider>
+      <LocalPlayerProvider>
+        <AppShell />
+      </LocalPlayerProvider>
+    </PlaybackModeProvider>
+  );
+}
+
+function AppShell() {
   const [state, setState] = useState<AppState | null>(null);
   const [activeScreen, setActiveScreen] = useState<PublicScreenName>("Now Playing");
   const [query, setQuery] = useState("");
@@ -1279,12 +1293,12 @@ function SearchResultRow({ track, requestsOpen, onRefresh, onAction }: { track: 
   const { mode } = usePlaybackMode();
   const local = useLocalPlayerContext();
   const isLocal = mode === "local";
-  const isArchived = String(track.id || "").startsWith("archive:");
   const streamable = Boolean(localStreamUrl(track));
   // Local mode plays anything with a browser stream URL (Spotify, uploaded/VPS
-  // files, archived FLACs). Squeezebox mode plays what LMS has — not archived
-  // FLACs (they live outside the LMS library).
-  const playable = isLocal ? streamable : (!isArchived && (!track.kind || track.kind === "track" || Boolean(track.path || track.lmsTrackId)));
+  // files, archived FLACs). Squeezebox mode plays Spotify, LMS-library files,
+  // and archived FLACs (the backend streams those to LMS over HTTP).
+  const isArchived = String(track.id || "").startsWith("archive:");
+  const playable = isLocal ? streamable : (isArchived || !track.kind || track.kind === "track" || Boolean(track.path || track.lmsTrackId));
   const art = usableArt(track.art || track.artwork);
 
   function run(kind: "play-now" | "play-next" | "add-queue") {
