@@ -13,8 +13,14 @@ import {
   useState,
   type ReactNode
 } from "react";
-import { ListMusic, Music2, Pause, Play, SkipBack, SkipForward, Trash2, Volume2, X } from "lucide-react";
+import {
+  Check, HardDriveDownload, ListMusic, Pause, Play, Repeat, Repeat1,
+  Shuffle, SkipBack, SkipForward, Square, Volume2, X
+} from "lucide-react";
 import type { Track } from "../types";
+import { archiveTrack } from "./api";
+
+export type LocalRepeat = "off" | "all" | "one";
 
 const apiBase = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/api`;
 
@@ -63,6 +69,8 @@ export interface LocalPlayerApi {
   elapsed: number;
   duration: number;
   volume: number;
+  shuffle: boolean;
+  repeat: LocalRepeat;
   playNow: (track: Track) => void;
   playTracks: (tracks: Track[], startAt?: number) => void;
   addToQueue: (track: Track) => void;
@@ -71,10 +79,13 @@ export interface LocalPlayerApi {
   jumpTo: (i: number) => void;
   clear: () => void;
   toggle: () => void;
+  stop: () => void;
   next: () => void;
   previous: () => void;
   seek: (s: number) => void;
   setVolume: (v: number) => void;
+  toggleShuffle: () => void;
+  cycleRepeat: () => void;
 }
 
 const LocalPlayerContext = createContext<LocalPlayerApi | null>(null);
@@ -97,11 +108,17 @@ function useLocalPlayerEngine(): LocalPlayerApi {
   const [elapsed, setElapsed] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolumeState] = useState(1);
+  const [shuffle, setShuffle] = useState(false);
+  const [repeat, setRepeat] = useState<LocalRepeat>("off");
 
   const queueRef = useRef(queue);
   queueRef.current = queue;
   const indexRef = useRef(index);
   indexRef.current = index;
+  const shuffleRef = useRef(shuffle);
+  shuffleRef.current = shuffle;
+  const repeatRef = useRef(repeat);
+  repeatRef.current = repeat;
 
   const playAt = useCallback((i: number) => {
     const q = queueRef.current;
@@ -117,6 +134,24 @@ function useLocalPlayerEngine(): LocalPlayerApi {
     audio.play().catch(() => {});
   }, []);
 
+  // Advance honoring shuffle + repeat. fromEnded=true when a track finished.
+  const advance = useCallback((fromEnded: boolean) => {
+    const q = queueRef.current;
+    const i = indexRef.current;
+    if (!q.length) return;
+    if (fromEnded && repeatRef.current === "one") { playAt(i); return; }
+    if (shuffleRef.current && q.length > 1) {
+      let r = i;
+      while (r === i) r = Math.floor(Math.random() * q.length);
+      playAt(r);
+      return;
+    }
+    const nextI = i + 1;
+    if (nextI < q.length) playAt(nextI);
+    else if (repeatRef.current === "all") playAt(0);
+    else setIsPlaying(false);
+  }, [playAt]);
+
   useEffect(() => {
     const audio = new Audio();
     audioRef.current = audio;
@@ -127,11 +162,7 @@ function useLocalPlayerEngine(): LocalPlayerApi {
     const onPause = () => setIsPlaying(false);
     const onWaiting = () => setLoading(true);
     const onPlaying = () => setLoading(false);
-    const onEnded = () => {
-      const nextI = indexRef.current + 1;
-      if (nextI < queueRef.current.length) playAt(nextI);
-      else setIsPlaying(false);
-    };
+    const onEnded = () => advance(true);
     audio.addEventListener("timeupdate", onTime);
     audio.addEventListener("loadedmetadata", onMeta);
     audio.addEventListener("durationchange", onMeta);
@@ -152,7 +183,7 @@ function useLocalPlayerEngine(): LocalPlayerApi {
       audio.removeEventListener("playing", onPlaying);
       audio.removeEventListener("ended", onEnded);
     };
-  }, [playAt]);
+  }, [playAt, advance]);
 
   const setQueueBoth = useCallback((q: Track[]) => {
     queueRef.current = q;
@@ -225,10 +256,22 @@ function useLocalPlayerEngine(): LocalPlayerApi {
     }
   }, [playAt]);
 
-  const next = useCallback(() => {
-    const i = indexRef.current + 1;
-    if (i < queueRef.current.length) playAt(i);
-  }, [playAt]);
+  const next = useCallback(() => advance(false), [advance]);
+
+  const stop = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.pause();
+    audio.currentTime = 0;
+    setElapsed(0);
+    setIsPlaying(false);
+  }, []);
+
+  const toggleShuffle = useCallback(() => setShuffle((s) => !s), []);
+  const cycleRepeat = useCallback(
+    () => setRepeat((r) => (r === "off" ? "all" : r === "all" ? "one" : "off")),
+    []
+  );
 
   const previous = useCallback(() => {
     const audio = audioRef.current;
@@ -250,9 +293,9 @@ function useLocalPlayerEngine(): LocalPlayerApi {
 
   const current = index >= 0 && index < queue.length ? queue[index] : null;
   return {
-    queue, index, current, isPlaying, loading, elapsed, duration, volume,
+    queue, index, current, isPlaying, loading, elapsed, duration, volume, shuffle, repeat,
     playNow, playTracks, addToQueue, playNext, removeAt, jumpTo, clear,
-    toggle, next, previous, seek, setVolume
+    toggle, stop, next, previous, seek, setVolume, toggleShuffle, cycleRepeat
   };
 }
 
@@ -281,20 +324,50 @@ export function PlaybackModeToggle() {
   );
 }
 
+function LocalArchiveButton({ track }: { track: Track | null }) {
+  const [state, setState] = useState<"idle" | "done" | "error">("idle");
+  if (!track) return null;
+  async function onClick() {
+    try {
+      await archiveTrack(track as Track);
+      setState("done");
+    } catch {
+      setState("error");
+    }
+    window.setTimeout(() => setState("idle"), 4000);
+  }
+  return (
+    <div className="archive-action">
+      <button className="archive-button" onClick={onClick}>
+        {state === "done" ? <Check size={18} /> : <HardDriveDownload size={18} />}
+        {state === "done" ? "Added to archive queue" : state === "error" ? "Could not archive" : "Archive this song"}
+      </button>
+    </div>
+  );
+}
+
 export function LocalNowPlayingPanel() {
   const p = useLocalPlayerContext();
   const has = Boolean(p.current);
+  const art = p.current?.art || p.current?.artwork;
+  const repeatLabel = p.repeat === "one" ? "Repeat one" : p.repeat === "all" ? "Repeat all" : "Repeat";
   return (
     <section className="panel now-playing" aria-label="Now playing (local)">
       <h2>Now playing · This device</h2>
       <div className="playing-layout">
-        <div className="mini-art local-art">
-          {p.current?.art ? <img src={p.current.art} alt="" /> : <Music2 size={28} />}
+        <div className={`album-art ${has ? "" : "is-empty"}`}>
+          {art ? <img src={art} alt={`${p.current?.album || p.current?.title} cover`} /> : (
+            <>
+              <div className="album-noise" />
+              <strong>{has ? `${(p.current?.artist || "").split(" ")[0]}.` : "CS."}</strong>
+              <span>{p.current?.album || "This device"}</span>
+            </>
+          )}
         </div>
         <div className="track-core">
           <h3>{p.current?.title || "Nothing playing here"}</h3>
           <p>{p.current?.artist || "Pick a song to play in this browser"}</p>
-          <span className="source-chip">{p.loading ? "Buffering…" : "Local · this device"}</span>
+          <span className="source-chip"><span className="live-dot" /> {p.loading ? "Buffering…" : "Local · this device"}</span>
           <div className="local-progress">
             <input
               type="range"
@@ -315,20 +388,33 @@ export function LocalNowPlayingPanel() {
             <button className="play-button" aria-label={p.isPlaying ? "Pause" : "Play"} disabled={!has} onClick={p.toggle}>
               {p.isPlaying ? <Pause size={22} fill="currentColor" /> : <Play size={22} fill="currentColor" />}
             </button>
-            <button aria-label="Next" disabled={!has || p.index >= p.queue.length - 1} onClick={p.next}><SkipForward size={20} /></button>
+            <button aria-label="Stop" disabled={!has} onClick={p.stop}><Square size={18} fill="currentColor" /></button>
+            <button aria-label="Next" disabled={!has} onClick={p.next}><SkipForward size={20} /></button>
           </div>
-          <div className="local-volume">
-            <Volume2 size={18} />
-            <input
-              type="range" min={0} max={1} step={0.01} value={p.volume}
-              onChange={(e) => p.setVolume(Number(e.currentTarget.value))}
-              aria-label="Volume"
-            />
+          <div className="playback-options">
+            <button className={p.shuffle ? "active-option" : ""} onClick={p.toggleShuffle}>
+              <Shuffle size={17} /> {p.shuffle ? "Shuffle on" : "Shuffle"}
+            </button>
+            <button className={p.repeat !== "off" ? "active-option" : ""} onClick={p.cycleRepeat}>
+              {p.repeat === "one" ? <Repeat1 size={17} /> : <Repeat size={17} />} {repeatLabel}
+            </button>
           </div>
-          {!has && <p className="empty-copy">This plays in your browser, separate from the Squeezebox. Add songs from search.</p>}
+          <VolumeRow volume={Math.round(p.volume * 100)} onChange={(v) => p.setVolume(v / 100)} />
+          <LocalArchiveButton track={p.current} />
+          {!has && <p className="empty-copy">This plays in your browser, separate from the Squeezebox. Add songs from search with “Play here”.</p>}
         </div>
       </div>
     </section>
+  );
+}
+
+function VolumeRow({ volume, onChange }: { volume: number; onChange: (v: number) => void }) {
+  return (
+    <div className="volume-row">
+      <Volume2 size={20} />
+      <input aria-label="Volume" type="range" min={0} max={100} value={volume} onChange={(e) => onChange(Number(e.currentTarget.value))} />
+      <span>{volume}%</span>
+    </div>
   );
 }
 
@@ -363,5 +449,3 @@ export function LocalQueuePanel() {
     </section>
   );
 }
-
-void Trash2;
