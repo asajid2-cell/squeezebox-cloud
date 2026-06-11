@@ -232,6 +232,18 @@ nav button.active {
   border-radius: 8px;
 }
 .sync-token-row button,
+.sync-qr {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 12px;
+  background: #ffffff;
+  border-radius: 10px;
+}
+.sync-qr small {
+  color: #0b0f17;
+  font-weight: 600;
+}
 .sync-actions button,
 .sync-transport button {
   min-height: 38px;

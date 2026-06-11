@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Copy, Link2, Pause, Play, Radio, Volume2 } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
+import { Copy, Link2, Pause, Play, QrCode, Radio, Volume2 } from "lucide-react";
 import { SyncEngine, type SyncEngineState } from "./lib/syncEngine";
 import { localStreamUrl } from "./lib/localPlayer";
 import type { Track } from "./types";
@@ -18,6 +19,7 @@ export function SyncSessionPanel({ nowPlaying }: { nowPlaying: Track }) {
   const [activeToken, setActiveToken] = useState(initialToken);
   const [engineState, setEngineState] = useState<SyncEngineState | null>(null);
   const [copied, setCopied] = useState(false);
+  const [showQr, setShowQr] = useState(false);
   const engine = useMemo(() => activeToken ? new SyncEngine({ shareToken: activeToken }) : null, [activeToken]);
   const streamUrl = localStreamUrl(nowPlaying);
   const isHost = engineState?.role === "host";
@@ -80,7 +82,14 @@ export function SyncSessionPanel({ nowPlaying }: { nowPlaying: Track }) {
       <div className="sync-actions">
         <button type="button" onClick={createSession}>Create</button>
         <button type="button" disabled={!shareUrl} onClick={copyLink}><Copy size={15} /> {copied ? "Copied" : "Copy"}</button>
+        <button type="button" disabled={!shareUrl} onClick={() => setShowQr((value) => !value)} title="Show QR code" aria-pressed={showQr}><QrCode size={15} /></button>
       </div>
+      {showQr && shareUrl && (
+        <div className="sync-qr">
+          <QRCodeSVG value={shareUrl} size={156} bgColor="#ffffff" fgColor="#0b0f17" marginSize={2} />
+          <small>Scan to join on a phone</small>
+        </div>
+      )}
       {engine && (
         <button className="sync-unlock" type="button" disabled={engineState?.audioUnlocked} onClick={() => engine.unlockAudio()}>
           {engineState?.audioUnlocked ? "Audio joined" : "Tap to join audio"}
