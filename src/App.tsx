@@ -79,6 +79,14 @@ import {
   uploadTrack,
 } from "./lib/api";
 import type { ArchiveFile, ArchiveJob } from "./lib/api";
+import {
+  PlaybackModeToggle,
+  LocalNowPlayingPanel,
+  LocalQueuePanel,
+  usePlaybackMode,
+  useLocalPlayerContext,
+  localStreamId
+} from "./lib/localPlayer";
 import type { AppState, ConnectionGuide, LibraryCollection, Playlist, PlaylistSummary, SpotifySearchGroups, Track } from "./types";
 import "./styles.css";
 
@@ -275,6 +283,7 @@ export default function App() {
           ))}
         </nav>
         <RecentPicks picks={state.recentPicks} />
+        <PlaybackModeToggle />
         <div className="speaker-card">
           <span className={speakerOnline ? "status-dot online" : reconnecting ? "status-dot connecting" : "status-dot offline"} />
           <div>
@@ -345,6 +354,7 @@ function PublicScreen({
   actionPending: boolean;
   onPlayerAction: (action: "play" | "pause" | "stop" | "next" | "previous") => Promise<unknown>;
 }) {
+  const { mode } = usePlaybackMode();
   const commonSearch = (
     <SearchPanel
       query={query}
@@ -362,7 +372,7 @@ function PublicScreen({
   if (activeScreen === "Queue") {
     return (
       <div className="content-grid focus-grid">
-        <QueuePanel queue={state.queue} onRefresh={onRefresh} onAction={onAction} />
+        {mode === "local" ? <LocalQueuePanel /> : <QueuePanel queue={state.queue} onRefresh={onRefresh} onAction={onAction} />}
         <RightRail state={state} />
       </div>
     );
@@ -396,6 +406,15 @@ function PublicScreen({
 
   const hasTrack = state.nowPlaying.id !== "idle" && (state.nowPlaying.duration || 0) > 0;
   const controlsDisabled = !state.player.connected || Boolean(state.player.reconnecting) || actionPending;
+  if (mode === "local") {
+    return (
+      <div className="content-grid">
+        <LocalNowPlayingPanel />
+        <LocalQueuePanel />
+        <RightRail state={state} />
+      </div>
+    );
+  }
   return (
     <div className="content-grid">
       <NowPlayingPanel state={state} hasTrack={hasTrack} controlsDisabled={controlsDisabled} onRefresh={onRefresh} onAction={onAction} onPlayerAction={onPlayerAction} />
@@ -1236,8 +1255,26 @@ function SpotifyDetail({
 }
 
 function SearchResultRow({ track, requestsOpen, onRefresh, onAction }: { track: Track; requestsOpen: boolean; onRefresh: () => void; onAction: ActionRunner }) {
-  const playable = !track.kind || track.kind === "track" || Boolean(track.path || track.lmsTrackId);
+  const { mode } = usePlaybackMode();
+  const local = useLocalPlayerContext();
+  const isLocal = mode === "local";
+  const streamable = Boolean(localStreamId(track));
+  // In local mode only Spotify tracks can stream to the browser; in Squeezebox
+  // mode anything LMS can play is fine.
+  const playable = isLocal ? streamable : (!track.kind || track.kind === "track" || Boolean(track.path || track.lmsTrackId));
   const art = usableArt(track.art || track.artwork);
+
+  function run(kind: "play-now" | "play-next" | "add-queue") {
+    if (isLocal) {
+      if (kind === "play-now") local.playNow(track);
+      else if (kind === "play-next") local.playNext(track);
+      else local.addToQueue(track);
+      return;
+    }
+    onAction(async () => { await playTrack(kind, track); await onRefresh(); });
+  }
+  const disabled = isLocal ? false : !requestsOpen;
+
   return (
     <div className="result-row">
       <div className="cover-thumb">{art ? <img src={art} alt="" /> : <FallbackArt kind={track.kind} />}</div>
@@ -1250,9 +1287,9 @@ function SearchResultRow({ track, requestsOpen, onRefresh, onAction }: { track: 
       </div>
       <span>{track.kind && track.kind !== "track" ? track.kind : track.duration ? formatTime(track.duration) : "--:--"}</span>
       <div className="track-actions">
-        {playable && <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("play-now", track); await onRefresh(); })}>Play now</button>}
-        {playable && <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("play-next", track); await onRefresh(); })}>Play next</button>}
-        {playable && <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("add-queue", track); await onRefresh(); })}>Queue</button>}
+        {playable && <button className="ghost-add" disabled={disabled} onClick={() => run("play-now")}>{isLocal ? "Play here" : "Play now"}</button>}
+        {playable && <button className="ghost-add" disabled={disabled} onClick={() => run("play-next")}>Play next</button>}
+        {playable && <button className="ghost-add" disabled={disabled} onClick={() => run("add-queue")}>Queue</button>}
         {playable && <AddToPlaylistButton track={track} />}
         {(!track.kind || track.kind === "track") && (track.uri || track.id)?.toString().includes("spotify:") && <ArchiveTrackButton track={track} />}
         <CurationButtons track={track} onAction={onAction} />
