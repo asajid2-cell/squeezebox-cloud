@@ -181,6 +181,7 @@ export class SyncEngine {
   private heartbeat: number | null = null;
   private reconnectTimer: number | null = null;
   private source: AudioBufferSourceNode | null = null;
+  private currentSchedule: any = null;
   private listeners = new Set<(state: SyncEngineState) => void>();
   private state: SyncEngineState;
   private options: Required<SyncEngineOptions>;
@@ -265,6 +266,11 @@ export class SyncEngine {
     this.audio.setVolume(this.state.volume);
     this.patch({ audioUnlocked: true });
     this.reportClock();
+    // Recover any play that arrived while audio was still locked — start it now at
+    // the current position so a late-unlocking device joins the song in progress.
+    if (this.currentSchedule && !this.state.playing) {
+      this.handleSchedulePlay(this.currentSchedule).catch(() => {});
+    }
   }
 
   loadAudioSource(url: string, trackOffsetMs = 0, track?: any) {
@@ -325,6 +331,7 @@ export class SyncEngine {
     }
     if (message.type === "PAUSE") {
       this.stopSource();
+      this.currentSchedule = null;
       this.patch({ playing: false, currentOffsetMs: message.trackOffsetMs || this.state.currentOffsetMs });
       return;
     }
@@ -413,23 +420,40 @@ export class SyncEngine {
   }
 
   private async handleSchedulePlay(message: any) {
+    // Remember the play intent so we can recover it if/when audio is unlocked later
+    // (browsers require a user gesture; a guest who hasn't tapped "join audio" yet,
+    // or unlocks after the host hit play, must still start — at the CURRENT position).
+    this.currentSchedule = message;
     const buffer = await this.loadBuffer(message.url);
     if (!this.state.audioUnlocked) return;
     const ctx = this.audio.getContext();
     if (ctx.state !== "running") await this.audio.resume();
     this.stopSource();
     const source = this.audio.createSource(buffer);
-    const waitSec = computeScheduleWaitSeconds({
-      startAtServerTime: Number(message.startAtServerTime),
-      epochNowMs: epochNow(),
-      clockOffsetMs: this.state.clockOffsetMs,
-      outputLatencyMs: this.audio.outputLatencyMs(),
-      nudgeMs: this.state.nudgeMs
-    });
-    const offsetSec = Math.max(0, Number(message.trackOffsetMs || 0) / 1000);
+    const startAtServerTime = Number(message.startAtServerTime);
+    const baseOffsetMs = Number(message.trackOffsetMs || 0);
+    const serverNowMs = epochNow() + this.state.clockOffsetMs + this.state.nudgeMs;
+    const elapsedMs = serverNowMs - startAtServerTime;
+    let waitSec: number;
+    let offsetSec: number;
+    if (elapsedMs >= 0) {
+      // Start instant already passed (late join / late unlock): begin now at the
+      // advanced position so we land in sync rather than restarting the track.
+      waitSec = 0;
+      offsetSec = Math.max(0, (baseOffsetMs + elapsedMs) / 1000);
+    } else {
+      waitSec = computeScheduleWaitSeconds({
+        startAtServerTime,
+        epochNowMs: epochNow(),
+        clockOffsetMs: this.state.clockOffsetMs,
+        outputLatencyMs: this.audio.outputLatencyMs(),
+        nudgeMs: this.state.nudgeMs
+      });
+      offsetSec = Math.max(0, baseOffsetMs / 1000);
+    }
     source.start(ctx.currentTime + waitSec, offsetSec);
     this.source = source;
-    this.patch({ playing: true, currentUrl: message.url, currentOffsetMs: Number(message.trackOffsetMs || 0) });
+    this.patch({ playing: true, currentUrl: message.url, currentOffsetMs: baseOffsetMs });
   }
 
   private async loadBuffer(url: string) {
