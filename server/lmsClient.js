@@ -244,6 +244,39 @@ export class LmsClient {
     return result;
   }
 
+  // Squeezebox Tap: load and play a WHOLE album, from the top or starting at a
+  // chosen track. Uses NATIVE LMS album loading (never a manual per-track queue):
+  //  - local albums  -> `playlistcontrol cmd:load album_id:<id>` (JSON-RPC)
+  //  - Spotify albums -> Spotty's `playlist play spotify://album:<id>` (CLI)
+  // An optional 0-based `startIndex` jumps to that track after the album loads,
+  // which is the album-from-track ("start at the representative song") case.
+  async loadAlbum(playerId, spec = {}) {
+    if (!playerId || !spec) return null;
+    const rawIndex = Number(spec.startIndex);
+    const startIndex = Number.isFinite(rawIndex) ? Math.max(0, Math.floor(rawIndex)) : 0;
+    const source = String(spec.source || (spec.albumUri ? "spotify" : "local")).toLowerCase();
+
+    if (source === "spotify") {
+      const albumUri = String(spec.albumUri || "");
+      if (!/^spotify:album:[A-Za-z0-9]+$/i.test(albumUri)) {
+        throw new Error("A spotify:album:<id> URI is required to load a Spotify album");
+      }
+      const playbackUri = albumUri.replace(/^spotify:album:/i, "spotify://album:");
+      const encoded = encodeURIComponent(playerId);
+      await this.command(`${encoded} playlist play ${playbackUri}`);
+      if (startIndex > 0) await this.command(`${encoded} playlist index ${startIndex}`);
+      await this.control(playerId, "play");
+      return { source: "spotify", albumUri, startIndex };
+    }
+
+    const albumId = String(spec.albumId || "");
+    if (!albumId) throw new Error("An album_id is required to load a local album");
+    await this.jsonRequest([playerId, ["playlistcontrol", "cmd:load", `album_id:${albumId}`]]);
+    if (startIndex > 0) await this.jsonRequest([playerId, ["playlist", "index", String(startIndex)]]);
+    await this.control(playerId, "play");
+    return { source: "local", albumId, startIndex };
+  }
+
   async resolvePlayableTarget(track) {
     // Archived FLACs live outside the LMS library; play them as an HTTP stream
     // served by our own /api/archive/file endpoint (exempt from the https redirect

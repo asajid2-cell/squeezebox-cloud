@@ -689,6 +689,72 @@ describe("LMS client parsing", () => {
     expect(commands).toContain("player-1 play");
   });
 
+  // --- Squeezebox Tap loop 1: album-load primitive (whole album from the top) ---
+  it("loadAlbum loads a local album from the top via a native album-load command", async () => {
+    const requests: unknown[] = [];
+    const commands: string[] = [];
+    const client = new LmsClient();
+    client.command = async (command: string) => {
+      commands.push(command);
+      return "ok";
+    };
+    client.jsonRequest = async (params: unknown) => {
+      requests.push(params);
+      return { result: {} };
+    };
+
+    await client.loadAlbum("player-1", { source: "local", albumId: "42" });
+
+    // Native LMS album load — NOT a manual per-track queue build.
+    expect(requests).toContainEqual(["player-1", ["playlistcontrol", "cmd:load", "album_id:42"]]);
+    expect(commands).toContain("player-1 play");
+  });
+
+  it("loadAlbum loads a Spotify album from the top through Spotty", async () => {
+    const commands: string[] = [];
+    const client = new LmsClient();
+    client.command = async (command: string) => {
+      commands.push(command);
+      return "ok";
+    };
+
+    await client.loadAlbum("player-1", { source: "spotify", albumUri: "spotify:album:xyz789" });
+
+    expect(commands).toContain("player-1 playlist play spotify://album:xyz789");
+    expect(commands).toContain("player-1 play");
+  });
+
+  // --- Squeezebox Tap loop 2: album-from-track (start the album AT a chosen track) ---
+  it("loadAlbum starts a local album at the chosen track index (not from the top)", async () => {
+    const requests: unknown[] = [];
+    const client = new LmsClient();
+    client.command = async () => "ok";
+    client.jsonRequest = async (params: unknown) => {
+      requests.push(params);
+      return { result: {} };
+    };
+
+    await client.loadAlbum("player-1", { source: "local", albumId: "42", startIndex: 3 });
+
+    expect(requests).toContainEqual(["player-1", ["playlistcontrol", "cmd:load", "album_id:42"]]);
+    // After loading the album, jump to the chosen 0-based track index before playing.
+    expect(requests).toContainEqual(["player-1", ["playlist", "index", "3"]]);
+  });
+
+  it("loadAlbum starts a Spotify album at the chosen track index (not from the top)", async () => {
+    const commands: string[] = [];
+    const client = new LmsClient();
+    client.command = async (command: string) => {
+      commands.push(command);
+      return "ok";
+    };
+
+    await client.loadAlbum("player-1", { source: "spotify", albumUri: "spotify:album:xyz789", startIndex: 2 });
+
+    expect(commands).toContain("player-1 playlist play spotify://album:xyz789");
+    expect(commands).toContain("player-1 playlist index 2");
+  });
+
   it("prefers a local file path over enrichment Spotify metadata for local tracks", async () => {
     const commands: string[] = [];
     const requests: unknown[] = [];
