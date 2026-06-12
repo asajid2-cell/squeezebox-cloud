@@ -271,8 +271,12 @@ export class LmsClient {
 
     const albumId = String(spec.albumId || "");
     if (!albumId) throw new Error("An album_id is required to load a local album");
-    await this.jsonRequest([playerId, ["playlistcontrol", "cmd:load", `album_id:${albumId}`]]);
-    if (startIndex > 0) await this.jsonRequest([playerId, ["playlist", "index", String(startIndex)]]);
+    // Native atomic album load. `play_index:N` on cmd:load starts playback AT that
+    // track in one command (LMS docs) — avoids the race where a follow-up
+    // `playlist index N` runs before the playlist is populated.
+    const loadArgs = ["playlistcontrol", "cmd:load", `album_id:${albumId}`];
+    if (startIndex > 0) loadArgs.push(`play_index:${startIndex}`);
+    await this.jsonRequest([playerId, loadArgs]);
     await this.control(playerId, "play");
     return { source: "local", albumId, startIndex };
   }

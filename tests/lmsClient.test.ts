@@ -736,9 +736,9 @@ describe("LMS client parsing", () => {
 
     await client.loadAlbum("player-1", { source: "local", albumId: "42", startIndex: 3 });
 
-    expect(requests).toContainEqual(["player-1", ["playlistcontrol", "cmd:load", "album_id:42"]]);
-    // After loading the album, jump to the chosen 0-based track index before playing.
-    expect(requests).toContainEqual(["player-1", ["playlist", "index", "3"]]);
+    // Native atomic album load that STARTS at the chosen 0-based track via play_index
+    // (LMS docs) — not a separate post-load jump that could race the playlist build.
+    expect(requests).toContainEqual(["player-1", ["playlistcontrol", "cmd:load", "album_id:42", "play_index:3"]]);
   });
 
   it("loadAlbum starts a Spotify album at the chosen track index (not from the top)", async () => {
