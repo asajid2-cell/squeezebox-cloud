@@ -175,14 +175,32 @@ async function kickWorker() {
  * per `encodeArgs`, written to `outPath`. Shared by archive (FLAC) and the local
  * browser stream cache (MP3).
  */
-function fetchAndEncode(uri, outPath, encodeArgs, label = "Worker") {
+function fetchAndEncode(uri, outPath, encodeArgs, label = "Worker", { timeoutMs = 0 } = {}) {
   const bin = locateSpottyBin();
   if (!bin || !existsSync(bin)) {
     return Promise.reject(new Error("spotty helper binary not found"));
   }
   return new Promise((resolve, reject) => {
     let settled = false;
-    const fail = (e) => { if (!settled) { settled = true; reject(e instanceof Error ? e : new Error(String(e))); } };
+    let spottyClosed = false;
+    let ffClosed = false;
+    let spottyCode = null;
+    let spottySignal = null;
+    let ffCode = null;
+    let ffSignal = null;
+    let timeout = null;
+    const cleanup = () => {
+      if (timeout) clearTimeout(timeout);
+    };
+    const fail = async (e) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      try { spotty.kill("SIGTERM"); } catch {}
+      try { ff.kill("SIGTERM"); } catch {}
+      await fs.unlink(outPath).catch(() => {});
+      reject(e instanceof Error ? e : new Error(String(e)));
+    };
 
     const spotty = spawn(bin, [
       "-n", label,
@@ -201,8 +219,41 @@ function fetchAndEncode(uri, outPath, encodeArgs, label = "Worker") {
     ]);
 
     let errOut = "";
-    spotty.stderr.on("data", (d) => { errOut += d.toString().slice(0, 200); });
-    ff.stderr.on("data", (d) => { errOut += d.toString().slice(0, 200); });
+    const appendErr = (d) => {
+      errOut = `${errOut}${d.toString()}`.slice(-4000);
+    };
+    const exitText = (name, code, signal) => `${name} exit ${code ?? "signal"}${signal ? ` (${signal})` : ""}`;
+    const maybeFinish = async () => {
+      if (settled || !spottyClosed || !ffClosed) return;
+      settled = true;
+      cleanup();
+      if (spottyCode === 0 && ffCode === 0 && existsSync(outPath)) {
+        try {
+          await assertNonEmptyFile(outPath, "encode produced no audio");
+          resolve(outPath);
+        } catch (error) {
+          await fs.unlink(outPath).catch(() => {});
+          reject(error);
+        }
+        return;
+      }
+      await fs.unlink(outPath).catch(() => {});
+      const detail = [
+        spottyCode === 0 ? "" : exitText("spotty", spottyCode, spottySignal),
+        ffCode === 0 ? "" : exitText("ffmpeg", ffCode, ffSignal),
+        errOut.trim()
+      ].filter(Boolean).join("; ");
+      reject(new Error(detail || "encode failed"));
+    };
+    if (timeoutMs > 0) {
+      timeout = setTimeout(() => {
+        fail(new Error(`encode timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      timeout.unref?.();
+    }
+
+    spotty.stderr.on("data", appendErr);
+    ff.stderr.on("data", appendErr);
 
     spotty.on("error", fail);
     ff.on("error", fail);
@@ -211,17 +262,19 @@ function fetchAndEncode(uri, outPath, encodeArgs, label = "Worker") {
     spotty.stdout.on("error", () => {});
     ff.stdin.on("error", () => {});
     spotty.stdout.pipe(ff.stdin);
-    spotty.on("close", () => { try { ff.stdin.end(); } catch {} });
+    spotty.on("close", (code, signal) => {
+      spottyClosed = true;
+      spottyCode = code;
+      spottySignal = signal;
+      try { ff.stdin.end(); } catch {}
+      maybeFinish();
+    });
 
-    ff.on("close", async (code) => {
-      if (settled) return;
-      settled = true;
-      if (code === 0 && existsSync(outPath)) {
-        resolve(outPath);
-      } else {
-        await fs.unlink(outPath).catch(() => {});
-        reject(new Error(errOut.trim() || `encode failed (ffmpeg exit ${code})`));
-      }
+    ff.on("close", (code, signal) => {
+      ffClosed = true;
+      ffCode = code;
+      ffSignal = signal;
+      maybeFinish();
     });
   });
 }
@@ -260,8 +313,18 @@ function reencodeFlac(src, dst) {
 // ---------------------------------------------------------------------------
 
 const STREAM_DIR = path.join(ARCHIVE_DIR, ".stream-cache");
-const STREAM_CACHE_MAX = Number(process.env.STREAM_CACHE_MAX_FILES || 60);
+const DEFAULT_STREAM_CACHE_MAX = 60;
+const DEFAULT_STREAM_MP3_BITRATE = "256k";
+const DEFAULT_STREAM_FETCH_TIMEOUT_MS = 2 * 60 * 1000;
+let streamDir = STREAM_DIR;
+let streamCacheMax = parsePositiveInteger(
+  process.env.STREAM_CACHE_MAX_FILES ?? process.env.STREAM_CACHE_MAX,
+  DEFAULT_STREAM_CACHE_MAX
+);
+let streamMp3Bitrate = String(process.env.STREAM_MP3_BITRATE || DEFAULT_STREAM_MP3_BITRATE).trim() || DEFAULT_STREAM_MP3_BITRATE;
+let streamFetchTimeoutMs = parsePositiveInteger(process.env.STREAM_FETCH_TIMEOUT_MS, DEFAULT_STREAM_FETCH_TIMEOUT_MS);
 const streamInflight = new Map();
+let fetchAndEncodeImpl = fetchAndEncode;
 
 /**
  * Ensure a browser-playable MP3 for the given track id/uri exists in the temp
@@ -271,11 +334,11 @@ const streamInflight = new Map();
  */
 export async function ensureStreamFile(uriOrId) {
   const raw = String(uriOrId || "");
-  const norm = normalizeUri(raw.includes("track:") ? raw : `spotify://track:${raw}`);
+  const norm = normalizeUri(raw.toLowerCase().includes("track:") ? raw : `spotify://track:${raw}`);
   const m = norm.match(/track:([A-Za-z0-9]+)/);
   if (!m) throw new Error("Invalid track for streaming");
   const id = m[1];
-  const dest = path.join(STREAM_DIR, `${id}.mp3`);
+  const dest = path.join(streamDir, `${id}.mp3`);
   if (existsSync(dest)) {
     const now = new Date();
     fs.utimes(dest, now, now).catch(() => {});
@@ -283,28 +346,75 @@ export async function ensureStreamFile(uriOrId) {
   }
   if (streamInflight.has(id)) return streamInflight.get(id);
   const job = (async () => {
-    await fs.mkdir(STREAM_DIR, { recursive: true });
+    await fs.mkdir(streamDir, { recursive: true });
     const part = `${dest}.part`;
-    await fetchAndEncode(norm, part, ["-c:a", "libmp3lame", "-b:a", "256k", "-f", "mp3"], "LocalStream");
-    await fs.rename(part, dest);
-    pruneStreamCache().catch(() => {});
+    try {
+      await fs.unlink(part).catch(() => {});
+      await fetchAndEncodeImpl(
+        norm,
+        part,
+        ["-c:a", "libmp3lame", "-b:a", streamMp3Bitrate, "-f", "mp3"],
+        "LocalStream",
+        { timeoutMs: streamFetchTimeoutMs }
+      );
+      await assertNonEmptyFile(part, "stream encode produced no audio");
+      await fs.rename(part, dest);
+      const now = new Date();
+      await fs.utimes(dest, now, now).catch(() => {});
+      await pruneStreamCache({ keepIds: new Set([id]) });
+    } catch (error) {
+      await fs.unlink(part).catch(() => {});
+      throw error;
+    }
     return dest;
   })().finally(() => streamInflight.delete(id));
   streamInflight.set(id, job);
   return job;
 }
 
-async function pruneStreamCache() {
-  const files = (await fs.readdir(STREAM_DIR).catch(() => [])).filter((f) => f.endsWith(".mp3"));
-  if (files.length <= STREAM_CACHE_MAX) return;
+async function pruneStreamCache({ keepIds = new Set() } = {}) {
+  const files = (await fs.readdir(streamDir).catch(() => [])).filter((f) => f.endsWith(".mp3"));
+  if (files.length <= streamCacheMax) return;
+  const keep = new Set([...keepIds].map((id) => `${id}.mp3`));
   const stats = await Promise.all(
-    files.map(async (f) => ({ f, t: (await fs.stat(path.join(STREAM_DIR, f)).catch(() => ({ mtimeMs: 0 }))).mtimeMs }))
+    files
+      .filter((f) => !keep.has(f))
+      .map(async (f) => ({ f, t: (await fs.stat(path.join(streamDir, f)).catch(() => ({ mtimeMs: 0 }))).mtimeMs }))
   );
   stats.sort((a, b) => a.t - b.t); // oldest first
-  for (const { f } of stats.slice(0, files.length - STREAM_CACHE_MAX)) {
-    await fs.unlink(path.join(STREAM_DIR, f)).catch(() => {});
+  for (const { f } of stats.slice(0, files.length - streamCacheMax)) {
+    await fs.unlink(path.join(streamDir, f)).catch(() => {});
   }
 }
+
+export const __archiveServiceTestHooks = {
+  setStreamCacheDir(dir) {
+    streamDir = dir;
+  },
+  setStreamCacheMax(max) {
+    streamCacheMax = max;
+  },
+  setStreamMp3Bitrate(bitrate) {
+    streamMp3Bitrate = bitrate;
+  },
+  setStreamFetchTimeoutMs(timeoutMs) {
+    streamFetchTimeoutMs = timeoutMs;
+  },
+  setFetchAndEncode(fn) {
+    fetchAndEncodeImpl = fn;
+  },
+  resetStreamCacheForTests() {
+    streamDir = STREAM_DIR;
+    streamCacheMax = parsePositiveInteger(
+      process.env.STREAM_CACHE_MAX_FILES ?? process.env.STREAM_CACHE_MAX,
+      DEFAULT_STREAM_CACHE_MAX
+    );
+    streamMp3Bitrate = String(process.env.STREAM_MP3_BITRATE || DEFAULT_STREAM_MP3_BITRATE).trim() || DEFAULT_STREAM_MP3_BITRATE;
+    streamFetchTimeoutMs = parsePositiveInteger(process.env.STREAM_FETCH_TIMEOUT_MS, DEFAULT_STREAM_FETCH_TIMEOUT_MS);
+    fetchAndEncodeImpl = fetchAndEncode;
+    streamInflight.clear();
+  }
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -338,8 +448,21 @@ async function prepareCredentials() {
 
 function normalizeUri(u) {
   const s = String(u || "").trim();
-  const m = s.match(/spotify:(?:\/\/)?track:([A-Za-z0-9]+)/);
+  const m = s.match(/spotify:(?:\/\/)?track:([A-Za-z0-9]+)/i);
   return m ? `spotify://track:${m[1]}` : "";
+}
+
+function parsePositiveInteger(value, fallback) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) return fallback;
+  return parsed;
+}
+
+async function assertNonEmptyFile(filePath, message) {
+  const stat = await fs.stat(filePath).catch(() => null);
+  if (!stat?.isFile() || stat.size <= 0) {
+    throw new Error(message);
+  }
 }
 
 function isAlreadyArchived(artist, title) {

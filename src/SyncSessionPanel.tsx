@@ -116,6 +116,9 @@ export function SyncSessionPanel({ nowPlaying }: { nowPlaying: Track }) {
           {engineState?.loading && (
             <div className="sync-buffering">Buffering audio… first play of a track can take a few seconds.</div>
           )}
+          {!engineState?.loading && engineState?.awaitingStart && !engineState?.playing && (
+            <div className="sync-buffering">Ready — waiting for the group to buffer so everyone starts together…</div>
+          )}
           {!engineState?.loading && engineState?.playing && (
             <div className="sync-buffering sync-live">▶ Playing in sync</div>
           )}

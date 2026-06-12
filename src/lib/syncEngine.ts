@@ -35,6 +35,7 @@ export type SyncEngineState = {
   audioUnlocked: boolean;
   loading: boolean;
   playing: boolean;
+  awaitingStart: boolean;
   error: string;
   shareToken: string;
   deviceId: string;
@@ -200,6 +201,7 @@ export class SyncEngine {
       audioUnlocked: false,
       loading: false,
       playing: false,
+      awaitingStart: false,
       error: "",
       shareToken: this.options.shareToken,
       deviceId,
@@ -332,7 +334,7 @@ export class SyncEngine {
     if (message.type === "PAUSE") {
       this.stopSource();
       this.currentSchedule = null;
-      this.patch({ playing: false, currentOffsetMs: message.trackOffsetMs || this.state.currentOffsetMs });
+      this.patch({ playing: false, awaitingStart: false, currentOffsetMs: message.trackOffsetMs || this.state.currentOffsetMs });
       return;
     }
     if (message.type === "SEEK") {
@@ -412,7 +414,7 @@ export class SyncEngine {
     this.patch({ loading: true, error: "" });
     try {
       await this.loadBuffer(message.url);
-      this.patch({ loading: false, currentUrl: message.url, currentOffsetMs: message.trackOffsetMs || 0 });
+      this.patch({ loading: false, currentUrl: message.url, currentOffsetMs: message.trackOffsetMs || 0, awaitingStart: true });
       this.send({ type: "CLIENT_READY" });
     } catch (error) {
       this.patch({ loading: false, error: error instanceof Error ? error.message : "Audio load failed" });
@@ -453,7 +455,7 @@ export class SyncEngine {
     }
     source.start(ctx.currentTime + waitSec, offsetSec);
     this.source = source;
-    this.patch({ playing: true, currentUrl: message.url, currentOffsetMs: baseOffsetMs });
+    this.patch({ playing: true, awaitingStart: false, currentUrl: message.url, currentOffsetMs: baseOffsetMs });
   }
 
   private async loadBuffer(url: string) {

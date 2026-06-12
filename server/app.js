@@ -2847,7 +2847,9 @@ function prewarmSyncStream(track) {
   const id = raw.split(":").pop(); // bare id — matches the client's /api/local-stream/<id>
   if (!id || id === lastPrewarmedSyncId) return; // already warmed/warming this track
   lastPrewarmedSyncId = id;
-  ensureStreamFile(id).catch(() => null);
+  ensureStreamFile(id).catch(() => {
+    if (lastPrewarmedSyncId === id) lastPrewarmedSyncId = "";
+  });
 }
 
 function updateStablePlayerStatus(status) {

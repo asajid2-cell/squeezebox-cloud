@@ -1,7 +1,12 @@
 import crypto from "node:crypto";
 
 export const PROBE_GAP_TOLERANCE_MS = 5;
-export const READY_TIMEOUT_MS = 3000;
+// The host must not start playback until every device has the audio buffered (the
+// buffer-to-the-slowest model). Cold Spotify->MP3 generation can take ~15-20s, so the
+// readiness gate waits up to this long for all devices to report ready before it
+// schedules play (it fires early the instant ALL devices are ready, so a warm/cached
+// group still starts in <1s — this cap only bounds the wait on a genuinely slow device).
+export const READY_TIMEOUT_MS = 30000;
 export const LATE_JOIN_MIN_REMAINING_MS = 3000;
 
 export function computeClockMeasurement({ t0, t1, t2, t3 }) {
