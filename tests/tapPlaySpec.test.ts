@@ -1,0 +1,70 @@
+import { describe, it, expect } from "vitest";
+import { buildPlaySpec, validatePlaySpec } from "../server/tapPlaySpec.js";
+
+describe("Tap PlaySpec construction", () => {
+  it("builds a single-track spec from a track selection", () => {
+    const track = { uri: "spotify:track:0123456789abcdefghijAB", title: "Song", artist: "Artist", source: "Spotify" };
+    const spec = buildPlaySpec({ intent: "track", track });
+    expect(spec).toEqual({ kind: "track", track });
+  });
+
+  it("builds album-from-top from a Spotify album URI", () => {
+    const spec = buildPlaySpec({ intent: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" });
+    expect(spec).toEqual({ kind: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" });
+  });
+
+  it("builds album-from-top from a local album_id", () => {
+    const spec = buildPlaySpec({ intent: "album-from-top", source: "local", albumId: "42" });
+    expect(spec).toEqual({ kind: "album-from-top", source: "local", albumId: "42" });
+  });
+
+  it("builds album-from-track with the in-album start index (the representative-song case)", () => {
+    const spec = buildPlaySpec({ intent: "album-from-track", source: "spotify", albumUri: "spotify:album:xyz789", startIndex: 4 });
+    expect(spec).toEqual({ kind: "album-from-track", source: "spotify", albumUri: "spotify:album:xyz789", startIndex: 4 });
+  });
+
+  it("rejects album-from-top with no album reference", () => {
+    expect(() => buildPlaySpec({ intent: "album-from-top", source: "spotify" })).toThrow(/album/i);
+  });
+
+  it("rejects album-from-track without a start index (can't silently fall back to from-top)", () => {
+    expect(() =>
+      buildPlaySpec({ intent: "album-from-track", source: "spotify", albumUri: "spotify:album:xyz789" })
+    ).toThrow(/index/i);
+  });
+
+  it("rejects a malformed Spotify album URI", () => {
+    expect(() =>
+      buildPlaySpec({ intent: "album-from-top", source: "spotify", albumUri: "not-a-spotify-album" })
+    ).toThrow(/spotify:album/i);
+  });
+
+  it("rejects a track spec with no playable reference", () => {
+    expect(() => buildPlaySpec({ intent: "track", track: { title: "x" } })).toThrow(/playable|uri|path|track/i);
+  });
+
+  it("rejects an unknown intent", () => {
+    // @ts-expect-error deliberately invalid
+    expect(() => buildPlaySpec({ intent: "teleport" })).toThrow(/intent/i);
+  });
+});
+
+describe("Tap PlaySpec validation (round-trip)", () => {
+  it("accepts every spec buildPlaySpec produces", () => {
+    const specs = [
+      buildPlaySpec({ intent: "track", track: { uri: "spotify:track:0123456789abcdefghijAB" } }),
+      buildPlaySpec({ intent: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" }),
+      buildPlaySpec({ intent: "album-from-top", source: "local", albumId: "42" }),
+      buildPlaySpec({ intent: "album-from-track", source: "local", albumId: "42", startIndex: 2 })
+    ];
+    for (const spec of specs) {
+      expect(validatePlaySpec(spec).ok).toBe(true);
+    }
+  });
+
+  it("rejects garbage that did not come from buildPlaySpec", () => {
+    expect(validatePlaySpec({ kind: "album-from-top" }).ok).toBe(false);
+    expect(validatePlaySpec({ kind: "nope" }).ok).toBe(false);
+    expect(validatePlaySpec(null).ok).toBe(false);
+  });
+});
