@@ -1,7 +1,7 @@
 import { createApp, prewarmLibraryCaches, prewarmSpotifySearchCaches } from "./app.js";
 import { LmsClient } from "./lmsClient.js";
 import { startArchiveService } from "./archiveService.js";
-import { config } from "./state.js";
+import { config, syncRuntime } from "./state.js";
 import { createSyncCoordinator, READY_TIMEOUT_MS } from "./syncCoordinator.js";
 import express from "express";
 import http from "node:http";
@@ -193,6 +193,7 @@ function addSocket(shareToken, deviceId, socket) {
   if (!socketsBySession.has(shareToken)) socketsBySession.set(shareToken, new Map());
   socketsBySession.get(shareToken).set(deviceId, socket);
   socketsByDevice.set(deviceId, socket);
+  syncRuntime.activeDevices = socketsByDevice.size;
 }
 
 function removeSocket(shareToken, deviceId) {
@@ -202,6 +203,7 @@ function removeSocket(shareToken, deviceId) {
     sockets.delete(deviceId);
     if (!sockets.size) socketsBySession.delete(shareToken);
   }
+  syncRuntime.activeDevices = socketsByDevice.size;
 }
 
 function resetReadyTimer(shareToken) {

@@ -12,6 +12,10 @@ export const config = {
   publicQueueMaxPerUser: Number(process.env.PUBLIC_QUEUE_MAX_PER_USER || 25)
 };
 
+// Browser-sync runtime: how many sync devices are currently connected. Used to
+// proactively pre-warm the now-playing stream only while a sync session is active.
+export const syncRuntime = { activeDevices: 0 };
+
 export const appState = {
   player: {
     id: "mock-player",

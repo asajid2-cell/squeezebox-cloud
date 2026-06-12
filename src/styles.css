@@ -243,6 +243,18 @@ nav button.active {
   background: #ffffff;
   border-radius: 10px;
 }
+.sync-buffering {
+  font-size: 12px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  background: rgba(255, 122, 156, 0.14);
+  color: #ff9bb3;
+  line-height: 1.3;
+}
+.sync-buffering.sync-live {
+  background: rgba(80, 220, 130, 0.14);
+  color: #7be0a0;
+}
 .sync-qr small {
   color: #0b0f17;
   font-weight: 600;

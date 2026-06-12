@@ -831,7 +831,7 @@ function Progress({
           }}
         />
       </div>
-      <div>
+      <div className="progress-times">
         <span>{formatTime(value)}</span>
         <span>{duration > 0 ? formatTime(duration) : "--:--"}</span>
       </div>

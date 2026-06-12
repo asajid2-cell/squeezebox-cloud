@@ -113,6 +113,12 @@ export function SyncSessionPanel({ nowPlaying }: { nowPlaying: Track }) {
             <span>{engineState?.role}</span>
             <span>{Math.round(engineState?.rttMs || 0)}ms RTT</span>
           </div>
+          {engineState?.loading && (
+            <div className="sync-buffering">Buffering audio… first play of a track can take a few seconds.</div>
+          )}
+          {!engineState?.loading && engineState?.playing && (
+            <div className="sync-buffering sync-live">▶ Playing in sync</div>
+          )}
           {isHost ? (
             <div className="sync-transport">
               <button type="button" disabled={!streamUrl || !engineState?.audioUnlocked} onClick={playCurrent}><Play size={15} /> Current</button>

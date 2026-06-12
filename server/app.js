@@ -22,7 +22,8 @@ import {
   updateTrackInfo,
   updateSpotifyStatus,
   updateMusicInfoStatus,
-  updatePlayback
+  updatePlayback,
+  syncRuntime
 } from "./state.js";
 import { clearLibraryCaches, getCollections, getCollectionTracks, saveUploadedTrack, scanLibrary, searchLibrary } from "./library.js";
 import { enrichTrackArtwork, enrichTrackInfo } from "./trackInfo.js";
@@ -2708,6 +2709,9 @@ async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force =
           (key !== refreshState.trackKey || Date.now() - refreshState.trackInfoAt > trackInfoRefreshMs);
         const observedTrackChanged = rememberObservedTrackTransition(track);
         updateNowPlaying(preserveKnownNowPlayingMetadata(track));
+        // While a browser-sync session is active, pre-generate the now-playing stream so
+        // "play in the sync group" starts in ~2s instead of ~16s (cold spotty+ffmpeg).
+        if (syncRuntime.activeDevices > 0) prewarmSyncStream(track);
         if (shouldRefreshTrackInfo) {
           refreshTrackInfoInBackground(track, key);
         }
@@ -2834,6 +2838,16 @@ function shuffleArray(items) {
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
   return arr;
+}
+
+let lastPrewarmedSyncId = "";
+function prewarmSyncStream(track) {
+  const raw = String(track?.uri || track?.id || "");
+  if (!raw.toLowerCase().includes("spotify")) return; // only Spotify needs generating
+  const id = raw.split(":").pop(); // bare id — matches the client's /api/local-stream/<id>
+  if (!id || id === lastPrewarmedSyncId) return; // already warmed/warming this track
+  lastPrewarmedSyncId = id;
+  ensureStreamFile(id).catch(() => null);
 }
 
 function updateStablePlayerStatus(status) {
