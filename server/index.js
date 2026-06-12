@@ -55,6 +55,11 @@ wss.on("connection", (socket) => {
 
 if (process.env.NODE_ENV === "production") {
   app.use(express.static(distDir));
+  // Squeezebox Tap is its own entry — serve tap.html for /tap/* paths
+  // (/tap/t/:id public tapper, /tap/link admin console).
+  app.get(/^\/tap(\/.*)?$/, (_req, res) => {
+    res.sendFile(path.join(distDir, "tap.html"));
+  });
   app.get(/.*/, (_req, res) => {
     res.sendFile(path.join(distDir, "index.html"));
   });
