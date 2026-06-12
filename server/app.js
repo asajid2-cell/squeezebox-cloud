@@ -31,6 +31,8 @@ import { defaultPlaylistStore, PlaylistError } from "./playlists.js";
 import { defaultCurationStore, CurationError } from "./curation.js";
 import { defaultListenerTasteStore } from "./listenerTaste.js";
 import { rankRecommendationCandidates, recommendationSeedArtists } from "./recommender.js";
+import { defaultTapStore } from "./tapStore.js";
+import { buildPlaySpec } from "./tapPlaySpec.js";
 
 const requiredText = z.string().trim().min(1);
 const optionalText = z.preprocess(
@@ -379,7 +381,7 @@ const idleNowPlaying = {
   art: null
 };
 
-export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistStore, curation = defaultCurationStore, taste = defaultListenerTasteStore } = {}) {
+export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistStore, curation = defaultCurationStore, taste = defaultListenerTasteStore, tapStore = defaultTapStore } = {}) {
   const app = express();
   const adminAuth = getAdminAuthConfig();
   appState.curation = curation.getState();
@@ -1825,6 +1827,69 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     } catch (error) {
       res.status(500).json({ error: error.message, files: [] });
     }
+  });
+
+  // --- Squeezebox Tap: admin binding API (gated) ---
+  function tapUrlFor(req, tagId, token) {
+    const proto = String(req.get("x-forwarded-proto") || req.protocol || "https").split(",")[0].trim();
+    const host = req.get("x-forwarded-host") || req.get("host") || "";
+    const base = process.env.TAP_BASE_URL || (host ? `${proto}://${host}` : "");
+    return `${base}/tap/t/${tagId}#k=${token}`;
+  }
+
+  app.post("/api/tap", requireAdmin, (req, res) => {
+    try {
+      const body = req.body || {};
+      const playSpec = buildPlaySpec(body);
+      const tag = tapStore.create({ playSpec, display: body.display || {}, label: body.label || "" });
+      const token = tapStore.tokenFor(tag.tagId);
+      logEvent("tap.bind", { tagId: tag.tagId, kind: playSpec.kind, source: playSpec.source });
+      res.json({ tag, token, tapUrl: tapUrlFor(req, tag.tagId, token), tapPath: `/tap/t/${tag.tagId}` });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/tap", requireAdmin, (_req, res) => {
+    const tags = tapStore.list().map((tag) => ({ ...tag, token: tapStore.tokenFor(tag.tagId) }));
+    res.json({ tags });
+  });
+
+  app.get("/api/tap/:id", requireAdmin, (req, res) => {
+    const tag = tapStore.get(req.params.id);
+    if (!tag) {
+      res.status(404).json({ error: "Tag not found" });
+      return;
+    }
+    res.json({ tag, token: tapStore.tokenFor(tag.tagId), tapPath: `/tap/t/${tag.tagId}` });
+  });
+
+  app.put("/api/tap/:id", requireAdmin, (req, res) => {
+    if (!tapStore.get(req.params.id)) {
+      res.status(404).json({ error: "Tag not found" });
+      return;
+    }
+    try {
+      const body = req.body || {};
+      const patch = {};
+      if (body.intent !== undefined) patch.playSpec = buildPlaySpec(body);
+      if (body.display !== undefined) patch.display = body.display;
+      if (body.label !== undefined) patch.label = body.label;
+      if (body.enabled !== undefined) patch.enabled = body.enabled;
+      const tag = tapStore.update(req.params.id, patch);
+      logEvent("tap.repoint", { tagId: tag.tagId, kind: tag.playSpec?.kind });
+      res.json({ tag, token: tapStore.tokenFor(tag.tagId) });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.delete("/api/tap/:id", requireAdmin, (req, res) => {
+    if (!tapStore.remove(req.params.id)) {
+      res.status(404).json({ error: "Tag not found" });
+      return;
+    }
+    res.json({ ok: true });
   });
 
   app.use("/api", (_req, res) => {

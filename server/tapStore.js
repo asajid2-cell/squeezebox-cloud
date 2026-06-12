@@ -123,3 +123,7 @@ export function createTapStore({ file = defaultFile() } = {}) {
     }
   };
 }
+
+// Default process-wide store (persists to config.musicSourceDir/cloud-squeeze/tapTags.json,
+// overridable via CLOUD_SQUEEZE_TAP_TAGS_FILE). Tests inject their own store.
+export const defaultTapStore = createTapStore();

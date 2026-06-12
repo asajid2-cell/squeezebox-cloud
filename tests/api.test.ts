@@ -8,6 +8,9 @@ import { clearLibraryCaches } from "../server/library.js";
 import { addQueueItem, appState, config, removeQueueItem, updateNowPlaying, updatePlayback, updateSpotifyStatus } from "../server/state.js";
 import { createPlaylistStore } from "../server/playlists.js";
 import { createCurationStore } from "../server/curation.js";
+import { createTapStore } from "../server/tapStore.js";
+import { verifyTag } from "../server/tapToken.js";
+import crypto from "node:crypto";
 
 const tinyMp3 = Buffer.from(
   "SUQzBAAAAAAAIlRTU0UAAAAOAAADTGF2ZjYyLjMuMTAwAAAAAAAAAAAAAAD/+0DAAAAAAAAAAAAAAAAAAAAAAABJbmZvAAAADwAAAAUAAAK+AGhoaGhoaGhoaGhoaGhoaGhoaGiOjo6Ojo6Ojo6Ojo6Ojo6Ojo6OjrS0tLS0tLS0tLS0tLS0tLS0tLS02tra2tra2tra2tra2tra2tra2tr//////////////////////////wAAAABMYXZjNjIuMTEAAAAAAAAAAAAAAAAkAwYAAAAAAAACvhC6F/0AAAAAAP/7EMQAA8AAAaQAAAAgAAA0gAAABExBTUUzLjEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//sQxCmDwAABpAAAACAAADSAAAAEVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVX/+xDEUwPAAAGkAAAAIAAANIAAAARVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVf/7EMR8g8AAAaQAAAAgAAA0gAAABFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//sQxKYDwAABpAAAACAAADSAAAAEVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU=",
@@ -6530,5 +6533,104 @@ describe("Cloud Squeeze API", () => {
     } finally {
       appState.admin = previousAdmin;
     }
+  });
+});
+
+describe("Tap admin binding API", () => {
+  function tapApp() {
+    const file = path.join(os.tmpdir(), `tap-api-${crypto.randomBytes(6).toString("hex")}.json`);
+    const tapStore = createTapStore({ file });
+    return { app: createApp({ lms: mockLms, tapStore }), file };
+  }
+
+  async function adminAuth(app: ReturnType<typeof createApp>) {
+    const login = await request(app).post("/api/admin/login").send({ password: "admin" }).expect(200);
+    return `Bearer ${login.body.token}`;
+  }
+
+  const albumTopBody = {
+    intent: "album-from-top",
+    source: "spotify",
+    albumUri: "spotify:album:xyz789",
+    display: { title: "Punisher", artist: "Phoebe Bridgers", kind: "album" },
+    label: "Punisher sleeve"
+  };
+
+  it("requires admin auth to create a binding", async () => {
+    const { app } = tapApp();
+    await request(app).post("/api/tap").send(albumTopBody).expect(401);
+  });
+
+  it("creates a binding and returns a tap URL with the signed token in the fragment", async () => {
+    const { app } = tapApp();
+    const auth = await adminAuth(app);
+    const res = await request(app).post("/api/tap").set("Authorization", auth).send(albumTopBody).expect(200);
+
+    expect(res.body.tag.tagId).toMatch(/^[A-Za-z0-9_-]{6,}$/);
+    expect(res.body.tag.playSpec).toEqual({ kind: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" });
+    expect(res.body.tag.display).toEqual(albumTopBody.display);
+    // Token rides in the URL FRAGMENT (#k=) so it never hits server/nginx logs on GET.
+    expect(res.body.tapUrl).toMatch(new RegExp(`/tap/t/${res.body.tag.tagId}#k=`));
+    expect(verifyTag(res.body.tag.tagId, res.body.token)).toBe(true);
+  });
+
+  it("rejects an invalid PlaySpec with 400", async () => {
+    const { app } = tapApp();
+    const auth = await adminAuth(app);
+    await request(app)
+      .post("/api/tap")
+      .set("Authorization", auth)
+      .send({ intent: "album-from-top", source: "spotify" }) // no albumUri
+      .expect(400);
+  });
+
+  it("builds album-from-track with the in-album start index", async () => {
+    const { app } = tapApp();
+    const auth = await adminAuth(app);
+    const res = await request(app)
+      .post("/api/tap")
+      .set("Authorization", auth)
+      .send({ intent: "album-from-track", source: "spotify", albumUri: "spotify:album:xyz789", startIndex: 4, display: { title: "Kyoto" } })
+      .expect(200);
+    expect(res.body.tag.playSpec).toEqual({ kind: "album-from-track", source: "spotify", albumUri: "spotify:album:xyz789", startIndex: 4 });
+  });
+
+  it("lists, fetches, re-points (without changing id) and disables a tag", async () => {
+    const { app } = tapApp();
+    const auth = await adminAuth(app);
+    const created = (await request(app).post("/api/tap").set("Authorization", auth).send(albumTopBody).expect(200)).body.tag;
+
+    const list = await request(app).get("/api/tap").set("Authorization", auth).expect(200);
+    expect(list.body.tags.some((t: { tagId: string }) => t.tagId === created.tagId)).toBe(true);
+
+    const one = await request(app).get(`/api/tap/${created.tagId}`).set("Authorization", auth).expect(200);
+    expect(one.body.tag.tagId).toBe(created.tagId);
+
+    // Re-point to a single track — same id, new playSpec.
+    const repointed = await request(app)
+      .put(`/api/tap/${created.tagId}`)
+      .set("Authorization", auth)
+      .send({ intent: "track", track: { uri: "spotify:track:0123456789abcdefghijAB" }, display: { title: "Kyoto", kind: "track" } })
+      .expect(200);
+    expect(repointed.body.tag.tagId).toBe(created.tagId);
+    expect(repointed.body.tag.playSpec).toEqual({ kind: "track", track: { uri: "spotify:track:0123456789abcdefghijAB" } });
+
+    // Disable without deleting.
+    const disabled = await request(app).put(`/api/tap/${created.tagId}`).set("Authorization", auth).send({ enabled: false }).expect(200);
+    expect(disabled.body.tag.enabled).toBe(false);
+  });
+
+  it("deletes a tag", async () => {
+    const { app } = tapApp();
+    const auth = await adminAuth(app);
+    const created = (await request(app).post("/api/tap").set("Authorization", auth).send(albumTopBody).expect(200)).body.tag;
+    await request(app).delete(`/api/tap/${created.tagId}`).set("Authorization", auth).expect(200);
+    await request(app).get(`/api/tap/${created.tagId}`).set("Authorization", auth).expect(404);
+  });
+
+  it("returns 404 fetching an unknown tag", async () => {
+    const { app } = tapApp();
+    const auth = await adminAuth(app);
+    await request(app).get("/api/tap/does-not-exist").set("Authorization", auth).expect(404);
   });
 });
