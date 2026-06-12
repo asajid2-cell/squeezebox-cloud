@@ -30,6 +30,7 @@ export function SyncSessionPanel({ nowPlaying }: { nowPlaying: Track }) {
     if (!engine) return;
     const unsubscribe = engine.subscribe(setEngineState);
     engine.connect();
+    (window as unknown as { __cloudSqueezeSync?: unknown }).__cloudSqueezeSync = engine;
     return () => {
       unsubscribe();
       engine.disconnect();
@@ -70,7 +71,17 @@ export function SyncSessionPanel({ nowPlaying }: { nowPlaying: Track }) {
   }
 
   return (
-    <section className="sync-panel" aria-label="Sync session">
+    <section
+      className="sync-panel"
+      aria-label="Sync session"
+      data-sync-role={engineState?.role || ""}
+      data-sync-connected={String(Boolean(engineState?.connected))}
+      data-sync-joined={String(joined)}
+      data-sync-unlocked={String(Boolean(engineState?.audioUnlocked))}
+      data-sync-playing={String(Boolean(engineState?.playing))}
+      data-sync-devices={String(engineState?.session?.devices?.length || 0)}
+      data-sync-error={engineState?.error || ""}
+    >
       <div className="sync-title">
         <Radio size={16} />
         <strong>Browser sync</strong>

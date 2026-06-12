@@ -562,9 +562,14 @@ function defaultDeviceLabel() {
 
 function getOrCreateDeviceId() {
   const key = "cloud-squeeze-sync-device-id";
-  const existing = window.localStorage.getItem(key);
+  // Per-TAB id via sessionStorage (NOT localStorage): localStorage is shared across
+  // every tab of the same browser, so two tabs would get the same device id — the
+  // server then maps that id to a single socket and the 2nd tab's JOIN overwrites the
+  // 1st, so broadcasts only reach one tab ("plays on the box, never on the worker").
+  // sessionStorage is per-tab and survives reloads of that tab.
+  const existing = window.sessionStorage.getItem(key);
   if (existing) return existing;
   const id = crypto.randomUUID();
-  window.localStorage.setItem(key, id);
+  window.sessionStorage.setItem(key, id);
   return id;
 }
