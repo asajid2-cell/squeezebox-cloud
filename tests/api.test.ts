@@ -6634,3 +6634,110 @@ describe("Tap admin binding API", () => {
     await request(app).get("/api/tap/does-not-exist").set("Authorization", auth).expect(404);
   });
 });
+
+describe("Tap resolver golden cases", () => {
+  function recordingLms(overrides: Record<string, unknown> = {}) {
+    const calls: { m: string; args: unknown[] }[] = [];
+    return {
+      calls,
+      ...mockLms,
+      async loadAlbum(...args: unknown[]) { calls.push({ m: "loadAlbum", args }); return "ok"; },
+      async playTrack(...args: unknown[]) { calls.push({ m: "playTrack", args }); return "ok"; },
+      ...overrides
+    };
+  }
+
+  function setup(lms: ReturnType<typeof recordingLms>) {
+    const file = path.join(os.tmpdir(), `tap-play-${crypto.randomBytes(6).toString("hex")}.json`);
+    const tapStore = createTapStore({ file });
+    const app = createApp({ lms, tapStore });
+    return { app, tapStore };
+  }
+
+  const unknownSpotifyTrack = { uri: "spotify:track:0123456789abcdefghijAB", title: "Kyoto", artist: "Phoebe Bridgers", source: "Spotify" };
+
+  it("plays album-from-top on a valid token", async () => {
+    const lms = recordingLms();
+    const { app, tapStore } = setup(lms);
+    const tag = tapStore.create({ playSpec: { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" }, display: {} });
+    const token = tapStore.tokenFor(tag.tagId);
+
+    const res = await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token }).expect(200);
+    expect(res.body.ok).toBe(true);
+    expect(lms.calls.filter((c) => c.m === "loadAlbum")).toHaveLength(1);
+    expect(lms.calls[0].args[1]).toMatchObject({ source: "spotify", albumUri: "spotify:album:xyz789" });
+    expect(tapStore.get(tag.tagId)?.tapCount).toBe(1);
+  });
+
+  it("plays a bound UNKNOWN Spotify track (trusted) where a guest request is rejected", async () => {
+    const lms = recordingLms();
+    const { app, tapStore } = setup(lms);
+    const tag = tapStore.create({ playSpec: { kind: "track", track: unknownSpotifyTrack }, display: {} });
+    const token = tapStore.tokenFor(tag.tagId);
+
+    // Tap: plays it (trusted replay, no known-gate).
+    await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token }).expect(200);
+    expect(lms.calls.filter((c) => c.m === "playTrack")).toHaveLength(1);
+
+    // Guest path: the SAME unknown Spotify track is rejected by spotifyTracksAreKnown.
+    // Ensure public requests are open so the rejection is the KNOWN-gate (400), not a
+    // closed-requests 403 left over from another test's shared appState.
+    appState.admin = { ...appState.admin, publicRequests: true };
+    await request(app).post("/api/player/track").send({ action: "play-now", track: unknownSpotifyTrack }).expect(400);
+  });
+
+  it("rejects an invalid token without playing", async () => {
+    const lms = recordingLms();
+    const { app, tapStore } = setup(lms);
+    const tag = tapStore.create({ playSpec: { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" }, display: {} });
+
+    const res = await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token: "wrong" }).expect(401);
+    expect(res.body.reason).toBe("bad-token");
+    expect(lms.calls).toHaveLength(0);
+  });
+
+  it("returns a clean 'unbound' payload for an unknown tag", async () => {
+    const lms = recordingLms();
+    const { app } = setup(lms);
+    const res = await request(app).post("/api/tap/nope/play").send({ token: "x" }).expect(404);
+    expect(res.body.reason).toBe("unbound");
+    expect(lms.calls).toHaveLength(0);
+  });
+
+  it("returns a clean 'disabled' payload for a disabled tag", async () => {
+    const lms = recordingLms();
+    const { app, tapStore } = setup(lms);
+    const tag = tapStore.create({ playSpec: { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" }, display: {} });
+    tapStore.update(tag.tagId, { enabled: false });
+    const token = tapStore.tokenFor(tag.tagId);
+
+    const res = await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token }).expect(409);
+    expect(res.body.reason).toBe("disabled");
+    expect(lms.calls).toHaveLength(0);
+  });
+
+  it("returns a clean 'speaker_offline' payload (not a 500) when no player is connected", async () => {
+    const lms = recordingLms({ status: async () => ({ connected: false, online: true, detail: "no player" }) });
+    const { app, tapStore } = setup(lms);
+    const tag = tapStore.create({ playSpec: { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" }, display: {} });
+    const token = tapStore.tokenFor(tag.tagId);
+    // Force the player state stale so hotPlayerId re-checks via our offline mock.
+    appState.player = { ...appState.player, connected: false, id: "" };
+
+    const res = await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token }).expect(503);
+    expect(res.body.reason).toBe("speaker_offline");
+  });
+
+  it("debounces a rapid double-tap instead of restarting the album", async () => {
+    const lms = recordingLms();
+    const { app, tapStore } = setup(lms);
+    const tag = tapStore.create({ playSpec: { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" }, display: {} });
+    const token = tapStore.tokenFor(tag.tagId);
+
+    await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token }).expect(200);
+    const second = await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token }).expect(200);
+    expect(second.body.debounced).toBe(true);
+    // The album was loaded only ONCE — the second tap did not restart it.
+    expect(lms.calls.filter((c) => c.m === "loadAlbum")).toHaveLength(1);
+  });
+});

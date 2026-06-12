@@ -33,6 +33,12 @@ import { defaultListenerTasteStore } from "./listenerTaste.js";
 import { rankRecommendationCandidates, recommendationSeedArtists } from "./recommender.js";
 import { defaultTapStore } from "./tapStore.js";
 import { buildPlaySpec } from "./tapPlaySpec.js";
+import { playTapTarget } from "./tapPlayback.js";
+
+// Squeezebox Tap — per-tag debounce so a rapid double-tap doesn't restart the
+// album from 0:00 (NFC fires readily; people tap twice).
+const tapPlayState = new Map();
+const TAP_DEBOUNCE_MS = Number(process.env.TAP_DEBOUNCE_MS || 3000);
 
 const requiredText = z.string().trim().min(1);
 const optionalText = z.preprocess(
@@ -1890,6 +1896,65 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       return;
     }
     res.json({ ok: true });
+  });
+
+  // --- Squeezebox Tap: public resolver (open jukebox + signed-token handshake) ---
+  function publicTapTag(tag) {
+    return { tagId: tag.tagId, display: tag.display, tapCount: tag.tapCount, kind: tag.playSpec?.kind };
+  }
+
+  app.post("/api/tap/:id/play", async (req, res) => {
+    const tagId = req.params.id;
+    const token = (req.body && req.body.token) || req.get("x-tap-token") || "";
+    const tag = tapStore.get(tagId);
+
+    if (!tag) {
+      logEvent("tap.play.fail", { tagId, reason: "unbound" });
+      res.status(404).json({ ok: false, reason: "unbound", message: "This tag isn't set up yet." });
+      return;
+    }
+    if (!tapStore.verify(tagId, token)) {
+      logEvent("tap.play.fail", { tagId, reason: "bad_token" });
+      res.status(401).json({ ok: false, reason: "bad-token", message: "This tap couldn't be verified." });
+      return;
+    }
+    if (!tag.enabled) {
+      res.status(409).json({ ok: false, reason: "disabled", message: "This tag is turned off." });
+      return;
+    }
+    // Optional global password (off by default) — the one guard that also stops a
+    // forwarded full URL from playing remotely. Enable via TAP_PASSWORD.
+    if (process.env.TAP_PASSWORD && req.get("x-tap-password") !== process.env.TAP_PASSWORD) {
+      res.status(401).json({ ok: false, reason: "password", message: "A password is required to play this." });
+      return;
+    }
+
+    const prior = tapPlayState.get(tagId);
+    if (prior && Date.now() - prior.lastPlayedAt < TAP_DEBOUNCE_MS) {
+      logEvent("tap.play.debounced", { tagId });
+      res.json({ ok: true, debounced: true, tag: publicTapTag(tag), nowPlaying: appState.nowPlaying });
+      return;
+    }
+
+    let playerId;
+    try {
+      playerId = await hotPlayerId(lms);
+    } catch {
+      logEvent("tap.play.fail", { tagId, reason: "speaker_offline" });
+      res.status(503).json({ ok: false, reason: "speaker_offline", message: "The speaker's offline right now." });
+      return;
+    }
+
+    try {
+      await playTapTarget(lms, playerId, tag.playSpec);
+      tapPlayState.set(tagId, { lastPlayedAt: Date.now() });
+      const updated = tapStore.recordTap(tagId);
+      logEvent("tap.play.ok", { tagId, kind: tag.playSpec?.kind });
+      res.json({ ok: true, played: true, tag: publicTapTag(updated), nowPlaying: appState.nowPlaying });
+    } catch (error) {
+      logEvent("tap.play.fail", { tagId, reason: "lms_error", error: error?.message });
+      res.status(502).json({ ok: false, reason: "lms_error", message: "Couldn't start playback.", detail: error?.message });
+    }
   });
 
   app.use("/api", (_req, res) => {

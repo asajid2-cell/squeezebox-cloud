@@ -55,7 +55,7 @@ describe("Tap store", () => {
   });
 
   it("generates unique ids across many creates", () => {
-    const store = createTapStore({ file });
+    const store = createTapStore({ file, persist: false }); // in-memory: this checks id uniqueness, not disk
     const ids = new Set(Array.from({ length: 50 }, () => store.create({ playSpec: spec(), display }).tagId));
     expect(ids.size).toBe(50);
   });

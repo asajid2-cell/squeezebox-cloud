@@ -20,9 +20,9 @@ function newTagId() {
   return crypto.randomBytes(8).toString("base64url"); // ~11 url-safe chars, opaque + unguessable
 }
 
-export function createTapStore({ file = defaultFile() } = {}) {
+export function createTapStore({ file = defaultFile(), persist: persistEnabled = true } = {}) {
   const tags = new Map();
-  let persistDisabled = false;
+  let persistDisabled = !persistEnabled;
 
   function load() {
     try {
