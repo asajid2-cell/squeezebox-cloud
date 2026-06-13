@@ -112,6 +112,18 @@ export async function getAnalytics(token: string): Promise<TapAnalytics> {
   return (await asJson(res)) as TapAnalytics;
 }
 
+export type TapSettings = { debounceMs: number; partyMode: "open" | "closed"; requirePassword: boolean; hasPassword: boolean };
+
+export async function getSettings(token: string): Promise<TapSettings> {
+  const res = await fetch("/api/tap/settings", { headers: authHeaders(token) });
+  return (await asJson(res)) as TapSettings;
+}
+
+export async function saveSettings(token: string, patch: Record<string, unknown>): Promise<TapSettings> {
+  const res = await fetch("/api/tap/settings", { method: "POST", headers: authHeaders(token), body: JSON.stringify(patch) });
+  return (await asJson(res)) as TapSettings;
+}
+
 export async function createTag(token: string, payload: Record<string, unknown>) {
   const res = await fetch("/api/tap", { method: "POST", headers: authHeaders(token), body: JSON.stringify(payload) });
   return { status: res.status, body: await asJson(res) };

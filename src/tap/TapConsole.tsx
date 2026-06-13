@@ -10,9 +10,12 @@ import {
   spotifySearch,
   albumTracks,
   getAnalytics,
+  getSettings,
+  saveSettings,
   type TapTag,
   type SearchItem,
-  type TapAnalytics
+  type TapAnalytics,
+  type TapSettings
 } from "./api";
 import { writeTapTag, isNfcWriteSupported } from "./nfc";
 
@@ -490,16 +493,82 @@ function PrintLabelsView({ token }: { token: string }) {
   );
 }
 
+// ---------- settings ----------
+function SettingsView({ token }: { token: string }) {
+  const [s, setS] = useState<TapSettings | null>(null);
+  const [pwd, setPwd] = useState("");
+  const [saved, setSaved] = useState(false);
+  useEffect(() => { getSettings(token).then(setS, () => setS({ debounceMs: 3000, partyMode: "open", requirePassword: false, hasPassword: false })); }, [token]);
+
+  const save = async (patch: Record<string, unknown>) => {
+    setSaved(false);
+    const next = await saveSettings(token, patch);
+    setS(next);
+    setSaved(true);
+    if (typeof patch.password === "string") setPwd("");
+  };
+
+  if (!s) return <section className="tap-main" aria-label="Settings"><div className="tap-card__meta"><span className="tap-spinner" aria-hidden="true" /> Loading…</div></section>;
+
+  return (
+    <section className="tap-main" aria-label="Settings">
+      <header className="tap-head">
+        <span className="tap-head__eyebrow">Settings</span>
+        <h1 className="tap-head__title">How taps behave</h1>
+        <p className="tap-head__sub">Pause the whole jukebox, tune the double-tap window, or require a password to play.</p>
+      </header>
+
+      <div className="tap-card" style={{ maxWidth: "40rem" }}>
+        <div className="tap-setting">
+          <div className="tap-setting__text"><strong>Jukebox</strong><span>When closed, taps are politely turned away.</span></div>
+          <div className="tap-toggle" role="group" aria-label="Party mode">
+            <button type="button" aria-pressed={s.partyMode === "open"} onClick={() => save({ partyMode: "open" })}>Open</button>
+            <button type="button" aria-pressed={s.partyMode === "closed"} onClick={() => save({ partyMode: "closed" })}>Closed</button>
+          </div>
+        </div>
+
+        <div className="tap-setting">
+          <div className="tap-setting__text"><strong>Double-tap window</strong><span>Ignore a repeat tap of the same tag within this time.</span></div>
+          <label className="tap-vol">
+            <select aria-label="Double-tap window" value={s.debounceMs} onChange={(e) => save({ debounceMs: Number(e.target.value) })}>
+              {[0, 1000, 2000, 3000, 5000, 10000].map((ms) => <option key={ms} value={ms}>{ms === 0 ? "Off" : `${ms / 1000}s`}</option>)}
+            </select>
+          </label>
+        </div>
+
+        <div className="tap-setting">
+          <div className="tap-setting__text"><strong>Require a password</strong><span>{s.hasPassword ? "A password is set." : "Taps play without a password."}</span></div>
+          <div className="tap-toggle" role="group" aria-label="Require password">
+            <button type="button" aria-pressed={!s.requirePassword} onClick={() => save({ requirePassword: false })}>Off</button>
+            <button type="button" aria-pressed={s.requirePassword} onClick={() => save({ requirePassword: true })}>On</button>
+          </div>
+        </div>
+
+        {s.requirePassword ? (
+          <div className="tap-setting">
+            <div className="tap-field" style={{ flex: 1 }}>
+              <input type="password" value={pwd} onChange={(e) => setPwd(e.target.value)} placeholder={s.hasPassword ? "Change password…" : "Set a password…"} aria-label="Tap password" />
+            </div>
+            <button className="tap-btn tap-btn--primary" disabled={!pwd} onClick={() => save({ password: pwd })}>Save password</button>
+          </div>
+        ) : null}
+
+        {saved ? <div className="tap-alert tap-alert--ok" role="status">Saved.</div> : null}
+      </div>
+    </section>
+  );
+}
+
 // ---------- shell ----------
 export function TapConsole() {
   const [token, setToken] = useState<string | null>(() => (typeof localStorage !== "undefined" ? localStorage.getItem(TOKEN_KEY) : null));
-  const [view, setView] = useState<"tags" | "write" | "analytics" | "print">("tags");
+  const [view, setView] = useState<"tags" | "write" | "analytics" | "print" | "settings">("tags");
   const [refreshKey, setRefreshKey] = useState(0);
 
   if (!token) return <LoginGate onAuthed={setToken} />;
 
   const signOut = () => { localStorage.removeItem(TOKEN_KEY); setToken(null); };
-  const navItem = (key: "tags" | "write" | "analytics" | "print", label: string) => (
+  const navItem = (key: "tags" | "write" | "analytics" | "print" | "settings", label: string) => (
     <a className="tap-nav__item" href={`#${key}`} aria-current={view === key ? "page" : undefined} onClick={(e) => { e.preventDefault(); setView(key); }}>{label}</a>
   );
 
@@ -511,12 +580,14 @@ export function TapConsole() {
         {navItem("write", "Write a tag")}
         {navItem("analytics", "Analytics")}
         {navItem("print", "Print labels")}
+        {navItem("settings", "Settings")}
         <a className="tap-nav__item" aria-disabled="true" href="#stations">Reader stations<span className="tap-nav__soon">soon</span></a>
         <button className="tap-btn tap-btn--ghost" style={{ marginTop: "auto" }} onClick={signOut}>Sign out</button>
       </nav>
       {view === "tags" ? <TagsView token={token} refreshKey={refreshKey} />
         : view === "analytics" ? <AnalyticsView token={token} />
         : view === "print" ? <PrintLabelsView token={token} />
+        : view === "settings" ? <SettingsView token={token} />
         : <WriteView token={token} onCreated={() => setRefreshKey((k) => k + 1)} />}
     </div>
   );

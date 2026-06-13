@@ -11,7 +11,9 @@ vi.mock("../src/tap/api", () => ({
   searchLibrary: vi.fn(),
   spotifySearch: vi.fn(),
   albumTracks: vi.fn(),
-  getAnalytics: vi.fn()
+  getAnalytics: vi.fn(),
+  getSettings: vi.fn(),
+  saveSettings: vi.fn()
 }));
 vi.mock("../src/tap/nfc", () => ({
   writeTapTag: vi.fn(async () => ({ ok: true })),
@@ -160,6 +162,17 @@ describe("Tap console — bind & write", () => {
     await waitFor(() => expect(screen.getByText("Punisher")).toBeInTheDocument());
     expect(screen.getByText("Kyoto")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /print sheet/i })).toBeEnabled();
+  });
+
+  it("loads settings and closes the jukebox (party mode)", async () => {
+    mocked.getSettings.mockResolvedValue({ debounceMs: 3000, partyMode: "open", requirePassword: false, hasPassword: false });
+    mocked.saveSettings.mockResolvedValue({ debounceMs: 3000, partyMode: "closed", requirePassword: false, hasPassword: false });
+    render(<TapConsole />);
+    await userEvent.click(screen.getByRole("link", { name: /settings/i }));
+    await waitFor(() => expect(screen.getByText(/How taps behave/i)).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole("button", { name: "Closed" }));
+    expect(mocked.saveSettings).toHaveBeenCalledWith("tok", { partyMode: "closed" });
   });
 
   it("shows the empty 'no matches' state", async () => {
