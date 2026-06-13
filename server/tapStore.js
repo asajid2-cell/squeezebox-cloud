@@ -20,6 +20,17 @@ function newTagId() {
   return crypto.randomBytes(8).toString("base64url"); // ~11 url-safe chars, opaque + unguessable
 }
 
+// Per-tag behavior: how it plays (separate from what plays). Clamped + defaulted.
+function normalizePolicy(policy = {}) {
+  const playMode = policy?.playMode === "queue" ? "queue" : "replace";
+  let volume = null;
+  if (policy?.volume !== null && policy?.volume !== undefined && policy?.volume !== "") {
+    const v = Math.round(Number(policy.volume));
+    if (Number.isFinite(v)) volume = Math.max(0, Math.min(100, v));
+  }
+  return { playMode, volume };
+}
+
 export function createTapStore({ file = defaultFile(), persist: persistEnabled = true } = {}) {
   const tags = new Map();
   let persistDisabled = !persistEnabled;
@@ -56,7 +67,7 @@ export function createTapStore({ file = defaultFile(), persist: persistEnabled =
   load();
 
   return {
-    create({ playSpec, display = {}, label = "" }) {
+    create({ playSpec, display = {}, label = "", policy }) {
       const validated = validatePlaySpec(playSpec);
       if (!validated.ok) throw new Error("Invalid PlaySpec for tag");
       let tagId = newTagId();
@@ -67,6 +78,7 @@ export function createTapStore({ file = defaultFile(), persist: persistEnabled =
         playSpec,
         display,
         label,
+        policy: normalizePolicy(policy),
         createdAt: new Date().toISOString(),
         tapCount: 0,
         lastTappedAt: null
@@ -95,6 +107,7 @@ export function createTapStore({ file = defaultFile(), persist: persistEnabled =
       if (patch.display !== undefined) tag.display = patch.display;
       if (patch.label !== undefined) tag.label = patch.label;
       if (patch.enabled !== undefined) tag.enabled = Boolean(patch.enabled);
+      if (patch.policy !== undefined) tag.policy = normalizePolicy(patch.policy);
       persist();
       return clone(tag);
     },

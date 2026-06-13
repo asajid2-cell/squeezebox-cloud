@@ -1847,7 +1847,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     try {
       const body = req.body || {};
       const playSpec = buildPlaySpec(body);
-      const tag = tapStore.create({ playSpec, display: body.display || {}, label: body.label || "" });
+      const tag = tapStore.create({ playSpec, display: body.display || {}, label: body.label || "", policy: body.policy });
       const token = tapStore.tokenFor(tag.tagId);
       logEvent("tap.bind", { tagId: tag.tagId, kind: playSpec.kind, source: playSpec.source });
       res.json({ tag, token, tapUrl: tapUrlFor(req, tag.tagId, token), tapPath: `/tap/t/${tag.tagId}` });
@@ -1882,6 +1882,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       if (body.display !== undefined) patch.display = body.display;
       if (body.label !== undefined) patch.label = body.label;
       if (body.enabled !== undefined) patch.enabled = body.enabled;
+      if (body.policy !== undefined) patch.policy = body.policy;
       const tag = tapStore.update(req.params.id, patch);
       logEvent("tap.repoint", { tagId: tag.tagId, kind: tag.playSpec?.kind });
       res.json({ tag, token: tapStore.tokenFor(tag.tagId) });
@@ -1946,7 +1947,11 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     }
 
     try {
-      await playTapTarget(lms, playerId, tag.playSpec);
+      const policy = tag.policy || {};
+      if (policy.volume !== null && policy.volume !== undefined) {
+        await lms.control(playerId, "volume", policy.volume).catch(() => {});
+      }
+      await playTapTarget(lms, playerId, tag.playSpec, policy);
       tapPlayState.set(tagId, { lastPlayedAt: Date.now() });
       const updated = tapStore.recordTap(tagId);
       logEvent("tap.play.ok", { tagId, kind: tag.playSpec?.kind });

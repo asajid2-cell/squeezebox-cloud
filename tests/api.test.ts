@@ -6643,6 +6643,7 @@ describe("Tap resolver golden cases", () => {
       ...mockLms,
       async loadAlbum(...args: unknown[]) { calls.push({ m: "loadAlbum", args }); return "ok"; },
       async playTrack(...args: unknown[]) { calls.push({ m: "playTrack", args }); return "ok"; },
+      async control(...args: unknown[]) { calls.push({ m: "control", args }); return "ok"; },
       ...overrides
     };
   }
@@ -6739,5 +6740,25 @@ describe("Tap resolver golden cases", () => {
     expect(second.body.debounced).toBe(true);
     // The album was loaded only ONCE — the second tap did not restart it.
     expect(lms.calls.filter((c) => c.m === "loadAlbum")).toHaveLength(1);
+  });
+
+  it("applies a per-tag volume before playing, and queue-mode for a track tag", async () => {
+    const lms = recordingLms();
+    const { app, tapStore } = setup(lms);
+    const tag = tapStore.create({
+      playSpec: { kind: "track", track: { uri: "spotify:track:0123456789abcdefghijAB", source: "Spotify" } },
+      display: {},
+      policy: { playMode: "queue", volume: 35 }
+    });
+    const token = tapStore.tokenFor(tag.tagId);
+
+    await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token }).expect(200);
+
+    // Volume is set BEFORE the track is played...
+    const volumeCall = lms.calls.find((c) => c.m === "control" && c.args[1] === "volume");
+    expect(volumeCall?.args[2]).toBe(35);
+    // ...and queue mode adds to the queue rather than replacing.
+    const playCall = lms.calls.find((c) => c.m === "playTrack");
+    expect(playCall?.args[2]).toBe("add-queue");
   });
 });

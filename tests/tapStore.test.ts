@@ -100,4 +100,16 @@ describe("Tap store", () => {
     expect(reloaded?.label).toBe("keep me");
     expect(reloaded?.playSpec).toEqual(spec());
   });
+
+  it("defaults the policy and normalizes/clamps it on create + update", () => {
+    const store = createTapStore({ file, persist: false });
+    const a = store.create({ playSpec: spec(), display });
+    expect(a.policy).toEqual({ playMode: "replace", volume: null });
+
+    const b = store.create({ playSpec: spec(), display, policy: { playMode: "queue", volume: 250 } });
+    expect(b.policy).toEqual({ playMode: "queue", volume: 100 }); // clamped to 100
+
+    const updated = store.update(b.tagId, { policy: { playMode: "replace", volume: -5 } });
+    expect(updated.policy).toEqual({ playMode: "replace", volume: 0 }); // clamped to 0
+  });
 });
