@@ -6633,6 +6633,16 @@ describe("Tap admin binding API", () => {
     const auth = await adminAuth(app);
     await request(app).get("/api/tap/does-not-exist").set("Authorization", auth).expect(404);
   });
+
+  it("serves analytics (admin-gated, not matched as a tag id)", async () => {
+    const { app } = tapApp();
+    const auth = await adminAuth(app);
+    await request(app).get("/api/tap/analytics").expect(401); // requires admin
+    const res = await request(app).get("/api/tap/analytics").set("Authorization", auth).expect(200);
+    expect(res.body).toHaveProperty("series");
+    expect(res.body).toHaveProperty("mostTapped");
+    expect(Array.isArray(res.body.series)).toBe(true);
+  });
 });
 
 describe("Tap resolver golden cases", () => {

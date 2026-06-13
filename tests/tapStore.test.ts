@@ -112,4 +112,24 @@ describe("Tap store", () => {
     const updated = store.update(b.tagId, { policy: { playMode: "replace", volume: -5 } });
     expect(updated.policy).toEqual({ playMode: "replace", volume: 0 }); // clamped to 0
   });
+
+  it("aggregates analytics: totals, most-tapped, and a per-day series", () => {
+    const store = createTapStore({ file, persist: false });
+    const a = store.create({ playSpec: spec(), display: { title: "A" } });
+    const b = store.create({ playSpec: spec(), display: { title: "B" } });
+    const now = new Date("2026-06-12T12:00:00Z");
+    const day = (offset: number) => new Date(now.getTime() - offset * 86400000).toISOString();
+    store.recordTap(a.tagId, day(0));
+    store.recordTap(a.tagId, day(0));
+    store.recordTap(a.tagId, day(1));
+    store.recordTap(b.tagId, day(2));
+
+    const an = store.analytics({ now, days: 7 });
+    expect(an.totalTaps).toBe(4);
+    expect(an.windowTaps).toBe(4);
+    expect(an.mostTapped[0]).toMatchObject({ tagId: a.tagId, tapCount: 3 });
+    expect(an.series).toHaveLength(7);
+    expect(an.series.at(-1)).toMatchObject({ date: "2026-06-12", count: 2 });
+    expect(an.series.at(-2)).toMatchObject({ date: "2026-06-11", count: 1 });
+  });
 });

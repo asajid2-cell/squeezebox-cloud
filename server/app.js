@@ -1861,6 +1861,11 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     res.json({ tags });
   });
 
+  // Registered BEFORE /api/tap/:id so "analytics" isn't matched as a tag id.
+  app.get("/api/tap/analytics", requireAdmin, (_req, res) => {
+    res.json(tapStore.analytics());
+  });
+
   app.get("/api/tap/:id", requireAdmin, (req, res) => {
     const tag = tapStore.get(req.params.id);
     if (!tag) {

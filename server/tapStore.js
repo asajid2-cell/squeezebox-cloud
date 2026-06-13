@@ -31,8 +31,11 @@ function normalizePolicy(policy = {}) {
   return { playMode, volume };
 }
 
+const MAX_EVENTS = 5000; // bounded tap-history log for analytics
+
 export function createTapStore({ file = defaultFile(), persist: persistEnabled = true } = {}) {
   const tags = new Map();
+  let events = []; // [{ tagId, at }] — newest last
   let persistDisabled = !persistEnabled;
 
   function load() {
@@ -42,6 +45,7 @@ export function createTapStore({ file = defaultFile(), persist: persistEnabled =
       for (const tag of list) {
         if (tag?.tagId) tags.set(tag.tagId, tag);
       }
+      if (Array.isArray(parsed?.events)) events = parsed.events.slice(-MAX_EVENTS);
     } catch (error) {
       if (error?.code !== "ENOENT") {
         console.warn(`[tap] could not read ${file}: ${error?.message || error} (starting empty)`);
@@ -54,7 +58,7 @@ export function createTapStore({ file = defaultFile(), persist: persistEnabled =
     try {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       const tmp = `${file}.tmp-${crypto.randomBytes(4).toString("hex")}`;
-      fs.writeFileSync(tmp, JSON.stringify({ tags: [...tags.values()] }, null, 2));
+      fs.writeFileSync(tmp, JSON.stringify({ tags: [...tags.values()], events }, null, 2));
       fs.renameSync(tmp, file);
     } catch (error) {
       persistDisabled = true;
@@ -118,13 +122,50 @@ export function createTapStore({ file = defaultFile(), persist: persistEnabled =
       return existed;
     },
 
-    recordTap(tagId) {
+    recordTap(tagId, at = new Date().toISOString()) {
       const tag = tags.get(tagId);
       if (!tag) throw new Error("Unknown tag");
       tag.tapCount = (tag.tapCount || 0) + 1;
-      tag.lastTappedAt = new Date().toISOString();
+      tag.lastTappedAt = at;
+      events.push({ tagId, at });
+      if (events.length > MAX_EVENTS) events = events.slice(-MAX_EVENTS);
       persist();
       return clone(tag);
+    },
+
+    // Aggregate analytics for the console: totals, most-tapped tags, and a
+    // per-day taps series over the trailing `days` window (oldest-first).
+    analytics({ now = new Date(), days = 14, topN = 8 } = {}) {
+      const today = new Date(now);
+      const dayKey = (d) => d.toISOString().slice(0, 10);
+      const series = [];
+      const counts = new Map();
+      for (let i = days - 1; i >= 0; i--) {
+        const d = new Date(today);
+        d.setUTCDate(d.getUTCDate() - i);
+        const key = dayKey(d);
+        counts.set(key, 0);
+        series.push({ date: key, count: 0 });
+      }
+      for (const ev of events) {
+        const key = String(ev?.at || "").slice(0, 10);
+        if (counts.has(key)) counts.set(key, counts.get(key) + 1);
+      }
+      for (const point of series) point.count = counts.get(point.date) || 0;
+
+      const mostTapped = [...tags.values()]
+        .filter((t) => (t.tapCount || 0) > 0)
+        .sort((a, b) => (b.tapCount || 0) - (a.tapCount || 0))
+        .slice(0, topN)
+        .map((t) => ({ tagId: t.tagId, display: t.display, tapCount: t.tapCount || 0, kind: t.playSpec?.kind, lastTappedAt: t.lastTappedAt }));
+
+      return {
+        totalTaps: [...tags.values()].reduce((s, t) => s + (t.tapCount || 0), 0),
+        totalTags: tags.size,
+        windowTaps: series.reduce((s, p) => s + p.count, 0),
+        series,
+        mostTapped
+      };
     },
 
     tokenFor(tagId) {
