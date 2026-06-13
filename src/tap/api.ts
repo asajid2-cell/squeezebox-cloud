@@ -8,8 +8,9 @@ export type TapTag = {
   label?: string;
   tapCount?: number;
   lastTappedAt?: string | null;
-  playSpec?: { kind?: string; source?: string };
-  policy?: { playMode?: "replace" | "queue"; volume?: number | null };
+  playSpec?: { kind?: string; source?: string; albumUri?: string; playlistUri?: string; startIndex?: number; seed?: string };
+  policy?: { playMode?: "replace" | "queue"; volume?: number | null; resume?: boolean };
+  resumeState?: { index: number; seconds: number; savedAt?: string } | null;
   token?: string;
 };
 export type TapPlayResult = {
@@ -158,7 +159,39 @@ export async function getAnalytics(): Promise<TapAnalytics> {
   return (await asJson(res)) as TapAnalytics;
 }
 
-export type TapSettings = { debounceMs: number; partyMode: "open" | "closed"; requirePassword: boolean; hasPassword: boolean };
+export type TapSettings = { debounceMs: number; partyMode: "open" | "closed"; requirePassword: boolean; hasPassword: boolean; partyQueue?: boolean };
+
+// The Squeezebox's current now-playing, used to bind "what's playing right now"
+// straight onto a tag.
+export type NowPlaying = {
+  title?: string;
+  artist?: string;
+  album?: string;
+  art?: string | null;
+  uri?: string;
+  id?: string | number;
+  source?: string;
+  connected?: boolean;
+};
+
+// Read the live now-playing from the main app state so the console can offer a
+// one-tap "bind what's playing" action.
+export async function nowPlayingNow(): Promise<NowPlaying | null> {
+  const res = await fetch("/api/state", { credentials: "same-origin" });
+  const body = await asJson(res);
+  const np = body?.nowPlaying || body?.player?.nowPlaying || null;
+  if (!np || !(np.title || np.uri || np.id)) return null;
+  return {
+    title: np.title,
+    artist: np.artist,
+    album: np.album,
+    art: np.art ?? null,
+    uri: np.uri,
+    id: np.id,
+    source: np.source,
+    connected: body?.player?.connected ?? body?.connected
+  };
+}
 
 export async function getSettings(): Promise<TapSettings> {
   const res = await fetch("/api/tap/settings", { credentials: "same-origin" });

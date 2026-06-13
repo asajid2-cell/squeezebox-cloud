@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../src/tap/api", () => ({
@@ -17,6 +17,7 @@ vi.mock("../src/tap/api", () => ({
   saveSettings: vi.fn(),
   exportBackup: vi.fn(),
   importBackup: vi.fn(),
+  nowPlayingNow: vi.fn(),
   // Plain fn (not vi.fn) so resetAllMocks() leaves it intact — it's a pure
   // URL helper the Art component calls during render, not a behavior under test.
   artSrc: (art?: string | null) => (art ? art : undefined)
@@ -88,10 +89,61 @@ describe("Tap console — tag manager", () => {
     await waitFor(() => expect(screen.getByText("Kyoto")).toBeInTheDocument());
 
     await userEvent.selectOptions(screen.getByLabelText(/Volume for Kyoto/i), "60");
-    expect(mocked.updateTag).toHaveBeenCalledWith("a1", { policy: { playMode: "replace", volume: 60 } });
+    expect(mocked.updateTag).toHaveBeenCalledWith("a1", { policy: { playMode: "replace", volume: 60, resume: false } });
 
     await userEvent.click(screen.getByRole("button", { name: "Queue" }));
     expect(mocked.updateTag).toHaveBeenCalledWith("a1", expect.objectContaining({ policy: expect.objectContaining({ playMode: "queue" }) }));
+  });
+
+  it("toggles smart resume per album tag", async () => {
+    mocked.listTags.mockResolvedValue([
+      { tagId: "a1", enabled: true, display: { title: "Punisher", artist: "PB" }, tapCount: 0, playSpec: { kind: "album-from-top" }, policy: { playMode: "replace", volume: null, resume: false }, token: "sig" }
+    ]);
+    mocked.updateTag.mockResolvedValue({});
+    await go();
+    await waitFor(() => expect(screen.getByText("Punisher")).toBeInTheDocument());
+
+    const resumeGroup = screen.getByRole("group", { name: /smart resume/i });
+    await userEvent.click(within(resumeGroup).getByRole("button", { name: "On" }));
+    expect(mocked.updateTag).toHaveBeenCalledWith("a1", expect.objectContaining({ policy: expect.objectContaining({ resume: true }) }));
+  });
+
+  it("inline-edits a tag's display title, artist, label, and cover", async () => {
+    mocked.listTags.mockResolvedValue([
+      { tagId: "a1", enabled: true, display: { title: "Punisher", artist: "PB", art: null }, label: "old", tapCount: 0, playSpec: { kind: "album-from-top" }, token: "sig" }
+    ]);
+    mocked.updateTag.mockResolvedValue({});
+    await go();
+    await waitFor(() => expect(screen.getByText("Punisher")).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+    const titleInput = screen.getByLabelText(/Punisher Title/i);
+    await userEvent.clear(titleInput);
+    await userEvent.type(titleInput, "Punisher (2020)");
+    await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    expect(mocked.updateTag).toHaveBeenCalledWith("a1", expect.objectContaining({ display: expect.objectContaining({ title: "Punisher (2020)" }), label: "old" }));
+  });
+
+  it("re-binds an existing tag to new music without changing its id (PUT, not create)", async () => {
+    mocked.listTags.mockResolvedValue([
+      { tagId: "a1", enabled: true, display: { title: "Punisher", artist: "PB" }, tapCount: 0, playSpec: { kind: "album-from-top" }, token: "sig" }
+    ]);
+    mocked.spotifySearch.mockResolvedValue({ results: [], groups: { albums: [], tracks: [], artists: [], playlists: [] } });
+    mocked.spotifySearchCategories.mockResolvedValue({ artists: [], albums: [{ title: "Kyoto LP", artist: "PB", uri: "spotify:album:newalbum1", kind: "album", art: null }], playlists: [] });
+    mocked.updateTag.mockResolvedValue({ status: 200, body: { tag: { tagId: "a1" }, token: "sig" } });
+    await go();
+    await waitFor(() => expect(screen.getByText("Punisher")).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole("button", { name: /re-bind/i }));
+    await waitFor(() => expect(screen.getByText(/Re-point Punisher/i)).toBeInTheDocument());
+    await userEvent.type(screen.getByLabelText("Search music"), "kyoto");
+    await userEvent.click(screen.getByRole("button", { name: "Search" }));
+    await waitFor(() => expect(screen.getByText("Kyoto LP")).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: /whole album/i }));
+
+    expect(mocked.updateTag).toHaveBeenCalledWith("a1", expect.objectContaining({ intent: "album-from-top", albumUri: "spotify:album:newalbum1" }));
+    expect(mocked.createTag).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByText(/Tag now plays/i)).toBeInTheDocument());
   });
 });
 
@@ -162,7 +214,9 @@ describe("Tap console — bind & write", () => {
 
     await waitFor(() => expect(screen.getByText("Artists")).toBeInTheDocument());
     expect(screen.getAllByText("Phoebe Bridgers").length).toBeGreaterThan(0);
-    expect(screen.getByText("Playlist tags are not enabled yet.")).toBeInTheDocument();
+    // Playlists are now bindable (a "Whole playlist" action), not a "coming soon" note.
+    expect(screen.getByText("Phoebe Essentials")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /whole playlist/i }).length).toBeGreaterThan(0);
 
     await userEvent.click(screen.getByRole("button", { name: /search albums/i }));
     await waitFor(() => expect(mocked.spotifySearchCategories).toHaveBeenLastCalledWith("Phoebe Bridgers"));
@@ -204,6 +258,51 @@ describe("Tap console — bind & write", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Closed" }));
     expect(mocked.saveSettings).toHaveBeenCalledWith({ partyMode: "closed" });
+  });
+
+  it("flips on the global party-queue mode", async () => {
+    mocked.getSettings.mockResolvedValue({ debounceMs: 3000, partyMode: "open", requirePassword: false, hasPassword: false, partyQueue: false });
+    mocked.saveSettings.mockResolvedValue({ debounceMs: 3000, partyMode: "open", requirePassword: false, hasPassword: false, partyQueue: true });
+    await go(/settings/i);
+    await waitFor(() => expect(screen.getByText(/Party queue/i)).toBeInTheDocument());
+
+    const group = screen.getByRole("group", { name: /party queue/i });
+    await userEvent.click(within(group).getByRole("button", { name: "Queue" }));
+    expect(mocked.saveSettings).toHaveBeenCalledWith({ partyQueue: true });
+  });
+
+  it("creates a Surprise (discovery) tag with no fixed target", async () => {
+    mocked.createTag.mockResolvedValue({ status: 200, body: { tag: { tagId: "d1" }, token: "sig" } });
+    await go(/write a tag/i);
+    await userEvent.click(screen.getByRole("button", { name: /^create$/i }));
+    expect(mocked.createTag).toHaveBeenCalledWith(expect.objectContaining({ intent: "discover", source: "spotify" }));
+  });
+
+  it("binds what's playing now straight from the Squeezebox", async () => {
+    mocked.nowPlayingNow.mockResolvedValue({ title: "One More Time", artist: "Daft Punk", album: "Discovery", art: null, id: "spotify://track:0DiWol3AO6WpXZgp0goxAV", source: "Spotify" });
+    mocked.createTag.mockResolvedValue({ status: 200, body: { tag: { tagId: "n1" }, token: "sig" } });
+    await go(/write a tag/i);
+
+    await userEvent.click(screen.getByRole("button", { name: /bind what's playing now/i }));
+    expect(mocked.nowPlayingNow).toHaveBeenCalled();
+    // Spotify now-playing id (spotify://track:) is normalized to the colon form the binder uses.
+    expect(mocked.createTag).toHaveBeenCalledWith(expect.objectContaining({
+      intent: "track",
+      track: expect.objectContaining({ uri: "spotify:track:0DiWol3AO6WpXZgp0goxAV", title: "One More Time" })
+    }));
+  });
+
+  it("binds a whole Spotify playlist", async () => {
+    mocked.spotifySearch.mockResolvedValue({ results: [], groups: { albums: [], tracks: [], artists: [], playlists: [] } });
+    mocked.spotifySearchCategories.mockResolvedValue({ artists: [], albums: [], playlists: [{ title: "Phoebe Essentials", artist: "Spotify", uri: "spotify:playlist:def", kind: "playlist", art: null }] });
+    mocked.createTag.mockResolvedValue({ status: 200, body: { tag: { tagId: "p1" }, token: "sig" } });
+    await go(/write a tag/i);
+    await userEvent.type(screen.getByLabelText("Search music"), "phoebe");
+    await userEvent.click(screen.getByRole("button", { name: "Search" }));
+    await waitFor(() => expect(screen.getByText("Phoebe Essentials")).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole("button", { name: /whole playlist/i }));
+    expect(mocked.createTag).toHaveBeenCalledWith(expect.objectContaining({ intent: "playlist", playlistUri: "spotify:playlist:def" }));
   });
 
   it("exports a backup from the Settings view", async () => {

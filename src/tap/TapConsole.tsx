@@ -17,6 +17,7 @@ import {
   exportBackup,
   importBackup,
   artSrc,
+  nowPlayingNow,
   type TapTag,
   type SearchItem,
   type TapAnalytics,
@@ -147,7 +148,7 @@ function SignInCard({ session, onSignedIn }: { session: TapSession | null; onSig
 }
 
 // ---------- write flow ----------
-function WriteView({ onCreated }: { onCreated: () => void }) {
+function WriteView({ onCreated, rebind, onDone }: { onCreated: () => void; rebind?: { tagId: string; title?: string } | null; onDone?: () => void }) {
   const [query, setQuery] = useState("");
   const [source, setSource] = useState<"spotify" | "library">("spotify");
   const [albums, setAlbums] = useState<SearchItem[]>([]);
@@ -161,6 +162,9 @@ function WriteView({ onCreated }: { onCreated: () => void }) {
   const [browseTracks, setBrowseTracks] = useState<SearchItem[] | null>(null);
   const [browsing, setBrowsing] = useState(false);
   const [created, setCreated] = useState<{ tagId: string; token: string; url: string; display: SearchItem } | null>(null);
+  // When re-pointing an existing tag, success is just a confirmation — the
+  // physical sticker (id + token) is unchanged, so there's nothing to re-write.
+  const [rebound, setRebound] = useState<SearchItem | null>(null);
   const [writeState, setWriteState] = useState<{ ok?: boolean; msg: string } | null>(null);
   const [error, setError] = useState("");
   const searchRun = useRef(0);
@@ -222,6 +226,18 @@ function WriteView({ onCreated }: { onCreated: () => void }) {
 
   const create = async (payload: Record<string, unknown>, display: SearchItem) => {
     setError("");
+    // Re-point mode: PUT the new target onto the EXISTING tag (same id + token),
+    // so the physical sticker keeps working and plays the new thing.
+    if (rebind) {
+      const res = await updateTag(rebind.tagId, payload);
+      if (res.status >= 200 && res.status < 300 && res.body?.tag) {
+        setRebound(display);
+        onCreated();
+      } else {
+        setError(res.body?.error || "Couldn't re-point the tag.");
+      }
+      return;
+    }
     const res = await createTag(payload);
     if (res.status >= 200 && res.status < 300 && res.body?.tag) {
       const tg = res.body.tag;
@@ -232,6 +248,20 @@ function WriteView({ onCreated }: { onCreated: () => void }) {
     } else {
       setError(res.body?.error || "Couldn't create the binding.");
     }
+  };
+
+  // Bind the song currently on the Squeezebox straight onto a (new) tag — no
+  // search needed. Spotify now-playing ids arrive as spotify://track: ; normalize
+  // to the colon form the binder/search use.
+  const bindNowPlaying = async () => {
+    setError("");
+    const np = await nowPlayingNow();
+    const rawRef = String(np?.uri || np?.id || "");
+    if (!np || !rawRef) { setError("Nothing is playing on the Squeezebox right now."); return; }
+    const track: SearchItem = { title: np.title, artist: np.artist, album: np.album, art: np.art ?? null, source: np.source, kind: "track" };
+    if (/^spotify/i.test(rawRef)) track.uri = rawRef.replace(/^spotify:\/\//i, "spotify:");
+    else track.uri = rawRef; // local file uri/path — the server validates playability
+    await create({ intent: "track", track, display: displayOf(track, "track"), label: np.title || "" }, track);
   };
 
   const bindAlbumTop = (album: SearchItem) =>
@@ -245,6 +275,20 @@ function WriteView({ onCreated }: { onCreated: () => void }) {
       { intent: "album-from-track", source: "spotify", albumUri: album.uri, startIndex: index, display: { title: track.title, artist: track.artist, art: track.art ?? album.art ?? null, kind: "album-from-track" }, label: `${track.title} — ${album.title}` },
       { ...track, art: track.art ?? album.art }
     );
+
+  const bindPlaylist = (playlist: SearchItem) =>
+    create({ intent: "playlist", source: "spotify", playlistUri: playlist.uri, display: displayOf(playlist, "playlist"), label: playlist.title || "" }, playlist);
+
+  // A "surprise me" tag — no fixed target; every tap pulls a fresh taste-seeded
+  // pick at play time. The search box, if filled, themes it (e.g. "lo-fi").
+  const bindDiscover = () => {
+    const seed = query.trim();
+    const title = seed ? `Surprise · ${seed}` : "Surprise me";
+    create(
+      { intent: "discover", source: "spotify", seed: seed || undefined, display: { title, artist: "Fresh picks each tap", art: null, kind: "discover" }, label: title },
+      { title, artist: "Fresh picks each tap", art: null } as SearchItem
+    );
+  };
 
   const openAlbumBrowse = async (album: SearchItem) => {
     setPicked(album);
@@ -265,6 +309,30 @@ function WriteView({ onCreated }: { onCreated: () => void }) {
     const res = await writeTapTag(created.url);
     setWriteState(res.ok ? { ok: true, msg: "Tag written. Tap it to play." } : { ok: false, msg: res.reason === "unsupported" ? "This device can't write tags — use the QR or copy below from an Android phone." : `Couldn't write: ${res.reason}` });
   };
+
+  if (rebound) {
+    return (
+      <section className="tap-main" aria-label="Re-pointed">
+        <header className="tap-head">
+          <span className="tap-head__eyebrow">Re-pointed</span>
+          <h1 className="tap-head__title">Tag now plays {rebound.title}</h1>
+          <p className="tap-head__sub">The sticker is unchanged — same tag, new music. Tap it and it'll play <strong>{rebound.title}</strong>.</p>
+        </header>
+        <div className="tap-card" style={{ maxWidth: "36rem" }}>
+          <div className="tap-card__row">
+            <Art src={rebound.art} alt={rebound.title || "cover"} />
+            <div className="tap-card__text">
+              <span className="tap-card__title">{rebound.title}</span>
+              <span className="tap-card__sub">{rebound.artist}</span>
+            </div>
+          </div>
+          <div className="tap-card__actions">
+            <button className="tap-btn tap-btn--primary" onClick={() => onDone?.()}>Done</button>
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   if (created) {
     return (
@@ -299,11 +367,15 @@ function WriteView({ onCreated }: { onCreated: () => void }) {
   }
 
   return (
-    <section className="tap-main" aria-label="Write a tag">
+    <section className="tap-main" aria-label={rebind ? "Re-point a tag" : "Write a tag"}>
       <header className="tap-head">
-        <span className="tap-head__eyebrow">Step 1 · Find the music</span>
-        <h1 className="tap-head__title">Write a tag</h1>
-        <p className="tap-head__sub">Search for an album or song, choose how it plays, then write it to a tag.</p>
+        <span className="tap-head__eyebrow">{rebind ? "Re-point" : "Step 1 · Find the music"}</span>
+        <h1 className="tap-head__title">{rebind ? `Re-point ${rebind.title || "this tag"}` : "Write a tag"}</h1>
+        <p className="tap-head__sub">{rebind ? "Pick the new album, song, playlist, or surprise this tag should play — the sticker stays the same." : "Search for an album or song, choose how it plays, then write it to a tag."}</p>
+        <div className="tap-head__actions" style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button type="button" className="tap-btn" onClick={bindNowPlaying}>{rebind ? "Use what's playing now" : "Bind what's playing now"}</button>
+          {rebind ? <button type="button" className="tap-btn tap-btn--ghost" onClick={() => onDone?.()}>Cancel</button> : null}
+        </div>
       </header>
 
       <form className="tap-search" onSubmit={runSearch} role="search">
@@ -320,6 +392,18 @@ function WriteView({ onCreated }: { onCreated: () => void }) {
       </form>
 
       {error ? <div className="tap-alert tap-alert--err" role="alert">{error}</div> : null}
+
+      <div className="tap-card tap-card--surprise" style={{ maxWidth: "44rem" }}>
+        <div className="tap-card__row">
+          <div className="tap-art tap-art--surprise" aria-hidden="true" style={{ width: 56, height: 56, display: "grid", placeItems: "center", fontSize: 26 }}>✨</div>
+          <div className="tap-card__text">
+            <span className="tap-card__title">Surprise tag</span>
+            <span className="tap-card__sub">Plays something fresh every tap, from your taste{query.trim() ? ` · seeded by “${query.trim()}”` : ""}.</span>
+          </div>
+          <button className="tap-btn tap-btn--primary" style={{ marginLeft: "auto" }} onClick={bindDiscover}>Create</button>
+        </div>
+      </div>
+
       {categoryLoading ? <div className="tap-card__meta"><span className="tap-spinner" aria-hidden="true" /> Loading Spotify albumsâ€¦</div> : null}
       {categoryError ? <div className="tap-alert tap-alert--err" role="status">Songs loaded, but Spotify albums did not. Try the search again.</div> : null}
 
@@ -411,7 +495,7 @@ function WriteView({ onCreated }: { onCreated: () => void }) {
                   <Art src={p.art} alt={p.title || "playlist"} />
                   <div className="tap-card__text"><span className="tap-card__title">{p.title}</span><span className="tap-card__sub">{p.artist || "Playlist"}</span></div>
                 </div>
-                <div className="tap-card__meta"><span>Playlist tags are not enabled yet.</span></div>
+                <div className="tap-card__actions"><button className="tap-btn tap-btn--primary" onClick={() => bindPlaylist(p)}>Whole playlist</button></div>
               </div>
             ))}
           </div>
@@ -425,11 +509,49 @@ function WriteView({ onCreated }: { onCreated: () => void }) {
   );
 }
 
+// Inline editor for a tag's shown title/artist, your private label, and a cover
+// override — handy when Spotify's art is wrong or you want a friendlier name.
+function TagEditForm({ tag, onSaved, onCancel }: { tag: TapTag; onSaved: () => void; onCancel: () => void }) {
+  const [title, setTitle] = useState(tag.display?.title || "");
+  const [artist, setArtist] = useState(tag.display?.artist || "");
+  const [label, setLabel] = useState(tag.label || "");
+  const [art, setArt] = useState(tag.display?.art || "");
+  const [busy, setBusy] = useState(false);
+
+  const save = async () => {
+    setBusy(true);
+    await updateTag(tag.tagId, { display: { ...tag.display, title: title.trim(), artist: artist.trim(), art: art.trim() || null }, label: label.trim() });
+    setBusy(false);
+    onSaved();
+  };
+
+  const field = (lbl: string, value: string, set: (v: string) => void, placeholder?: string) => (
+    <label className="tap-signin__field">
+      <span className="tap-signin__label">{lbl}</span>
+      <div className="tap-field"><input value={value} onChange={(e) => set(e.target.value)} placeholder={placeholder} aria-label={`${tag.display?.title || "tag"} ${lbl}`} /></div>
+    </label>
+  );
+
+  return (
+    <div className="tap-edit" style={{ display: "grid", gap: 8, marginTop: 8 }}>
+      {field("Title", title, setTitle)}
+      {field("Artist", artist, setArtist)}
+      {field("Label (your note)", label, setLabel)}
+      {field("Cover image URL", art, setArt, "https://… (blank = icon)")}
+      <div className="tap-card__actions">
+        <button className="tap-btn tap-btn--primary" onClick={save} disabled={busy}>Save</button>
+        <button className="tap-btn tap-btn--ghost" onClick={onCancel} disabled={busy}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
 // ---------- tags manager ----------
-function TagsView({ refreshKey }: { refreshKey: number }) {
+function TagsView({ refreshKey, onRebind }: { refreshKey: number; onRebind: (t: TapTag) => void }) {
   const [tags, setTags] = useState<TapTag[] | null>(null);
   const [filter, setFilter] = useState("");
   const [busyId, setBusyId] = useState("");
+  const [editingId, setEditingId] = useState("");
 
   const load = useCallback(async () => {
     setTags(await listTags());
@@ -444,9 +566,9 @@ function TagsView({ refreshKey }: { refreshKey: number }) {
   const toggle = async (t: TapTag) => { setBusyId(t.tagId); await updateTag(t.tagId, { enabled: !t.enabled }); await load(); setBusyId(""); };
   const remove = async (t: TapTag) => { if (!confirm(`Delete the tag for "${t.display?.title || t.tagId}"?`)) return; setBusyId(t.tagId); await deleteTag(t.tagId); await load(); setBusyId(""); };
   const copy = (t: TapTag) => { if (t.token) navigator.clipboard?.writeText(tapUrlFor(t.tagId, t.token)).catch(() => {}); };
-  const setPolicy = async (t: TapTag, patch: { playMode?: "replace" | "queue"; volume?: number | null }) => {
+  const setPolicy = async (t: TapTag, patch: { playMode?: "replace" | "queue"; volume?: number | null; resume?: boolean }) => {
     setBusyId(t.tagId);
-    await updateTag(t.tagId, { policy: { playMode: t.policy?.playMode || "replace", volume: t.policy?.volume ?? null, ...patch } });
+    await updateTag(t.tagId, { policy: { playMode: t.policy?.playMode || "replace", volume: t.policy?.volume ?? null, resume: t.policy?.resume ?? false, ...patch } });
     await load();
     setBusyId("");
   };
@@ -483,7 +605,11 @@ function TagsView({ refreshKey }: { refreshKey: number }) {
                 </div>
               </div>
               <div className="tap-card__meta">
-                <span>{t.playSpec?.kind === "album-from-track" ? "Album from a song" : t.playSpec?.kind === "album-from-top" ? "Whole album" : "Single song"}</span>
+                <span>{t.playSpec?.kind === "album-from-track" ? "Album from a song"
+                  : t.playSpec?.kind === "album-from-top" ? "Whole album"
+                  : t.playSpec?.kind === "playlist" ? "Playlist"
+                  : t.playSpec?.kind === "discover" ? "Surprise"
+                  : "Single song"}</span>
                 <span>Tapped {t.tapCount ?? 0}×</span>
                 {!t.enabled ? <span style={{ color: "var(--amber)" }}>Off</span> : null}
               </div>
@@ -494,6 +620,14 @@ function TagsView({ refreshKey }: { refreshKey: number }) {
                     <button type="button" aria-pressed={t.policy?.playMode === "queue"} onClick={() => setPolicy(t, { playMode: "queue" })} disabled={busyId === t.tagId}>Queue</button>
                   </div>
                 ) : null}
+                {t.playSpec?.kind === "album-from-top" || t.playSpec?.kind === "album-from-track" ? (
+                  <label className="tap-vol">Resume
+                    <div className="tap-toggle" role="group" aria-label="Smart resume" style={{ marginLeft: 6 }}>
+                      <button type="button" aria-pressed={!t.policy?.resume} onClick={() => setPolicy(t, { resume: false })} disabled={busyId === t.tagId}>Off</button>
+                      <button type="button" aria-pressed={!!t.policy?.resume} onClick={() => setPolicy(t, { resume: true })} disabled={busyId === t.tagId}>On</button>
+                    </div>
+                  </label>
+                ) : null}
                 <label className="tap-vol">Vol
                   <select value={t.policy?.volume ?? ""} aria-label={`Volume for ${t.display?.title || "tag"}`} disabled={busyId === t.tagId}
                     onChange={(e) => setPolicy(t, { volume: e.target.value === "" ? null : Number(e.target.value) })}>
@@ -503,10 +637,15 @@ function TagsView({ refreshKey }: { refreshKey: number }) {
                 </label>
               </div>
               <div className="tap-card__actions">
+                <button className="tap-btn" onClick={() => onRebind(t)}>Re-bind</button>
+                <button className="tap-btn" onClick={() => setEditingId(editingId === t.tagId ? "" : t.tagId)} aria-pressed={editingId === t.tagId}>Edit</button>
                 <button className="tap-btn" onClick={() => toggle(t)} disabled={busyId === t.tagId}>{t.enabled ? "Pause" : "Enable"}</button>
                 <button className="tap-btn" onClick={() => copy(t)}>Copy link</button>
                 <button className="tap-btn tap-btn--ghost" onClick={() => remove(t)} disabled={busyId === t.tagId}>Delete</button>
               </div>
+              {editingId === t.tagId ? (
+                <TagEditForm tag={t} onSaved={async () => { setEditingId(""); await load(); }} onCancel={() => setEditingId("")} />
+              ) : null}
             </div>
           ))}
         </div>
@@ -633,7 +772,7 @@ function SettingsView() {
   const [s, setS] = useState<TapSettings | null>(null);
   const [pwd, setPwd] = useState("");
   const [saved, setSaved] = useState(false);
-  useEffect(() => { getSettings().then(setS, () => setS({ debounceMs: 3000, partyMode: "open", requirePassword: false, hasPassword: false })); }, []);
+  useEffect(() => { getSettings().then(setS, () => setS({ debounceMs: 3000, partyMode: "open", requirePassword: false, hasPassword: false, partyQueue: false })); }, []);
 
   const save = async (patch: Record<string, unknown>) => {
     setSaved(false);
@@ -659,6 +798,14 @@ function SettingsView() {
           <div className="tap-toggle" role="group" aria-label="Party mode">
             <button type="button" aria-pressed={s.partyMode === "open"} onClick={() => save({ partyMode: "open" })}>Open</button>
             <button type="button" aria-pressed={s.partyMode === "closed"} onClick={() => save({ partyMode: "closed" })}>Closed</button>
+          </div>
+        </div>
+
+        <div className="tap-setting">
+          <div className="tap-setting__text"><strong>Party queue</strong><span>{s.partyQueue ? "Taps add to the queue — nobody gets cut off." : "Taps replace whatever's playing."}</span></div>
+          <div className="tap-toggle" role="group" aria-label="Party queue">
+            <button type="button" aria-pressed={!s.partyQueue} onClick={() => save({ partyQueue: false })}>Replace</button>
+            <button type="button" aria-pressed={!!s.partyQueue} onClick={() => save({ partyQueue: true })}>Queue</button>
           </div>
         </div>
 
@@ -742,6 +889,8 @@ export function TapConsole() {
   const [session, setSession] = useState<TapSession | "loading">("loading");
   const [view, setView] = useState<"tags" | "write" | "analytics" | "print" | "settings">("tags");
   const [refreshKey, setRefreshKey] = useState(0);
+  // When set, the Write view operates in re-point mode against this tag.
+  const [rebindTarget, setRebindTarget] = useState<{ tagId: string; title?: string } | null>(null);
 
   const refreshSession = useCallback(() => {
     getSession().then(setSession, () => setSession({ authed: false, user: null }));
@@ -765,8 +914,10 @@ export function TapConsole() {
     document.body.appendChild(form);
     form.submit();
   };
+  // Navigating the nav always clears any in-progress re-point so "Write a tag"
+  // starts a fresh binding, not a re-point of the last tag.
   const navItem = (key: "tags" | "write" | "analytics" | "print" | "settings", label: string) => (
-    <a className="tap-nav__item" href={`#${key}`} aria-current={view === key ? "page" : undefined} onClick={(e) => { e.preventDefault(); setView(key); }}>{label}</a>
+    <a className="tap-nav__item" href={`#${key}`} aria-current={view === key ? "page" : undefined} onClick={(e) => { e.preventDefault(); setRebindTarget(null); setView(key); }}>{label}</a>
   );
 
   return (
@@ -782,11 +933,11 @@ export function TapConsole() {
         {session.user?.username ? <div className="tap-nav__who" title="Signed in">{session.user.username}</div> : null}
         <button className="tap-btn tap-btn--ghost" style={{ marginTop: session.user?.username ? undefined : "auto" }} onClick={signOut}>Sign out</button>
       </nav>
-      {view === "tags" ? <TagsView refreshKey={refreshKey} />
+      {view === "tags" ? <TagsView refreshKey={refreshKey} onRebind={(tag) => { setRebindTarget({ tagId: tag.tagId, title: tag.display?.title }); setView("write"); }} />
         : view === "analytics" ? <AnalyticsView />
         : view === "print" ? <PrintLabelsView />
         : view === "settings" ? <SettingsView />
-        : <WriteView onCreated={() => setRefreshKey((k) => k + 1)} />}
+        : <WriteView rebind={rebindTarget} onDone={() => { setRebindTarget(null); setView("tags"); setRefreshKey((k) => k + 1); }} onCreated={() => setRefreshKey((k) => k + 1)} />}
     </div>
   );
 }
