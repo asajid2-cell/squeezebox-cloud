@@ -118,6 +118,16 @@ export async function spotifySearch(query: string): Promise<{ results: SearchIte
 
 // An album's tracks IN ORDER — used to bind album-from-track (the chosen track's
 // index in this list is the startIndex).
+export async function spotifySearchCategories(query: string): Promise<Omit<SearchGroups, "tracks">> {
+  const res = await fetch(`/api/spotify/search/categories?q=${encodeURIComponent(query)}&limit=8`);
+  const body = await asJson(res);
+  return {
+    artists: (body.artists || []) as SearchItem[],
+    albums: (body.albums || []) as SearchItem[],
+    playlists: (body.playlists || []) as SearchItem[]
+  };
+}
+
 export async function albumTracks(album: SearchItem): Promise<SearchItem[]> {
   const qs = new URLSearchParams();
   if (album.browseId) qs.set("browseId", album.browseId);

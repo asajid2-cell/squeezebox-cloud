@@ -10,6 +10,7 @@ vi.mock("../src/tap/api", () => ({
   deleteTag: vi.fn(),
   searchLibrary: vi.fn(),
   spotifySearch: vi.fn(),
+  spotifySearchCategories: vi.fn(),
   albumTracks: vi.fn(),
   getAnalytics: vi.fn(),
   getSettings: vi.fn(),
@@ -28,10 +29,11 @@ import * as api from "../src/tap/api";
 const mocked = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   // Authenticated hl-auth session by default; the "signed out" test overrides it.
   mocked.getSession.mockResolvedValue({ authed: true, user: { username: "owner", isMaster: true }, loginUrl: "/auth/login", logoutUrl: "/auth/logout" });
   mocked.listTags.mockResolvedValue([]);
+  mocked.spotifySearchCategories.mockResolvedValue({ artists: [], albums: [], playlists: [] });
 });
 
 // Wait for the console shell (post-session) before interacting.
@@ -45,7 +47,8 @@ describe("Tap console — hl-auth", () => {
   it("shows the 'Sign in with Harmonizer' card when not signed in", async () => {
     mocked.getSession.mockResolvedValue({ authed: false, user: null, loginUrl: "/auth/login" });
     render(<TapConsole />);
-    await waitFor(() => expect(screen.getByRole("button", { name: /sign in with harmonizer/i })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^sign in$/i })).toBeInTheDocument());
+    expect(screen.getByText(/Sign in with your Harmonizer account/i)).toBeInTheDocument();
     expect(screen.queryByText("Tag collection")).not.toBeInTheDocument();
   });
 
@@ -93,8 +96,9 @@ describe("Tap console — bind & write", () => {
   it("searches, binds a whole album, and reaches the write step with a QR + write button", async () => {
     mocked.spotifySearch.mockResolvedValue({
       results: [],
-      groups: { albums: [{ title: "Punisher", artist: "Phoebe Bridgers", uri: "spotify:album:xyz789", kind: "album", art: null }], tracks: [], artists: [], playlists: [] }
+      groups: { albums: [], tracks: [], artists: [], playlists: [] }
     });
+    mocked.spotifySearchCategories.mockResolvedValue({ artists: [], albums: [{ title: "Punisher", artist: "Phoebe Bridgers", uri: "spotify:album:xyz789", kind: "album", art: null }], playlists: [] });
     mocked.createTag.mockResolvedValue({ status: 200, body: { tag: { tagId: "a1" }, token: "sig" } });
     await go(/write a tag/i);
 
@@ -105,6 +109,7 @@ describe("Tap console — bind & write", () => {
     await userEvent.click(screen.getByRole("button", { name: /whole album/i }));
 
     expect(mocked.createTag).toHaveBeenCalledWith(expect.objectContaining({ intent: "album-from-top", albumUri: "spotify:album:xyz789" }));
+    expect(mocked.spotifySearchCategories).toHaveBeenCalledWith("punisher");
     await waitFor(() => expect(screen.getByText(/Burn it onto a tag/i)).toBeInTheDocument());
     expect(screen.getByRole("button", { name: /Write to NFC tag/i })).toBeInTheDocument();
   });
@@ -112,8 +117,9 @@ describe("Tap console — bind & write", () => {
   it("binds album-from-track by picking a song from the album's track list (carries the index)", async () => {
     mocked.spotifySearch.mockResolvedValue({
       results: [],
-      groups: { albums: [{ title: "Punisher", artist: "PB", uri: "spotify:album:xyz789", kind: "album" }], tracks: [], artists: [], playlists: [] }
+      groups: { albums: [], tracks: [], artists: [], playlists: [] }
     });
+    mocked.spotifySearchCategories.mockResolvedValue({ artists: [], albums: [{ title: "Punisher", artist: "PB", uri: "spotify:album:xyz789", kind: "album" }], playlists: [] });
     mocked.albumTracks.mockResolvedValue([{ title: "DVD Menu" }, { title: "Garden Song" }, { title: "Kyoto" }]);
     mocked.createTag.mockResolvedValue({ status: 200, body: { tag: { tagId: "a2" }, token: "sig" } });
     await go(/write a tag/i);
@@ -128,6 +134,36 @@ describe("Tap console — bind & write", () => {
     await userEvent.click(screen.getByRole("button", { name: /Kyoto/ }));
 
     expect(mocked.createTag).toHaveBeenCalledWith(expect.objectContaining({ intent: "album-from-track", albumUri: "spotify:album:xyz789", startIndex: 2 }));
+  });
+
+  it("shows Spotify artists from the category endpoint and can search albums from one", async () => {
+    mocked.spotifySearch.mockResolvedValueOnce({
+      results: [{ title: "Kyoto", artist: "Phoebe Bridgers", uri: "spotify:track:0123456789abcdefghijAB", kind: "track" }],
+      groups: { albums: [], tracks: [{ title: "Kyoto", artist: "Phoebe Bridgers", uri: "spotify:track:0123456789abcdefghijAB", kind: "track" }], artists: [], playlists: [] }
+    });
+    mocked.spotifySearch.mockResolvedValueOnce({ results: [], groups: { albums: [], tracks: [], artists: [], playlists: [] } });
+    mocked.spotifySearchCategories.mockResolvedValueOnce({
+      artists: [{ title: "Phoebe Bridgers", uri: "spotify:artist:abc", kind: "artist" }],
+      albums: [],
+      playlists: [{ title: "Phoebe Essentials", uri: "spotify:playlist:def", kind: "playlist" }]
+    });
+    mocked.spotifySearchCategories.mockResolvedValueOnce({
+      artists: [],
+      albums: [{ title: "Punisher", artist: "Phoebe Bridgers", uri: "spotify:album:xyz789", kind: "album" }],
+      playlists: []
+    });
+    await go(/write a tag/i);
+
+    await userEvent.type(screen.getByLabelText("Search music"), "phoebe");
+    await userEvent.click(screen.getByRole("button", { name: "Search" }));
+
+    await waitFor(() => expect(screen.getByText("Artists")).toBeInTheDocument());
+    expect(screen.getAllByText("Phoebe Bridgers").length).toBeGreaterThan(0);
+    expect(screen.getByText("Playlist tags are not enabled yet.")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /search albums/i }));
+    await waitFor(() => expect(mocked.spotifySearchCategories).toHaveBeenLastCalledWith("Phoebe Bridgers"));
+    await waitFor(() => expect(screen.getByText("Punisher")).toBeInTheDocument());
   });
 
   it("renders the Analytics view with totals, chart, and most-tapped", async () => {

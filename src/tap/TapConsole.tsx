@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import {
   getSession,
@@ -9,6 +9,7 @@ import {
   deleteTag,
   searchLibrary,
   spotifySearch,
+  spotifySearchCategories,
   albumTracks,
   getAnalytics,
   getSettings,
@@ -55,6 +56,22 @@ function Art({ src, alt, size = 56 }: { src?: string | null; alt: string; size?:
       )}
     </div>
   );
+}
+
+function searchKey(item: SearchItem): string {
+  return String(item.uri || item.id || `${item.kind || ""}|${item.title || ""}|${item.artist || ""}`).toLowerCase();
+}
+
+function mergeSearchItems(first: SearchItem[] = [], second: SearchItem[] = []): SearchItem[] {
+  const seen = new Set<string>();
+  const merged: SearchItem[] = [];
+  for (const item of [...first, ...second]) {
+    const key = searchKey(item);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+  }
+  return merged;
 }
 
 // ---------- sign-in card (our UI; auth is hl-auth SSO, signed in inline) ----------
@@ -133,35 +150,69 @@ function WriteView({ onCreated }: { onCreated: () => void }) {
   const [source, setSource] = useState<"spotify" | "library">("spotify");
   const [albums, setAlbums] = useState<SearchItem[]>([]);
   const [tracks, setTracks] = useState<SearchItem[]>([]);
+  const [artists, setArtists] = useState<SearchItem[]>([]);
+  const [playlists, setPlaylists] = useState<SearchItem[]>([]);
   const [searching, setSearching] = useState(false);
+  const [categoryLoading, setCategoryLoading] = useState(false);
+  const [categoryError, setCategoryError] = useState(false);
   const [picked, setPicked] = useState<SearchItem | null>(null);
   const [browseTracks, setBrowseTracks] = useState<SearchItem[] | null>(null);
   const [browsing, setBrowsing] = useState(false);
   const [created, setCreated] = useState<{ tagId: string; token: string; url: string; display: SearchItem } | null>(null);
   const [writeState, setWriteState] = useState<{ ok?: boolean; msg: string } | null>(null);
   const [error, setError] = useState("");
+  const searchRun = useRef(0);
 
-  const runSearch = async (e?: React.FormEvent) => {
+  const runSearch = async (e?: React.FormEvent, overrideQuery?: string) => {
     e?.preventDefault();
-    if (!query.trim()) return;
+    const term = (overrideQuery ?? query).trim();
+    if (!term) return;
+    if (overrideQuery !== undefined) setQuery(overrideQuery);
+    const run = searchRun.current + 1;
+    searchRun.current = run;
     setSearching(true);
+    setCategoryLoading(source === "spotify");
+    setCategoryError(false);
     setError("");
     setPicked(null);
     setCreated(null);
+    setAlbums([]);
+    setTracks([]);
+    setArtists([]);
+    setPlaylists([]);
     try {
       if (source === "spotify") {
-        const { groups, results } = await spotifySearch(query);
-        setAlbums(groups?.albums || []);
+        const categories = spotifySearchCategories(term)
+          .then((next) => {
+            if (searchRun.current !== run) return;
+            setAlbums((current) => mergeSearchItems(current, next.albums || []));
+            setArtists(next.artists || []);
+            setPlaylists(next.playlists || []);
+          })
+          .catch(() => {
+            if (searchRun.current === run) setCategoryError(true);
+          })
+          .finally(() => {
+            if (searchRun.current === run) setCategoryLoading(false);
+          });
+        const { groups, results } = await spotifySearch(term);
+        if (searchRun.current !== run) return;
+        setAlbums((current) => mergeSearchItems(current, groups?.albums || []));
         setTracks(groups?.tracks || results || []);
+        setArtists((current) => current.length ? current : groups?.artists || []);
+        setPlaylists((current) => current.length ? current : groups?.playlists || []);
+        void categories;
       } else {
-        const results = await searchLibrary(query);
+        const results = await searchLibrary(term);
+        if (searchRun.current !== run) return;
         setAlbums([]);
         setTracks(results);
       }
     } catch {
       setError("Search failed — try again.");
     } finally {
-      setSearching(false);
+      if (searchRun.current === run) setSearching(false);
+      if (source !== "spotify" && searchRun.current === run) setCategoryLoading(false);
     }
   };
 
@@ -267,6 +318,8 @@ function WriteView({ onCreated }: { onCreated: () => void }) {
       </form>
 
       {error ? <div className="tap-alert tap-alert--err" role="alert">{error}</div> : null}
+      {categoryLoading ? <div className="tap-card__meta"><span className="tap-spinner" aria-hidden="true" /> Loading Spotify albumsâ€¦</div> : null}
+      {categoryError ? <div className="tap-alert tap-alert--err" role="status">Songs loaded, but Spotify albums did not. Try the search again.</div> : null}
 
       {picked && picked.kind === "album" ? (
         <div className="tap-card" style={{ maxWidth: "44rem" }}>
@@ -329,7 +382,41 @@ function WriteView({ onCreated }: { onCreated: () => void }) {
         </div>
       ) : null}
 
-      {!searching && !picked && albums.length === 0 && tracks.length === 0 && query ? (
+      {!picked && source === "spotify" && artists.length > 0 ? (
+        <div>
+          <h2 className="tap-head__eyebrow" style={{ marginBottom: 12 }}>Artists</h2>
+          <div className="tap-grid">
+            {artists.map((a, i) => (
+              <div className="tap-card" key={`ar-${a.uri || a.id || i}`}>
+                <div className="tap-card__row">
+                  <Art src={a.art} alt={a.title || "artist"} />
+                  <div className="tap-card__text"><span className="tap-card__title">{a.title}</span><span className="tap-card__sub">Artist</span></div>
+                </div>
+                <div className="tap-card__actions"><button className="tap-btn" onClick={() => a.title && runSearch(undefined, a.title)}>Search albums</button></div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {!picked && source === "spotify" && playlists.length > 0 ? (
+        <div>
+          <h2 className="tap-head__eyebrow" style={{ marginBottom: 12 }}>Playlists</h2>
+          <div className="tap-grid">
+            {playlists.map((p, i) => (
+              <div className="tap-card" key={`pl-${p.uri || p.id || i}`}>
+                <div className="tap-card__row">
+                  <Art src={p.art} alt={p.title || "playlist"} />
+                  <div className="tap-card__text"><span className="tap-card__title">{p.title}</span><span className="tap-card__sub">{p.artist || "Playlist"}</span></div>
+                </div>
+                <div className="tap-card__meta"><span>Playlist tags are not enabled yet.</span></div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {!searching && !categoryLoading && !picked && albums.length === 0 && tracks.length === 0 && artists.length === 0 && playlists.length === 0 && query ? (
         <div className="tap-empty"><strong>No matches.</strong><span>Try another album or song name.</span></div>
       ) : null}
     </section>
