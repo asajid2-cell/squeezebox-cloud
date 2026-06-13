@@ -90,7 +90,6 @@ import {
   PlaybackModeProvider,
   LocalPlayerProvider
 } from "./lib/localPlayer";
-import { SyncSessionPanel } from "./SyncSessionPanel";
 import type { AppState, ConnectionGuide, LibraryCollection, Playlist, PlaylistSummary, SpotifySearchGroups, Track } from "./types";
 import "./styles.css";
 
@@ -310,7 +309,6 @@ function AppShell() {
         </nav>
         <RecentPicks picks={state.recentPicks} />
         <PlaybackModeToggle />
-        <SyncSessionPanel nowPlaying={state.nowPlaying} />
         <div className="speaker-card">
           <span className={speakerOnline ? "status-dot online" : reconnecting ? "status-dot connecting" : "status-dot offline"} />
           <div>
