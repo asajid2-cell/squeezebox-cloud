@@ -205,6 +205,39 @@ export function createTapStore({ file = defaultFile(), persist: persistEnabled =
       return this.publicSettings();
     },
 
+    // Full backup of the bindings + settings (tap-history is NOT exported — it's
+    // runtime telemetry, not config). Importable on another instance.
+    exportData() {
+      return { version: 1, exportedAt: new Date().toISOString(), tags: [...tags.values()].map(clone), settings: { ...settings } };
+    },
+
+    // Import a backup. Each tag's playSpec is re-validated; invalid tags are
+    // skipped (not silently kept). `replace` wipes existing tags first.
+    importData(data = {}, { replace = false } = {}) {
+      const incoming = Array.isArray(data?.tags) ? data.tags : [];
+      if (replace) tags.clear();
+      let imported = 0;
+      let skipped = 0;
+      for (const raw of incoming) {
+        if (!raw?.tagId || !validatePlaySpec(raw.playSpec).ok) { skipped++; continue; }
+        tags.set(raw.tagId, {
+          tagId: raw.tagId,
+          enabled: raw.enabled !== false,
+          playSpec: raw.playSpec,
+          display: raw.display || {},
+          label: raw.label || "",
+          policy: normalizePolicy(raw.policy),
+          createdAt: raw.createdAt || new Date().toISOString(),
+          tapCount: Number(raw.tapCount) || 0,
+          lastTappedAt: raw.lastTappedAt || null
+        });
+        imported++;
+      }
+      if (data?.settings) settings = normalizeSettings(data.settings);
+      persist();
+      return { imported, skipped, total: tags.size };
+    },
+
     tokenFor(tagId) {
       return signTag(tagId);
     },

@@ -124,6 +124,16 @@ export async function saveSettings(token: string, patch: Record<string, unknown>
   return (await asJson(res)) as TapSettings;
 }
 
+export async function exportBackup(token: string): Promise<unknown> {
+  const res = await fetch("/api/tap/export", { headers: authHeaders(token) });
+  return asJson(res);
+}
+
+export async function importBackup(token: string, data: unknown): Promise<{ imported: number; skipped: number; total: number }> {
+  const res = await fetch("/api/tap/import", { method: "POST", headers: authHeaders(token), body: JSON.stringify(data) });
+  return (await asJson(res)) as { imported: number; skipped: number; total: number };
+}
+
 export async function createTag(token: string, payload: Record<string, unknown>) {
   const res = await fetch("/api/tap", { method: "POST", headers: authHeaders(token), body: JSON.stringify(payload) });
   return { status: res.status, body: await asJson(res) };

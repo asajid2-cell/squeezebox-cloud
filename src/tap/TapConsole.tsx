@@ -12,6 +12,8 @@ import {
   getAnalytics,
   getSettings,
   saveSettings,
+  exportBackup,
+  importBackup,
   type TapTag,
   type SearchItem,
   type TapAnalytics,
@@ -555,7 +557,50 @@ function SettingsView({ token }: { token: string }) {
 
         {saved ? <div className="tap-alert tap-alert--ok" role="status">Saved.</div> : null}
       </div>
+
+      <BackupSection token={token} />
     </section>
+  );
+}
+
+function BackupSection({ token }: { token: string }) {
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const inputRef = React.useRef<HTMLInputElement>(null);
+
+  const doExport = async () => {
+    const data = await exportBackup(token);
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "squeezebox-tap-backup.json";
+    a.click();
+    URL.revokeObjectURL(url);
+    setMsg({ ok: true, text: "Backup downloaded." });
+  };
+
+  const doImport = async (file: File) => {
+    try {
+      const data = JSON.parse(await file.text());
+      const res = await importBackup(token, data);
+      setMsg({ ok: true, text: `Imported ${res.imported} tag${res.imported === 1 ? "" : "s"}${res.skipped ? `, skipped ${res.skipped}` : ""}.` });
+    } catch {
+      setMsg({ ok: false, text: "That file wasn't a valid Tap backup." });
+    }
+  };
+
+  return (
+    <div className="tap-card" style={{ maxWidth: "40rem" }}>
+      <div className="tap-card__row"><span className="tap-card__title">Backup</span></div>
+      <p className="tap-card__sub">Export all your tags + settings to a file, or restore them on another instance.</p>
+      <div className="tap-card__actions">
+        <button className="tap-btn" onClick={doExport}>Export backup</button>
+        <button className="tap-btn" onClick={() => inputRef.current?.click()}>Import backup…</button>
+        <input ref={inputRef} type="file" accept="application/json,.json" style={{ display: "none" }} aria-label="Import backup file"
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) doImport(f); e.target.value = ""; }} />
+      </div>
+      {msg ? <div className={`tap-alert ${msg.ok ? "tap-alert--ok" : "tap-alert--err"}`} role="status">{msg.text}</div> : null}
+    </div>
   );
 }
 

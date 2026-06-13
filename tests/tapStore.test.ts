@@ -146,4 +146,28 @@ describe("Tap store", () => {
     store.setSettings({ partyMode: "open" });
     expect(store.settings().password).toBe("sesame");
   });
+
+  it("exports + re-imports bindings (round-trip), skipping invalid playSpecs", () => {
+    const store = createTapStore({ file, persist: false });
+    const a = store.create({ playSpec: spec(), display: { title: "A" }, policy: { playMode: "queue", volume: 40 } });
+    store.setSettings({ partyMode: "closed" });
+    const dump = store.exportData();
+    expect(dump.tags).toHaveLength(1);
+    expect(dump.settings.partyMode).toBe("closed");
+
+    const fresh = createTapStore({ file: `${file}.2`, persist: false });
+    const result = fresh.importData({ ...dump, tags: [...dump.tags, { tagId: "bad", playSpec: { kind: "nope" } }] });
+    expect(result.imported).toBe(1);
+    expect(result.skipped).toBe(1);
+    expect(fresh.get(a.tagId)?.policy).toEqual({ playMode: "queue", volume: 40 });
+    expect(fresh.publicSettings().partyMode).toBe("closed");
+  });
+
+  it("replace import wipes existing tags first", () => {
+    const store = createTapStore({ file, persist: false });
+    store.create({ playSpec: spec(), display });
+    store.importData({ tags: [{ tagId: "x", playSpec: spec() }] }, { replace: true });
+    expect(store.list()).toHaveLength(1);
+    expect(store.get("x")).toBeTruthy();
+  });
 });

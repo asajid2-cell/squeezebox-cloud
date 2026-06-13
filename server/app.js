@@ -1874,6 +1874,16 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     res.json(tapStore.setSettings(req.body || {}));
   });
 
+  app.get("/api/tap/export", requireAdmin, (_req, res) => {
+    res.setHeader("Content-Disposition", 'attachment; filename="squeezebox-tap-backup.json"');
+    res.json(tapStore.exportData());
+  });
+
+  app.post("/api/tap/import", requireAdmin, (req, res) => {
+    const body = req.body || {};
+    res.json(tapStore.importData(body, { replace: body.replace === true }));
+  });
+
   app.get("/api/tap/:id", requireAdmin, (req, res) => {
     const tag = tapStore.get(req.params.id);
     if (!tag) {

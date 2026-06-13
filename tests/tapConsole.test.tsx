@@ -13,7 +13,9 @@ vi.mock("../src/tap/api", () => ({
   albumTracks: vi.fn(),
   getAnalytics: vi.fn(),
   getSettings: vi.fn(),
-  saveSettings: vi.fn()
+  saveSettings: vi.fn(),
+  exportBackup: vi.fn(),
+  importBackup: vi.fn()
 }));
 vi.mock("../src/tap/nfc", () => ({
   writeTapTag: vi.fn(async () => ({ ok: true })),
@@ -173,6 +175,22 @@ describe("Tap console — bind & write", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Closed" }));
     expect(mocked.saveSettings).toHaveBeenCalledWith("tok", { partyMode: "closed" });
+  });
+
+  it("exports a backup from the Settings view", async () => {
+    mocked.getSettings.mockResolvedValue({ debounceMs: 3000, partyMode: "open", requirePassword: false, hasPassword: false });
+    mocked.exportBackup.mockResolvedValue({ version: 1, tags: [], settings: {} });
+    vi.stubGlobal("URL", { ...URL, createObjectURL: vi.fn(() => "blob:x"), revokeObjectURL: vi.fn() });
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    render(<TapConsole />);
+    await userEvent.click(screen.getByRole("link", { name: /settings/i }));
+    await waitFor(() => expect(screen.getByText("Backup")).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole("button", { name: /export backup/i }));
+    await waitFor(() => expect(mocked.exportBackup).toHaveBeenCalledWith("tok"));
+    expect(clickSpy).toHaveBeenCalled();
+    clickSpy.mockRestore();
+    vi.unstubAllGlobals();
   });
 
   it("shows the empty 'no matches' state", async () => {

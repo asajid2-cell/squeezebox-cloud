@@ -6655,6 +6655,23 @@ describe("Tap admin binding API", () => {
     expect(set.body).toMatchObject({ partyMode: "closed", requirePassword: true, hasPassword: true });
     expect(set.body).not.toHaveProperty("password");
   });
+
+  it("exports then imports bindings via the API (admin)", async () => {
+    const a1 = tapApp();
+    const auth = await adminAuth(a1.app);
+    await request(a1.app).post("/api/tap").set("Authorization", auth).send(albumTopBody).expect(200);
+
+    const exp = await request(a1.app).get("/api/tap/export").set("Authorization", auth).expect(200);
+    expect(exp.body.tags).toHaveLength(1);
+    expect(exp.headers["content-disposition"]).toMatch(/attachment/);
+
+    const a2 = tapApp();
+    const auth2 = await adminAuth(a2.app);
+    const imp = await request(a2.app).post("/api/tap/import").set("Authorization", auth2).send(exp.body).expect(200);
+    expect(imp.body.imported).toBe(1);
+    const list = await request(a2.app).get("/api/tap").set("Authorization", auth2).expect(200);
+    expect(list.body.tags).toHaveLength(1);
+  });
 });
 
 describe("Tap resolver golden cases", () => {
