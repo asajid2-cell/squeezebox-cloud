@@ -35,6 +35,50 @@ import { defaultTapStore } from "./tapStore.js";
 import { buildPlaySpec } from "./tapPlaySpec.js";
 import { playTapTarget } from "./tapPlayback.js";
 import { verifySun } from "./tapSun.js";
+import { checkAccess } from "./requireAccess.js";
+
+// Squeezebox Tap is its OWN app (a sister of the jukebox), so it gates on its OWN
+// hl-auth page — `squeezebox-tap`, NOT the jukebox's `cloud-squeeze` page. Tap
+// admin requires a logged-in Harmonizer account allowed on that page; anonymous
+// "public" access is never enough. Returns JSON 401 (not a redirect) so the
+// console SPA can show our sign-in card. The hl-auth local-bypass still lets a
+// direct on-box request through (never locked out).
+const TAP_AUTH_PAGE = "squeezebox-tap";
+
+function tapAuthState(r) {
+  // The master/owner is root and is allowed even if the `squeezebox-tap` page
+  // hasn't been registered/granted in hl-auth yet (authenticated → 403 here).
+  const masterOverride = !r.ok && r.status === 403 && Boolean(r.user && (r.user.isMaster || r.user.master));
+  const allowed = Boolean(r.ok && r.user && !r.user.public);
+  const authed = allowed || masterOverride;
+  const u = r.user || {};
+  return {
+    authed,
+    user: authed ? { username: u.username || "you", isMaster: Boolean(u.isMaster || u.master), local: Boolean(u.local), service: Boolean(u.service) } : null
+  };
+}
+const AUTH_LOGIN_URL = `${(process.env.AUTH_PUBLIC_BASE || "/auth").replace(/\/$/, "")}/login`;
+
+async function requireTapAccess(req, res, next) {
+  let r;
+  try {
+    r = await checkAccess(req, TAP_AUTH_PAGE);
+  } catch {
+    res.status(503).json({ error: "Sign-in service is unavailable right now." });
+    return;
+  }
+  const { authed, user } = tapAuthState(r);
+  if (authed) {
+    req.hlUser = user;
+    next();
+    return;
+  }
+  if (r.status === 403) {
+    res.status(403).json({ error: "Your account can't manage Tap." });
+    return;
+  }
+  res.status(401).json({ error: "Sign in with your Harmonizer account to manage Tap.", loginUrl: AUTH_LOGIN_URL });
+}
 
 // Squeezebox Tap — per-tag debounce so a rapid double-tap doesn't restart the
 // album from 0:00 (NFC fires readily; people tap twice).
@@ -1844,7 +1888,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     return `${base}/tap/t/${tagId}#k=${token}`;
   }
 
-  app.post("/api/tap", requireAdmin, (req, res) => {
+  app.post("/api/tap", requireTapAccess, (req, res) => {
     try {
       const body = req.body || {};
       const playSpec = buildPlaySpec(body);
@@ -1857,35 +1901,47 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     }
   });
 
-  app.get("/api/tap", requireAdmin, (_req, res) => {
+  app.get("/api/tap", requireTapAccess, (_req, res) => {
     const tags = tapStore.list().map((tag) => ({ ...tag, token: tapStore.tokenFor(tag.tagId) }));
     res.json({ tags });
   });
 
+  // Ungated auth probe the Tap console calls on load to decide whether to show
+  // the console or our hl-auth sign-in card. NOT a gate — it just reports state.
+  app.get("/api/tap/session", async (req, res) => {
+    let state = { authed: false, user: null };
+    try {
+      state = tapAuthState(await checkAccess(req, TAP_AUTH_PAGE));
+    } catch {
+      // auth service down → report not-authed; the console shows "sign in".
+    }
+    res.json({ ...state, loginUrl: AUTH_LOGIN_URL, logoutUrl: `${(process.env.AUTH_PUBLIC_BASE || "/auth").replace(/\/$/, "")}/logout` });
+  });
+
   // Registered BEFORE /api/tap/:id so "analytics"/"settings" aren't matched as ids.
-  app.get("/api/tap/analytics", requireAdmin, (_req, res) => {
+  app.get("/api/tap/analytics", requireTapAccess, (_req, res) => {
     res.json(tapStore.analytics());
   });
 
-  app.get("/api/tap/settings", requireAdmin, (_req, res) => {
+  app.get("/api/tap/settings", requireTapAccess, (_req, res) => {
     res.json(tapStore.publicSettings());
   });
 
-  app.post("/api/tap/settings", requireAdmin, (req, res) => {
+  app.post("/api/tap/settings", requireTapAccess, (req, res) => {
     res.json(tapStore.setSettings(req.body || {}));
   });
 
-  app.get("/api/tap/export", requireAdmin, (_req, res) => {
+  app.get("/api/tap/export", requireTapAccess, (_req, res) => {
     res.setHeader("Content-Disposition", 'attachment; filename="squeezebox-tap-backup.json"');
     res.json(tapStore.exportData());
   });
 
-  app.post("/api/tap/import", requireAdmin, (req, res) => {
+  app.post("/api/tap/import", requireTapAccess, (req, res) => {
     const body = req.body || {};
     res.json(tapStore.importData(body, { replace: body.replace === true }));
   });
 
-  app.get("/api/tap/:id", requireAdmin, (req, res) => {
+  app.get("/api/tap/:id", requireTapAccess, (req, res) => {
     const tag = tapStore.get(req.params.id);
     if (!tag) {
       res.status(404).json({ error: "Tag not found" });
@@ -1894,7 +1950,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     res.json({ tag, token: tapStore.tokenFor(tag.tagId), tapPath: `/tap/t/${tag.tagId}` });
   });
 
-  app.put("/api/tap/:id", requireAdmin, (req, res) => {
+  app.put("/api/tap/:id", requireTapAccess, (req, res) => {
     if (!tapStore.get(req.params.id)) {
       res.status(404).json({ error: "Tag not found" });
       return;
@@ -1916,7 +1972,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     }
   });
 
-  app.delete("/api/tap/:id", requireAdmin, (req, res) => {
+  app.delete("/api/tap/:id", requireTapAccess, (req, res) => {
     if (!tapStore.remove(req.params.id)) {
       res.status(404).json({ error: "Tag not found" });
       return;

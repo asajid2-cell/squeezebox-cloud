@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import {
-  adminLogin,
+  getSession,
   listTags,
   createTag,
   updateTag,
@@ -17,11 +17,10 @@ import {
   type TapTag,
   type SearchItem,
   type TapAnalytics,
-  type TapSettings
+  type TapSettings,
+  type TapSession
 } from "./api";
 import { writeTapTag, isNfcWriteSupported } from "./nfc";
-
-const TOKEN_KEY = "tap.adminToken";
 
 // Build a tag's public URL exactly as the server does (token in the #fragment),
 // derived from where this console is served so copy/QR match the written tag.
@@ -49,42 +48,29 @@ function Art({ src, alt, size = 56 }: { src?: string | null; alt: string; size?:
   );
 }
 
-// ---------- login gate ----------
-function LoginGate({ onAuthed }: { onAuthed: (token: string) => void }) {
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setError("");
-    const res = await adminLogin(password);
-    setBusy(false);
-    if (res.ok && res.token) {
-      localStorage.setItem(TOKEN_KEY, res.token);
-      onAuthed(res.token);
-    } else setError(res.error || "Login failed");
+// ---------- sign-in card (our UI; auth is hl-auth SSO) ----------
+function SignInCard({ session }: { session: TapSession | null }) {
+  const goLogin = () => {
+    const base = (session?.loginUrl || "/auth/login");
+    const next = encodeURIComponent(window.location.pathname + window.location.search);
+    window.location.href = `${base}${base.includes("?") ? "&" : "?"}next=${next}`;
   };
   return (
     <div className="tap-state">
-      <form className="tap-state__card" onSubmit={submit}>
+      <div className="tap-state__card">
         <Wordmark />
         <h1 className="tap-state__title">Tap console</h1>
-        <p className="tap-state__body">Sign in to bind tags, write them, and manage your collection.</p>
-        <div className="tap-field" style={{ width: "100%" }}>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Admin password" aria-label="Admin password" autoFocus />
-        </div>
-        {error ? <div className="tap-alert tap-alert--err" role="alert" style={{ width: "100%" }}>{error}</div> : null}
-        <button className="tap-btn tap-btn--primary" type="submit" disabled={busy || !password} style={{ width: "100%" }}>
-          {busy ? "Signing in…" : "Sign in"}
+        <p className="tap-state__body">Sign in with your Harmonizer account to bind tags, write them, and manage your collection.</p>
+        <button className="tap-btn tap-btn--primary" onClick={goLogin} style={{ width: "100%" }} autoFocus>
+          Sign in with Harmonizer
         </button>
-      </form>
+      </div>
     </div>
   );
 }
 
 // ---------- write flow ----------
-function WriteView({ token, onCreated }: { token: string; onCreated: () => void }) {
+function WriteView({ onCreated }: { onCreated: () => void }) {
   const [query, setQuery] = useState("");
   const [source, setSource] = useState<"spotify" | "library">("spotify");
   const [albums, setAlbums] = useState<SearchItem[]>([]);
@@ -125,7 +111,7 @@ function WriteView({ token, onCreated }: { token: string; onCreated: () => void 
 
   const create = async (payload: Record<string, unknown>, display: SearchItem) => {
     setError("");
-    const res = await createTag(token, payload);
+    const res = await createTag(payload);
     if (res.status >= 200 && res.status < 300 && res.body?.tag) {
       const tg = res.body.tag;
       const tok = res.body.token;
@@ -293,14 +279,14 @@ function WriteView({ token, onCreated }: { token: string; onCreated: () => void 
 }
 
 // ---------- tags manager ----------
-function TagsView({ token, refreshKey }: { token: string; refreshKey: number }) {
+function TagsView({ refreshKey }: { refreshKey: number }) {
   const [tags, setTags] = useState<TapTag[] | null>(null);
   const [filter, setFilter] = useState("");
   const [busyId, setBusyId] = useState("");
 
   const load = useCallback(async () => {
-    setTags(await listTags(token));
-  }, [token]);
+    setTags(await listTags());
+  }, []);
   useEffect(() => { load(); }, [load, refreshKey]);
 
   const shown = useMemo(() => {
@@ -308,12 +294,12 @@ function TagsView({ token, refreshKey }: { token: string; refreshKey: number }) 
     return (tags || []).filter((t) => !f || `${t.display?.title} ${t.display?.artist} ${t.label}`.toLowerCase().includes(f));
   }, [tags, filter]);
 
-  const toggle = async (t: TapTag) => { setBusyId(t.tagId); await updateTag(token, t.tagId, { enabled: !t.enabled }); await load(); setBusyId(""); };
-  const remove = async (t: TapTag) => { if (!confirm(`Delete the tag for "${t.display?.title || t.tagId}"?`)) return; setBusyId(t.tagId); await deleteTag(token, t.tagId); await load(); setBusyId(""); };
+  const toggle = async (t: TapTag) => { setBusyId(t.tagId); await updateTag(t.tagId, { enabled: !t.enabled }); await load(); setBusyId(""); };
+  const remove = async (t: TapTag) => { if (!confirm(`Delete the tag for "${t.display?.title || t.tagId}"?`)) return; setBusyId(t.tagId); await deleteTag(t.tagId); await load(); setBusyId(""); };
   const copy = (t: TapTag) => { if (t.token) navigator.clipboard?.writeText(tapUrlFor(t.tagId, t.token)).catch(() => {}); };
   const setPolicy = async (t: TapTag, patch: { playMode?: "replace" | "queue"; volume?: number | null }) => {
     setBusyId(t.tagId);
-    await updateTag(token, t.tagId, { policy: { playMode: t.policy?.playMode || "replace", volume: t.policy?.volume ?? null, ...patch } });
+    await updateTag(t.tagId, { policy: { playMode: t.policy?.playMode || "replace", volume: t.policy?.volume ?? null, ...patch } });
     await load();
     setBusyId("");
   };
@@ -398,14 +384,14 @@ function BarChart({ series }: { series: { date: string; count: number }[] }) {
   );
 }
 
-function AnalyticsView({ token }: { token: string }) {
+function AnalyticsView() {
   const [data, setData] = useState<TapAnalytics | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
     let alive = true;
-    getAnalytics(token).then((d) => { if (alive) setData(d); }, () => { if (alive) setFailed(true); });
+    getAnalytics().then((d) => { if (alive) setData(d); }, () => { if (alive) setFailed(true); });
     return () => { alive = false; };
-  }, [token]);
+  }, []);
 
   return (
     <section className="tap-main" aria-label="Analytics">
@@ -461,9 +447,9 @@ function AnalyticsView({ token }: { token: string }) {
 }
 
 // ---------- printable labels ----------
-function PrintLabelsView({ token }: { token: string }) {
+function PrintLabelsView() {
   const [tags, setTags] = useState<TapTag[] | null>(null);
-  useEffect(() => { listTags(token).then(setTags, () => setTags([])); }, [token]);
+  useEffect(() => { listTags().then(setTags, () => setTags([])); }, []);
   const printable = (tags || []).filter((t) => t.token);
 
   return (
@@ -496,15 +482,15 @@ function PrintLabelsView({ token }: { token: string }) {
 }
 
 // ---------- settings ----------
-function SettingsView({ token }: { token: string }) {
+function SettingsView() {
   const [s, setS] = useState<TapSettings | null>(null);
   const [pwd, setPwd] = useState("");
   const [saved, setSaved] = useState(false);
-  useEffect(() => { getSettings(token).then(setS, () => setS({ debounceMs: 3000, partyMode: "open", requirePassword: false, hasPassword: false })); }, [token]);
+  useEffect(() => { getSettings().then(setS, () => setS({ debounceMs: 3000, partyMode: "open", requirePassword: false, hasPassword: false })); }, []);
 
   const save = async (patch: Record<string, unknown>) => {
     setSaved(false);
-    const next = await saveSettings(token, patch);
+    const next = await saveSettings(patch);
     setS(next);
     setSaved(true);
     if (typeof patch.password === "string") setPwd("");
@@ -558,17 +544,17 @@ function SettingsView({ token }: { token: string }) {
         {saved ? <div className="tap-alert tap-alert--ok" role="status">Saved.</div> : null}
       </div>
 
-      <BackupSection token={token} />
+      <BackupSection />
     </section>
   );
 }
 
-function BackupSection({ token }: { token: string }) {
+function BackupSection() {
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const inputRef = React.useRef<HTMLInputElement>(null);
 
   const doExport = async () => {
-    const data = await exportBackup(token);
+    const data = await exportBackup();
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -582,7 +568,7 @@ function BackupSection({ token }: { token: string }) {
   const doImport = async (file: File) => {
     try {
       const data = JSON.parse(await file.text());
-      const res = await importBackup(token, data);
+      const res = await importBackup(data);
       setMsg({ ok: true, text: `Imported ${res.imported} tag${res.imported === 1 ? "" : "s"}${res.skipped ? `, skipped ${res.skipped}` : ""}.` });
     } catch {
       setMsg({ ok: false, text: "That file wasn't a valid Tap backup." });
@@ -606,13 +592,30 @@ function BackupSection({ token }: { token: string }) {
 
 // ---------- shell ----------
 export function TapConsole() {
-  const [token, setToken] = useState<string | null>(() => (typeof localStorage !== "undefined" ? localStorage.getItem(TOKEN_KEY) : null));
+  const [session, setSession] = useState<TapSession | "loading">("loading");
   const [view, setView] = useState<"tags" | "write" | "analytics" | "print" | "settings">("tags");
   const [refreshKey, setRefreshKey] = useState(0);
 
-  if (!token) return <LoginGate onAuthed={setToken} />;
+  useEffect(() => {
+    getSession().then(setSession, () => setSession({ authed: false, user: null }));
+  }, []);
 
-  const signOut = () => { localStorage.removeItem(TOKEN_KEY); setToken(null); };
+  if (session === "loading") {
+    return <div className="tap-state"><span className="tap-spinner" aria-label="Loading" /></div>;
+  }
+  if (!session.authed) {
+    return <SignInCard session={session} />;
+  }
+
+  const signOut = () => {
+    // hl-auth logout is a POST — submit a form so the browser navigates + the
+    // session cookie is cleared by the auth service.
+    const form = document.createElement("form");
+    form.method = "POST";
+    form.action = session.logoutUrl || "/auth/logout";
+    document.body.appendChild(form);
+    form.submit();
+  };
   const navItem = (key: "tags" | "write" | "analytics" | "print" | "settings", label: string) => (
     <a className="tap-nav__item" href={`#${key}`} aria-current={view === key ? "page" : undefined} onClick={(e) => { e.preventDefault(); setView(key); }}>{label}</a>
   );
@@ -627,13 +630,14 @@ export function TapConsole() {
         {navItem("print", "Print labels")}
         {navItem("settings", "Settings")}
         <a className="tap-nav__item" aria-disabled="true" href="#stations">Reader stations<span className="tap-nav__soon">soon</span></a>
-        <button className="tap-btn tap-btn--ghost" style={{ marginTop: "auto" }} onClick={signOut}>Sign out</button>
+        {session.user?.username ? <div className="tap-nav__who" title="Signed in">{session.user.username}</div> : null}
+        <button className="tap-btn tap-btn--ghost" style={{ marginTop: session.user?.username ? undefined : "auto" }} onClick={signOut}>Sign out</button>
       </nav>
-      {view === "tags" ? <TagsView token={token} refreshKey={refreshKey} />
-        : view === "analytics" ? <AnalyticsView token={token} />
-        : view === "print" ? <PrintLabelsView token={token} />
-        : view === "settings" ? <SettingsView token={token} />
-        : <WriteView token={token} onCreated={() => setRefreshKey((k) => k + 1)} />}
+      {view === "tags" ? <TagsView refreshKey={refreshKey} />
+        : view === "analytics" ? <AnalyticsView />
+        : view === "print" ? <PrintLabelsView />
+        : view === "settings" ? <SettingsView />
+        : <WriteView onCreated={() => setRefreshKey((k) => k + 1)} />}
     </div>
   );
 }

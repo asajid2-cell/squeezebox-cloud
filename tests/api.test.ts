@@ -6559,7 +6559,9 @@ describe("Tap admin binding API", () => {
 
   it("requires admin auth to create a binding", async () => {
     const { app } = tapApp();
-    await request(app).post("/api/tap").send(albumTopBody).expect(401);
+    // x-forwarded-for marks this as a public (proxied) request so the hl-auth gate
+    // enforces (the local-direct bypass would otherwise treat it as trusted on-box).
+    await request(app).post("/api/tap").set("x-forwarded-for", "203.0.113.7").send(albumTopBody).expect(401);
   });
 
   it("creates a binding and returns a tap URL with the signed token in the fragment", async () => {
@@ -6638,7 +6640,7 @@ describe("Tap admin binding API", () => {
   it("serves analytics (admin-gated, not matched as a tag id)", async () => {
     const { app } = tapApp();
     const auth = await adminAuth(app);
-    await request(app).get("/api/tap/analytics").expect(401); // requires admin
+    await request(app).get("/api/tap/analytics").set("x-forwarded-for", "203.0.113.7").expect(401); // requires login (gate enforced)
     const res = await request(app).get("/api/tap/analytics").set("Authorization", auth).expect(200);
     expect(res.body).toHaveProperty("series");
     expect(res.body).toHaveProperty("mostTapped");
@@ -6648,13 +6650,23 @@ describe("Tap admin binding API", () => {
   it("reads + writes settings (admin); the password is never echoed back", async () => {
     const { app } = tapApp();
     const auth = await adminAuth(app);
-    await request(app).get("/api/tap/settings").expect(401);
+    await request(app).get("/api/tap/settings").set("x-forwarded-for", "203.0.113.7").expect(401);
     const got = await request(app).get("/api/tap/settings").set("Authorization", auth).expect(200);
     expect(got.body).toMatchObject({ partyMode: "open", requirePassword: false, hasPassword: false });
 
     const set = await request(app).post("/api/tap/settings").set("Authorization", auth).send({ partyMode: "closed", requirePassword: true, password: "sesame" }).expect(200);
     expect(set.body).toMatchObject({ partyMode: "closed", requirePassword: true, hasPassword: true });
     expect(set.body).not.toHaveProperty("password");
+  });
+
+  it("reports the hl-auth session (on-box bypass authed; public without cookie not authed)", async () => {
+    const { app } = tapApp();
+    const local = await request(app).get("/api/tap/session").expect(200);
+    expect(local.body.authed).toBe(true); // on-box/local-direct bypass
+
+    const remote = await request(app).get("/api/tap/session").set("x-forwarded-for", "203.0.113.7").expect(200);
+    expect(remote.body.authed).toBe(false); // public request, no hl_session cookie
+    expect(remote.body.loginUrl).toMatch(/\/auth\/login/);
   });
 
   it("exports then imports bindings via the API (admin)", async () => {

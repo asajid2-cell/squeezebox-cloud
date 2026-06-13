@@ -48,19 +48,20 @@ export async function playTap(tagId: string, token: string, auth: TapAuth = {}):
 export const pausePlayer = () => fetch("/api/player/pause", { method: "POST" });
 export const nextTrack = () => fetch("/api/player/next", { method: "POST" });
 
-// ---- admin console ----
-function authHeaders(token: string) {
-  return { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
-}
+// ---- admin console — auth is the hl-auth session cookie, sent automatically
+// on same-origin requests; no bearer tokens. The console gates on getSession().
+const JSON_HEADERS = { "Content-Type": "application/json" };
 
-export async function adminLogin(password: string): Promise<{ ok: boolean; token?: string; error?: string }> {
-  const res = await fetch("/api/admin/login", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password })
-  });
-  const body = await asJson(res);
-  return res.ok ? { ok: true, token: body.token } : { ok: false, error: body.error || "Login failed" };
+export type TapSession = {
+  authed: boolean;
+  user: { username: string; isMaster?: boolean; local?: boolean } | null;
+  loginUrl?: string;
+  logoutUrl?: string;
+};
+
+export async function getSession(): Promise<TapSession> {
+  const res = await fetch("/api/tap/session", { credentials: "same-origin" });
+  return (await asJson(res)) as TapSession;
 }
 
 export type SearchItem = {
@@ -102,8 +103,8 @@ export async function albumTracks(album: SearchItem): Promise<SearchItem[]> {
   return (body.results || body.children || []) as SearchItem[];
 }
 
-export async function listTags(token: string): Promise<TapTag[]> {
-  const res = await fetch("/api/tap", { headers: authHeaders(token) });
+export async function listTags(): Promise<TapTag[]> {
+  const res = await fetch("/api/tap", { credentials: "same-origin" });
   const body = await asJson(res);
   return (body.tags || []) as TapTag[];
 }
@@ -116,45 +117,45 @@ export type TapAnalytics = {
   mostTapped: { tagId: string; display?: TapDisplay; tapCount: number; kind?: string; lastTappedAt?: string | null }[];
 };
 
-export async function getAnalytics(token: string): Promise<TapAnalytics> {
-  const res = await fetch("/api/tap/analytics", { headers: authHeaders(token) });
+export async function getAnalytics(): Promise<TapAnalytics> {
+  const res = await fetch("/api/tap/analytics", { credentials: "same-origin" });
   return (await asJson(res)) as TapAnalytics;
 }
 
 export type TapSettings = { debounceMs: number; partyMode: "open" | "closed"; requirePassword: boolean; hasPassword: boolean };
 
-export async function getSettings(token: string): Promise<TapSettings> {
-  const res = await fetch("/api/tap/settings", { headers: authHeaders(token) });
+export async function getSettings(): Promise<TapSettings> {
+  const res = await fetch("/api/tap/settings", { credentials: "same-origin" });
   return (await asJson(res)) as TapSettings;
 }
 
-export async function saveSettings(token: string, patch: Record<string, unknown>): Promise<TapSettings> {
-  const res = await fetch("/api/tap/settings", { method: "POST", headers: authHeaders(token), body: JSON.stringify(patch) });
+export async function saveSettings(patch: Record<string, unknown>): Promise<TapSettings> {
+  const res = await fetch("/api/tap/settings", { method: "POST", headers: JSON_HEADERS, credentials: "same-origin", body: JSON.stringify(patch) });
   return (await asJson(res)) as TapSettings;
 }
 
-export async function exportBackup(token: string): Promise<unknown> {
-  const res = await fetch("/api/tap/export", { headers: authHeaders(token) });
+export async function exportBackup(): Promise<unknown> {
+  const res = await fetch("/api/tap/export", { credentials: "same-origin" });
   return asJson(res);
 }
 
-export async function importBackup(token: string, data: unknown): Promise<{ imported: number; skipped: number; total: number }> {
-  const res = await fetch("/api/tap/import", { method: "POST", headers: authHeaders(token), body: JSON.stringify(data) });
+export async function importBackup(data: unknown): Promise<{ imported: number; skipped: number; total: number }> {
+  const res = await fetch("/api/tap/import", { method: "POST", headers: JSON_HEADERS, credentials: "same-origin", body: JSON.stringify(data) });
   return (await asJson(res)) as { imported: number; skipped: number; total: number };
 }
 
-export async function createTag(token: string, payload: Record<string, unknown>) {
-  const res = await fetch("/api/tap", { method: "POST", headers: authHeaders(token), body: JSON.stringify(payload) });
+export async function createTag(payload: Record<string, unknown>) {
+  const res = await fetch("/api/tap", { method: "POST", headers: JSON_HEADERS, credentials: "same-origin", body: JSON.stringify(payload) });
   return { status: res.status, body: await asJson(res) };
 }
 
-export async function updateTag(token: string, tagId: string, patch: Record<string, unknown>) {
-  const res = await fetch(`/api/tap/${encodeURIComponent(tagId)}`, { method: "PUT", headers: authHeaders(token), body: JSON.stringify(patch) });
+export async function updateTag(tagId: string, patch: Record<string, unknown>) {
+  const res = await fetch(`/api/tap/${encodeURIComponent(tagId)}`, { method: "PUT", headers: JSON_HEADERS, credentials: "same-origin", body: JSON.stringify(patch) });
   return { status: res.status, body: await asJson(res) };
 }
 
-export async function deleteTag(token: string, tagId: string) {
-  const res = await fetch(`/api/tap/${encodeURIComponent(tagId)}`, { method: "DELETE", headers: authHeaders(token) });
+export async function deleteTag(tagId: string) {
+  const res = await fetch(`/api/tap/${encodeURIComponent(tagId)}`, { method: "DELETE", credentials: "same-origin" });
   return res.ok;
 }
 

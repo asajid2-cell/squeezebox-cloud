@@ -151,6 +151,7 @@ h1, h2, h3, p { margin: 0; }
 .tap-nav__item[aria-current="page"] { background: var(--rose-soft); color: var(--text); }
 .tap-nav__item:hover { color: var(--text); }
 .tap-nav__soon { margin-left: auto; font-size: 11px; color: var(--faint); border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; }
+.tap-nav__who { margin-top: auto; padding: var(--s2) var(--s3) 0; color: var(--faint); font-size: var(--step-0); overflow-wrap: anywhere; }
 
 .tap-main { min-width: 0; padding: clamp(var(--s4), 3vw, var(--s6)); display: grid; gap: var(--s5); align-content: start; }
 .tap-head { display: grid; gap: var(--s2); }
