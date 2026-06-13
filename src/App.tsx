@@ -1,4 +1,4 @@
-import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle2,
   ChevronRight,
@@ -12,6 +12,7 @@ import {
   ListMusic,
   ListPlus,
   LockKeyhole,
+  MoreHorizontal,
   Music2,
   Pause,
   Pencil,
@@ -1290,6 +1291,33 @@ function SpotifyDetail({
   );
 }
 
+// Overflow menu for a row's secondary actions — keeps the row to one prominent
+// primary action + a "More" button, instead of a wall of buttons (esp. on mobile).
+function RowMenu({ children, label }: { children: ReactNode; label?: string }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    function onDoc(e: MouseEvent) { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); }
+    function onKey(e: KeyboardEvent) { if (e.key === "Escape") setOpen(false); }
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+  return (
+    <div className="row-menu" ref={ref}>
+      <button className="icon-button" aria-label={label || "More actions"} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        <MoreHorizontal size={16} />
+      </button>
+      {open && (
+        <div className="row-menu__pop" role="menu" onClick={(e) => { if ((e.target as HTMLElement).closest(".row-menu__item")) setOpen(false); }}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SearchResultRow({ track, requestsOpen, onRefresh, onAction, siblingTracks }: { track: Track; requestsOpen: boolean; onRefresh: () => void; onAction: ActionRunner; siblingTracks?: Track[] }) {
   const { mode } = usePlaybackMode();
   const local = useLocalPlayerContext();
@@ -1335,11 +1363,13 @@ function SearchResultRow({ track, requestsOpen, onRefresh, onAction, siblingTrac
       <span>{track.kind && track.kind !== "track" ? track.kind : track.duration ? formatTime(track.duration) : "--:--"}</span>
       <div className="track-actions">
         {playable && <button className="primary-small row-play" disabled={disabled} onClick={() => run("play-now")}><Play size={14} />{isLocal ? "Play here" : "Play"}</button>}
-        {playable && <button className="ghost-add" disabled={disabled} onClick={() => run("play-next")} data-tooltip="Play next"><ListPlus size={14} /><span className="action-label">Next</span></button>}
-        {playable && <button className="ghost-add" disabled={disabled} onClick={() => run("add-queue")} data-tooltip="Add to queue"><ListMusic size={14} /><span className="action-label">Queue</span></button>}
-        {playable && <AddToPlaylistButton track={track} />}
-        {(!track.kind || track.kind === "track") && (track.uri || track.id)?.toString().includes("spotify:") && <ArchiveTrackButton track={track} />}
-        <CurationButtons track={track} onAction={onAction} />
+        <RowMenu label={`More actions for ${track.title}`}>
+          {playable && <button className="row-menu__item" disabled={disabled} onClick={() => run("play-next")}><ListPlus size={15} /> Play next</button>}
+          {playable && <button className="row-menu__item" disabled={disabled} onClick={() => run("add-queue")}><ListMusic size={15} /> Add to queue</button>}
+          {playable && <AddToPlaylistButton track={track} />}
+          {(!track.kind || track.kind === "track") && (track.uri || track.id)?.toString().includes("spotify:") && <ArchiveTrackButton track={track} />}
+          <CurationButtons track={track} onAction={onAction} />
+        </RowMenu>
       </div>
     </div>
   );

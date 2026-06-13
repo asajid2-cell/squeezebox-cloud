@@ -863,6 +863,45 @@ input[type="range"] {
   border-radius: var(--radius-control);
   font-weight: 700;
 }
+/* row overflow menu — collapses secondary actions behind a single "More" button */
+.row-menu { position: relative; display: inline-flex; }
+.row-menu__pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 30;
+  min-width: 190px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--panel-soft);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, .55);
+}
+.row-menu__pop button,
+.row-menu__pop .ghost-add {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 10px;
+  min-height: 40px;
+  padding: 0 10px;
+  border-color: transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+.row-menu__pop button:hover,
+.row-menu__pop .ghost-add:hover {
+  background: var(--line-soft);
+  border-color: transparent;
+  color: var(--text);
+}
+.row-menu__pop .ghost-add.danger-text:hover,
+.row-menu__pop .ghost-add.danger-text { color: #ffb4b4; }
+.row-menu__pop .add-to-playlist { width: 100%; }
 .ghost-add.icon-text {
   align-items: center;
   display: inline-flex;
