@@ -200,3 +200,14 @@ export function tokenFromHash(hash: string = window.location.hash): string {
   const m = String(hash || "").match(/[#&]k=([^&]+)/);
   return m ? decodeURIComponent(m[1]) : "";
 }
+
+// Cover-art URLs from the API are stored RELATIVE (e.g. "api/image-proxy?...").
+// On the tapper page (/cloud-squeeze/tap/t/:id) a relative <img src> resolves
+// against the page path (wrong → broken cover). Prefix relative api/ paths with
+// the mount base so they resolve to /cloud-squeeze/api/... like the fetch shim.
+export function artSrc(art?: string | null): string | undefined {
+  if (!art) return undefined;
+  if (/^(https?:|data:|blob:)/i.test(art)) return art;
+  const base = String(import.meta.env.BASE_URL || "/").replace(/\/+$/, "");
+  return `${base}${art.startsWith("/") ? "" : "/"}${art}`;
+}

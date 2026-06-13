@@ -720,7 +720,7 @@ describe("LMS client parsing", () => {
 
     await client.loadAlbum("player-1", { source: "spotify", albumUri: "spotify:album:xyz789" });
 
-    expect(commands).toContain("player-1 playlist play spotify://album:xyz789");
+    expect(commands).toContain("player-1 playlist play spotify:album:xyz789");
     expect(commands).toContain("player-1 play");
   });
 
@@ -751,7 +751,7 @@ describe("LMS client parsing", () => {
 
     await client.loadAlbum("player-1", { source: "spotify", albumUri: "spotify:album:xyz789", startIndex: 2 });
 
-    expect(commands).toContain("player-1 playlist play spotify://album:xyz789");
+    expect(commands).toContain("player-1 playlist play spotify:album:xyz789");
     expect(commands).toContain("player-1 playlist index 2");
   });
 

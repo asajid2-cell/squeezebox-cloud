@@ -261,9 +261,11 @@ export class LmsClient {
       if (!/^spotify:album:[A-Za-z0-9]+$/i.test(albumUri)) {
         throw new Error("A spotify:album:<id> URI is required to load a Spotify album");
       }
-      const playbackUri = albumUri.replace(/^spotify:album:/i, "spotify://album:");
+      // Spotty plays a Spotify ALBUM via the plain `spotify:album:<id>` form —
+      // NOT the `spotify://album:` slash form that tracks use (that one silently
+      // loads 0 tracks). Verified against the live Spotty/LMS.
       const encoded = encodeURIComponent(playerId);
-      await this.command(`${encoded} playlist play ${playbackUri}`);
+      await this.command(`${encoded} playlist play ${albumUri}`);
       if (startIndex > 0) await this.command(`${encoded} playlist index ${startIndex}`);
       await this.control(playerId, "play");
       return { source: "spotify", albumUri, startIndex };

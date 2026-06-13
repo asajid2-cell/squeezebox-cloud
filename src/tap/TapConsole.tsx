@@ -16,6 +16,7 @@ import {
   saveSettings,
   exportBackup,
   importBackup,
+  artSrc,
   type TapTag,
   type SearchItem,
   type TapAnalytics,
@@ -45,10 +46,11 @@ function Wordmark() {
 
 function Art({ src, alt, size = 56 }: { src?: string | null; alt: string; size?: number }) {
   const [broken, setBroken] = useState(false);
+  const resolved = artSrc(src);
   return (
     <div className="tap-card__art" style={{ width: size, height: size }}>
-      {src && !broken ? (
-        <img src={src} alt={alt} onError={() => setBroken(true)} />
+      {resolved && !broken ? (
+        <img src={resolved} alt={alt} onError={() => setBroken(true)} />
       ) : (
         <div className="tap-art__fallback" aria-hidden="true">
           <svg width={size * 0.45} height={size * 0.45} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M9 18V6l10-2v12" /><circle cx="6" cy="18" r="3" /><circle cx="19" cy="16" r="3" /></svg>

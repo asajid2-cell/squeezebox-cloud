@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { playTap, pausePlayer, nextTrack, tokenFromHash, type TapDisplay, type TapPlayResult } from "./api";
+import { playTap, pausePlayer, nextTrack, tokenFromHash, artSrc, type TapDisplay, type TapPlayResult } from "./api";
 
 type TapState =
   | { phase: "loading" }
@@ -48,7 +48,7 @@ function Wordmark() {
 
 function Art({ display, skeleton }: { display?: TapDisplay; skeleton?: boolean }) {
   const [broken, setBroken] = useState(false);
-  const src = display?.art;
+  const src = artSrc(display?.art);
   return (
     <div className={`tap-art${skeleton ? " tap-art--skeleton" : ""}`}>
       {src && !broken ? (

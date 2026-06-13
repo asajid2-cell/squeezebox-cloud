@@ -6558,7 +6558,9 @@ describe("Tap admin binding API", () => {
 
   it("requires admin auth to create a binding", async () => {
     const { app } = tapApp();
-    await request(app).post("/api/tap").send(albumTopBody).expect(401);
+    // x-forwarded-for makes the request look like it arrived via the public nginx,
+    // so the on-box local-direct bypass is skipped and the hl-auth gate runs.
+    await request(app).post("/api/tap").set("x-forwarded-for", "203.0.113.7").send(albumTopBody).expect(401);
   });
 
   it("creates a binding and returns a tap URL with the signed token in the fragment", async () => {

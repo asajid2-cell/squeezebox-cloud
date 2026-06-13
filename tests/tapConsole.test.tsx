@@ -16,7 +16,10 @@ vi.mock("../src/tap/api", () => ({
   getSettings: vi.fn(),
   saveSettings: vi.fn(),
   exportBackup: vi.fn(),
-  importBackup: vi.fn()
+  importBackup: vi.fn(),
+  // Plain fn (not vi.fn) so resetAllMocks() leaves it intact — it's a pure
+  // URL helper the Art component calls during render, not a behavior under test.
+  artSrc: (art?: string | null) => (art ? art : undefined)
 }));
 vi.mock("../src/tap/nfc", () => ({
   writeTapTag: vi.fn(async () => ({ ok: true })),
