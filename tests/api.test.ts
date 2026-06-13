@@ -6643,6 +6643,18 @@ describe("Tap admin binding API", () => {
     expect(res.body).toHaveProperty("mostTapped");
     expect(Array.isArray(res.body.series)).toBe(true);
   });
+
+  it("reads + writes settings (admin); the password is never echoed back", async () => {
+    const { app } = tapApp();
+    const auth = await adminAuth(app);
+    await request(app).get("/api/tap/settings").expect(401);
+    const got = await request(app).get("/api/tap/settings").set("Authorization", auth).expect(200);
+    expect(got.body).toMatchObject({ partyMode: "open", requirePassword: false, hasPassword: false });
+
+    const set = await request(app).post("/api/tap/settings").set("Authorization", auth).send({ partyMode: "closed", requirePassword: true, password: "sesame" }).expect(200);
+    expect(set.body).toMatchObject({ partyMode: "closed", requirePassword: true, hasPassword: true });
+    expect(set.body).not.toHaveProperty("password");
+  });
 });
 
 describe("Tap resolver golden cases", () => {
@@ -6770,5 +6782,29 @@ describe("Tap resolver golden cases", () => {
     // ...and queue mode adds to the queue rather than replacing.
     const playCall = lms.calls.find((c) => c.m === "playTrack");
     expect(playCall?.args[2]).toBe("add-queue");
+  });
+
+  it("blocks taps when party mode is closed (423, nothing played)", async () => {
+    const lms = recordingLms();
+    const { app, tapStore } = setup(lms);
+    tapStore.setSettings({ partyMode: "closed" });
+    const tag = tapStore.create({ playSpec: { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" }, display: {} });
+    const token = tapStore.tokenFor(tag.tagId);
+
+    const res = await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token }).expect(423);
+    expect(res.body.reason).toBe("closed");
+    expect(lms.calls).toHaveLength(0);
+  });
+
+  it("requires the configured password when enabled, then plays with it", async () => {
+    const lms = recordingLms();
+    const { app, tapStore } = setup(lms);
+    tapStore.setSettings({ requirePassword: true, password: "sesame" });
+    const tag = tapStore.create({ playSpec: { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" }, display: {} });
+    const token = tapStore.tokenFor(tag.tagId);
+
+    await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token }).expect(401); // no password
+    await request(app).post(`/api/tap/${tag.tagId}/play`).set("x-tap-password", "sesame").send({ token }).expect(200);
+    expect(lms.calls.filter((c) => c.m === "loadAlbum")).toHaveLength(1);
   });
 });

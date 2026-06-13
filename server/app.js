@@ -1861,9 +1861,17 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     res.json({ tags });
   });
 
-  // Registered BEFORE /api/tap/:id so "analytics" isn't matched as a tag id.
+  // Registered BEFORE /api/tap/:id so "analytics"/"settings" aren't matched as ids.
   app.get("/api/tap/analytics", requireAdmin, (_req, res) => {
     res.json(tapStore.analytics());
+  });
+
+  app.get("/api/tap/settings", requireAdmin, (_req, res) => {
+    res.json(tapStore.publicSettings());
+  });
+
+  app.post("/api/tap/settings", requireAdmin, (req, res) => {
+    res.json(tapStore.setSettings(req.body || {}));
   });
 
   app.get("/api/tap/:id", requireAdmin, (req, res) => {
@@ -1928,15 +1936,25 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       res.status(409).json({ ok: false, reason: "disabled", message: "This tag is turned off." });
       return;
     }
-    // Optional global password (off by default) — the one guard that also stops a
-    // forwarded full URL from playing remotely. Enable via TAP_PASSWORD.
-    if (process.env.TAP_PASSWORD && req.get("x-tap-password") !== process.env.TAP_PASSWORD) {
+
+    // Runtime settings (party-mode, optional password, debounce window).
+    const settings = tapStore.settings();
+    if (settings.partyMode === "closed") {
+      res.status(423).json({ ok: false, reason: "closed", message: "Tap is paused right now." });
+      return;
+    }
+    // Optional password (off by default) — the one guard that also stops a
+    // forwarded full URL from playing remotely. Configured in Tap settings;
+    // falls back to the TAP_PASSWORD env if set and no runtime password is on.
+    const requiredPassword = settings.requirePassword ? settings.password : process.env.TAP_PASSWORD || "";
+    if (requiredPassword && req.get("x-tap-password") !== requiredPassword) {
       res.status(401).json({ ok: false, reason: "password", message: "A password is required to play this." });
       return;
     }
 
+    const debounceMs = Number.isFinite(settings.debounceMs) ? settings.debounceMs : TAP_DEBOUNCE_MS;
     const prior = tapPlayState.get(tagId);
-    if (prior && Date.now() - prior.lastPlayedAt < TAP_DEBOUNCE_MS) {
+    if (prior && Date.now() - prior.lastPlayedAt < debounceMs) {
       logEvent("tap.play.debounced", { tagId });
       res.json({ ok: true, debounced: true, tag: publicTapTag(tag), nowPlaying: appState.nowPlaying });
       return;

@@ -33,9 +33,25 @@ function normalizePolicy(policy = {}) {
 
 const MAX_EVENTS = 5000; // bounded tap-history log for analytics
 
+const DEFAULT_SETTINGS = { debounceMs: 3000, partyMode: "open", requirePassword: false, password: "" };
+
+// Runtime Tap settings (clamped + defaulted). The password is never echoed back
+// in plain form by the API — callers expose only `hasPassword`.
+function normalizeSettings(s = {}) {
+  const debounceRaw = Number(s?.debounceMs);
+  const debounceMs = Number.isFinite(debounceRaw) ? Math.max(0, Math.min(60000, Math.round(debounceRaw))) : DEFAULT_SETTINGS.debounceMs;
+  return {
+    debounceMs,
+    partyMode: s?.partyMode === "closed" ? "closed" : "open",
+    requirePassword: Boolean(s?.requirePassword),
+    password: typeof s?.password === "string" ? s.password : ""
+  };
+}
+
 export function createTapStore({ file = defaultFile(), persist: persistEnabled = true } = {}) {
   const tags = new Map();
   let events = []; // [{ tagId, at }] — newest last
+  let settings = { ...DEFAULT_SETTINGS };
   let persistDisabled = !persistEnabled;
 
   function load() {
@@ -46,6 +62,7 @@ export function createTapStore({ file = defaultFile(), persist: persistEnabled =
         if (tag?.tagId) tags.set(tag.tagId, tag);
       }
       if (Array.isArray(parsed?.events)) events = parsed.events.slice(-MAX_EVENTS);
+      if (parsed?.settings) settings = normalizeSettings(parsed.settings);
     } catch (error) {
       if (error?.code !== "ENOENT") {
         console.warn(`[tap] could not read ${file}: ${error?.message || error} (starting empty)`);
@@ -58,7 +75,7 @@ export function createTapStore({ file = defaultFile(), persist: persistEnabled =
     try {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       const tmp = `${file}.tmp-${crypto.randomBytes(4).toString("hex")}`;
-      fs.writeFileSync(tmp, JSON.stringify({ tags: [...tags.values()], events }, null, 2));
+      fs.writeFileSync(tmp, JSON.stringify({ tags: [...tags.values()], events, settings }, null, 2));
       fs.renameSync(tmp, file);
     } catch (error) {
       persistDisabled = true;
@@ -166,6 +183,26 @@ export function createTapStore({ file = defaultFile(), persist: persistEnabled =
         series,
         mostTapped
       };
+    },
+
+    // Raw settings incl. password — internal use (resolver).
+    settings() {
+      return { ...settings };
+    },
+
+    // Safe settings for the admin API — never echoes the password back.
+    publicSettings() {
+      return { debounceMs: settings.debounceMs, partyMode: settings.partyMode, requirePassword: settings.requirePassword, hasPassword: Boolean(settings.password) };
+    },
+
+    setSettings(patch = {}) {
+      // Keep the existing password if the patch omits it (so toggling other
+      // settings doesn't wipe it); only change it when a string is provided.
+      const next = { ...settings, ...patch };
+      if (typeof patch.password !== "string") next.password = settings.password;
+      settings = normalizeSettings(next);
+      persist();
+      return this.publicSettings();
     },
 
     tokenFor(tagId) {

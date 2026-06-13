@@ -132,4 +132,18 @@ describe("Tap store", () => {
     expect(an.series.at(-1)).toMatchObject({ date: "2026-06-12", count: 2 });
     expect(an.series.at(-2)).toMatchObject({ date: "2026-06-11", count: 1 });
   });
+
+  it("manages runtime settings (defaults, clamp, password kept hidden + preserved)", () => {
+    const store = createTapStore({ file, persist: false });
+    expect(store.publicSettings()).toEqual({ debounceMs: 3000, partyMode: "open", requirePassword: false, hasPassword: false });
+
+    const pub = store.setSettings({ debounceMs: 99999, partyMode: "closed", requirePassword: true, password: "sesame" });
+    expect(pub).toEqual({ debounceMs: 60000, partyMode: "closed", requirePassword: true, hasPassword: true }); // clamped
+    expect(pub).not.toHaveProperty("password");
+    expect(store.settings().password).toBe("sesame");
+
+    // Toggling another setting must NOT wipe the password.
+    store.setSettings({ partyMode: "open" });
+    expect(store.settings().password).toBe("sesame");
+  });
 });
