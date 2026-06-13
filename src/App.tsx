@@ -1334,9 +1334,9 @@ function SearchResultRow({ track, requestsOpen, onRefresh, onAction, siblingTrac
       </div>
       <span>{track.kind && track.kind !== "track" ? track.kind : track.duration ? formatTime(track.duration) : "--:--"}</span>
       <div className="track-actions">
-        {playable && <button className="ghost-add" disabled={disabled} onClick={() => run("play-now")}>{isLocal ? "Play here" : "Play now"}</button>}
-        {playable && <button className="ghost-add" disabled={disabled} onClick={() => run("play-next")}>Play next</button>}
-        {playable && <button className="ghost-add" disabled={disabled} onClick={() => run("add-queue")}>Queue</button>}
+        {playable && <button className="primary-small row-play" disabled={disabled} onClick={() => run("play-now")}><Play size={14} />{isLocal ? "Play here" : "Play"}</button>}
+        {playable && <button className="ghost-add" disabled={disabled} onClick={() => run("play-next")} data-tooltip="Play next"><ListPlus size={14} /><span className="action-label">Next</span></button>}
+        {playable && <button className="ghost-add" disabled={disabled} onClick={() => run("add-queue")} data-tooltip="Add to queue"><ListMusic size={14} /><span className="action-label">Queue</span></button>}
         {playable && <AddToPlaylistButton track={track} />}
         {(!track.kind || track.kind === "track") && (track.uri || track.id)?.toString().includes("spotify:") && <ArchiveTrackButton track={track} />}
         <CurationButtons track={track} onAction={onAction} />

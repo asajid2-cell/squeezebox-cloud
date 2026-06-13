@@ -834,12 +834,29 @@ input[type="range"] {
   white-space: nowrap;
 }
 .queue-row > span, .result-row > span { color: var(--muted); font-size: 13px; }
+/* secondary row action — quiet by default, warms on hover so it recedes behind
+   the primary Play button (clear weight hierarchy instead of a wall of rose). */
 .ghost-add {
-  min-height: 32px;
-  padding: 0 12px;
-  border-color: rgba(255, 95, 131, .38);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 34px;
+  padding: 0 10px;
+  border-color: var(--line);
+  border-radius: var(--radius-control);
   background: transparent;
-  color: var(--rose);
+  color: var(--muted);
+}
+.ghost-add:hover { border-color: rgba(255, 95, 131, .45); color: var(--text); }
+/* primary action in a row — the one filled, prominent control. */
+.row-play {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: var(--radius-control);
+  font-weight: 700;
 }
 .ghost-add.icon-text {
   align-items: center;
