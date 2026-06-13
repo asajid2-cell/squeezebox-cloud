@@ -438,14 +438,16 @@ nav button.active {
 }
 .album-art {
   position: relative;
-  min-height: 184px;
+  aspect-ratio: 1 / 1;       /* album covers are square — no wide-short crop */
+  min-height: 0;
+  max-width: 420px;
   display: grid;
   align-content: center;
   justify-items: center;
   gap: 14px;
   overflow: hidden;
-  border: 1px solid #252432;
-  border-radius: 7px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
   background:
     radial-gradient(circle at 50% 100%, rgba(255, 95, 131, .34), transparent 34%),
     #07070c;
@@ -1408,6 +1410,8 @@ input[type="range"] {
   .desktop-shell { grid-template-columns: 1fr; }
   .sidebar {
     min-height: auto;
+    height: auto;            /* was 100vh + sticky -> ate a whole viewport before content */
+    position: static;
     padding: 18px;
     border-right: 0;
     border-bottom: 1px solid var(--line);
@@ -1426,8 +1430,12 @@ input[type="range"] {
       "rail";
   }
   .playing-layout, .right-rail, .audit-grid, .connect-grid, .connect-steps, .port-row { grid-template-columns: 1fr; }
-  .queue-row { grid-template-columns: 42px 1fr 52px; }
+  /* now-playing art stays square + capped (don't let the 1-col frame go wide-short) */
+  .album-art { width: min(100%, 260px); justify-self: center; }
+  /* queue rows: 2-col, actions wrap to their own full-width line */
+  .queue-row { grid-template-columns: 42px minmax(0, 1fr); }
   .queue-row > span:nth-of-type(1), .queue-row > span:nth-of-type(2) { display: none; }
+  .queue-actions { grid-column: 1 / -1; justify-content: flex-start; flex-wrap: wrap; }
   /* search results: drop the fixed 260px action column that starved the title/artist
      text to zero width; stack actions onto their own full-width row instead. */
   .result-row:not(.browse-row) {
@@ -1444,9 +1452,21 @@ input[type="range"] {
   }
   .result-row strong { white-space: normal; }
   .result-row small { overflow-wrap: anywhere; }
-  /* 44px touch targets on mobile (ui-craft floor) */
-  button, .ghost-add, .row-play, .top-link { min-height: 44px; }
-  .icon-button { min-height: 44px; min-width: 44px; }
+  /* touch targets: 44px on TRUE tap targets only — not the compact chips/tabs/segmented
+     controls (a blanket button{44px} bloated those across every screen). */
+  .top-link, nav button, .transport button,
+  .track-actions .ghost-add, .track-actions .row-play,
+  .playlist-detail-actions .ghost-add, .playlist-create-form button,
+  .playlist-popover button, .admin-row button { min-height: 44px; }
+  .icon-button, .archive-thumb { width: 44px; min-width: 44px; height: 44px; min-height: 44px; }
+  .track-actions .icon-button { min-width: 44px; }
+  /* restore intentionally-compact controls */
+  .suggestion-row button { min-height: 36px; }
+  .source-tabs { flex-wrap: wrap; gap: 8px; }
+  .source-tabs button { min-height: 40px; padding: 0 10px; }
+  .link-button { min-height: 30px; }
+  .mode-toggle button { min-height: 40px; }
+  .playback-options button, .shuffle-source button { min-height: 36px; }
 }
 
 /* ---- Grouped Spotify search + playlists ---- */
