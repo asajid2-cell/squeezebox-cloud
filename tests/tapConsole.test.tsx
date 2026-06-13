@@ -67,6 +67,22 @@ describe("Tap console — tag manager", () => {
     await userEvent.click(screen.getByRole("button", { name: /pause/i }));
     expect(mocked.updateTag).toHaveBeenCalledWith("tok", "a1", { enabled: false });
   });
+
+  it("sets a per-tag volume and queue play-mode from the card", async () => {
+    localStorage.setItem("tap.adminToken", "tok");
+    mocked.listTags.mockResolvedValue([
+      { tagId: "a1", enabled: true, display: { title: "Kyoto", artist: "PB" }, tapCount: 0, playSpec: { kind: "track" }, policy: { playMode: "replace", volume: null }, token: "sig" }
+    ]);
+    mocked.updateTag.mockResolvedValue({});
+    render(<TapConsole />);
+    await waitFor(() => expect(screen.getByText("Kyoto")).toBeInTheDocument());
+
+    await userEvent.selectOptions(screen.getByLabelText(/Volume for Kyoto/i), "60");
+    expect(mocked.updateTag).toHaveBeenCalledWith("tok", "a1", { policy: { playMode: "replace", volume: 60 } });
+
+    await userEvent.click(screen.getByRole("button", { name: "Queue" }));
+    expect(mocked.updateTag).toHaveBeenCalledWith("tok", "a1", expect.objectContaining({ policy: expect.objectContaining({ playMode: "queue" }) }));
+  });
 });
 
 describe("Tap console — bind & write", () => {

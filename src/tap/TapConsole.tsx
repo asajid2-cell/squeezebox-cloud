@@ -304,6 +304,12 @@ function TagsView({ token, refreshKey }: { token: string; refreshKey: number }) 
   const toggle = async (t: TapTag) => { setBusyId(t.tagId); await updateTag(token, t.tagId, { enabled: !t.enabled }); await load(); setBusyId(""); };
   const remove = async (t: TapTag) => { if (!confirm(`Delete the tag for "${t.display?.title || t.tagId}"?`)) return; setBusyId(t.tagId); await deleteTag(token, t.tagId); await load(); setBusyId(""); };
   const copy = (t: TapTag) => { if (t.token) navigator.clipboard?.writeText(tapUrlFor(t.tagId, t.token)).catch(() => {}); };
+  const setPolicy = async (t: TapTag, patch: { playMode?: "replace" | "queue"; volume?: number | null }) => {
+    setBusyId(t.tagId);
+    await updateTag(token, t.tagId, { policy: { playMode: t.policy?.playMode || "replace", volume: t.policy?.volume ?? null, ...patch } });
+    await load();
+    setBusyId("");
+  };
 
   return (
     <section className="tap-main" aria-label="Tags">
@@ -340,6 +346,21 @@ function TagsView({ token, refreshKey }: { token: string; refreshKey: number }) 
                 <span>{t.playSpec?.kind === "album-from-track" ? "Album from a song" : t.playSpec?.kind === "album-from-top" ? "Whole album" : "Single song"}</span>
                 <span>Tapped {t.tapCount ?? 0}×</span>
                 {!t.enabled ? <span style={{ color: "var(--amber)" }}>Off</span> : null}
+              </div>
+              <div className="tap-card__behavior">
+                {t.playSpec?.kind === "track" ? (
+                  <div className="tap-toggle" role="group" aria-label="Play mode">
+                    <button type="button" aria-pressed={(t.policy?.playMode || "replace") === "replace"} onClick={() => setPolicy(t, { playMode: "replace" })} disabled={busyId === t.tagId}>Play</button>
+                    <button type="button" aria-pressed={t.policy?.playMode === "queue"} onClick={() => setPolicy(t, { playMode: "queue" })} disabled={busyId === t.tagId}>Queue</button>
+                  </div>
+                ) : null}
+                <label className="tap-vol">Vol
+                  <select value={t.policy?.volume ?? ""} aria-label={`Volume for ${t.display?.title || "tag"}`} disabled={busyId === t.tagId}
+                    onChange={(e) => setPolicy(t, { volume: e.target.value === "" ? null : Number(e.target.value) })}>
+                    <option value="">Default</option>
+                    {[20, 40, 60, 80, 100].map((v) => <option key={v} value={v}>{v}</option>)}
+                  </select>
+                </label>
               </div>
               <div className="tap-card__actions">
                 <button className="tap-btn" onClick={() => toggle(t)} disabled={busyId === t.tagId}>{t.enabled ? "Pause" : "Enable"}</button>

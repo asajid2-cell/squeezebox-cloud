@@ -9,6 +9,7 @@ export type TapTag = {
   tapCount?: number;
   lastTappedAt?: string | null;
   playSpec?: { kind?: string; source?: string };
+  policy?: { playMode?: "replace" | "queue"; volume?: number | null };
   token?: string;
 };
 export type TapPlayResult = {
