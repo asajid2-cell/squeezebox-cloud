@@ -53,10 +53,43 @@ export async function adminLogin(password: string): Promise<{ ok: boolean; token
   return res.ok ? { ok: true, token: body.token } : { ok: false, error: body.error || "Login failed" };
 }
 
-export async function searchLibrary(query: string): Promise<TapTag[]> {
-  const res = await fetch(`/api/library/search?q=${encodeURIComponent(query)}&limit=20`);
+export type SearchItem = {
+  id?: string;
+  title?: string;
+  artist?: string;
+  album?: string;
+  source?: string;
+  kind?: "track" | "album" | "artist" | "playlist";
+  uri?: string;
+  browseId?: string;
+  art?: string | null;
+  path?: string;
+  lmsTrackId?: string | number;
+};
+export type SearchGroups = { tracks: SearchItem[]; artists: SearchItem[]; albums: SearchItem[]; playlists: SearchItem[] };
+
+export async function searchLibrary(query: string): Promise<SearchItem[]> {
+  const res = await fetch(`/api/library/search?q=${encodeURIComponent(query)}&limit=25&source=all`);
   const body = await asJson(res);
-  return (body.results || body.tracks || []) as TapTag[];
+  return (body.results || body.tracks || []) as SearchItem[];
+}
+
+export async function spotifySearch(query: string): Promise<{ results: SearchItem[]; groups?: SearchGroups }> {
+  const res = await fetch(`/api/spotify/search?q=${encodeURIComponent(query)}&limit=20`);
+  return (await asJson(res)) as { results: SearchItem[]; groups?: SearchGroups };
+}
+
+// An album's tracks IN ORDER — used to bind album-from-track (the chosen track's
+// index in this list is the startIndex).
+export async function albumTracks(album: SearchItem): Promise<SearchItem[]> {
+  const qs = new URLSearchParams();
+  if (album.browseId) qs.set("browseId", album.browseId);
+  if (album.uri) qs.set("uri", album.uri);
+  qs.set("kind", "album");
+  if (album.title) qs.set("title", album.title);
+  const res = await fetch(`/api/spotify/children?${qs.toString()}`);
+  const body = await asJson(res);
+  return (body.results || body.children || []) as SearchItem[];
 }
 
 export async function listTags(token: string): Promise<TapTag[]> {

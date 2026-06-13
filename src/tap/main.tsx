@@ -1,8 +1,11 @@
-import React from "react";
+import React, { Suspense } from "react";
 import ReactDOM from "react-dom/client";
 import "./tap.css";
 import { TapNow } from "./TapNow";
-import { TapConsole } from "./TapConsole";
+
+// The console (search/bind/QR/manage) is lazy-loaded so the public tapper page
+// never downloads it — the tapper bundle stays tiny.
+const TapConsole = React.lazy(() => import("./TapConsole").then((m) => ({ default: m.TapConsole })));
 
 // Demo states render a fixed UI with no backend so the design can be previewed
 // and battery-tested per state by URL, e.g. /tap/t/demo?state=playing&long=1.
@@ -40,7 +43,11 @@ function render() {
   if (tagMatch || params.get("view") === "now") {
     return <TapNow tagId={tagMatch ? decodeURIComponent(tagMatch[1]) : "demo"} demo={demoFromQuery()} />;
   }
-  return <TapConsole />;
+  return (
+    <Suspense fallback={<div className="tap-state"><span className="tap-spinner" aria-label="Loading" /></div>}>
+      <TapConsole />
+    </Suspense>
+  );
 }
 
 ReactDOM.createRoot(document.getElementById("tap-root")!).render(<React.StrictMode>{render()}</React.StrictMode>);
