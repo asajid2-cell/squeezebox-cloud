@@ -150,6 +150,18 @@ describe("Tap console — bind & write", () => {
     expect(screen.getByText(/Tapped 12×/)).toBeInTheDocument();
   });
 
+  it("renders printable QR label cards for tags", async () => {
+    mocked.listTags.mockResolvedValue([
+      { tagId: "a1", display: { title: "Punisher", artist: "PB" }, token: "sig1", enabled: true },
+      { tagId: "a2", display: { title: "Kyoto", artist: "PB" }, token: "sig2", enabled: true }
+    ]);
+    render(<TapConsole />);
+    await userEvent.click(screen.getByRole("link", { name: /print labels/i }));
+    await waitFor(() => expect(screen.getByText("Punisher")).toBeInTheDocument());
+    expect(screen.getByText("Kyoto")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /print sheet/i })).toBeEnabled();
+  });
+
   it("shows the empty 'no matches' state", async () => {
     mocked.spotifySearch.mockResolvedValue({ results: [], groups: { albums: [], tracks: [], artists: [], playlists: [] } });
     render(<TapConsole />);

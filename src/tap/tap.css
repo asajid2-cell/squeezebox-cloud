@@ -196,6 +196,24 @@ h1, h2, h3, p { margin: 0; }
 .tap-chart__axis { display: flex; justify-content: space-between; color: var(--faint); font-size: var(--step-0); }
 .tap-rank { flex: none; width: 24px; text-align: center; color: var(--rose); font-weight: 700; }
 
+.tap-labels { display: grid; gap: var(--s4); grid-template-columns: repeat(auto-fill, minmax(min(12rem, 100%), 1fr)); }
+.tap-label { display: grid; gap: var(--s3); justify-items: center; text-align: center; padding: var(--s4); border: 1px solid var(--line); border-radius: var(--r-card); background: var(--panel); min-width: 0; }
+.tap-label__qr { background: #fff; padding: 10px; border-radius: 10px; line-height: 0; }
+.tap-label__text { display: grid; gap: 2px; min-width: 0; }
+.tap-label__text strong { overflow-wrap: anywhere; }
+.tap-label__text span { color: var(--muted); font-size: var(--step-0); overflow-wrap: anywhere; }
+
+@media print {
+  :root { color-scheme: light; }
+  body { background: #fff; }
+  .tap-nav, .tap-print__bar { display: none !important; }
+  .tap-shell { display: block; min-height: 0; }
+  .tap-main { padding: 0; gap: 0; }
+  .tap-labels { grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .tap-label { break-inside: avoid; border: 1px solid #bbb; background: #fff; color: #000; box-shadow: none; }
+  .tap-label__text span { color: #444; }
+}
+
 .tap-alert { padding: var(--s3) var(--s4); border-radius: var(--r-control); border: 1px solid; font-size: var(--step-0); }
 .tap-alert--err { color: #ffd2dc; border-color: rgba(255,71,114,.4); background: rgba(255,71,114,.1); }
 .tap-alert--ok { color: #cdf6e1; border-color: rgba(66,216,132,.35); background: rgba(66,216,132,.1); }

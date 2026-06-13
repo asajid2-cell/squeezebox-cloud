@@ -455,16 +455,51 @@ function AnalyticsView({ token }: { token: string }) {
   );
 }
 
+// ---------- printable labels ----------
+function PrintLabelsView({ token }: { token: string }) {
+  const [tags, setTags] = useState<TapTag[] | null>(null);
+  useEffect(() => { listTags(token).then(setTags, () => setTags([])); }, [token]);
+  const printable = (tags || []).filter((t) => t.token);
+
+  return (
+    <section className="tap-main tap-print" aria-label="Printable labels">
+      <header className="tap-head tap-print__bar">
+        <span className="tap-head__eyebrow">Labels</span>
+        <h1 className="tap-head__title">Printable tag labels</h1>
+        <p className="tap-head__sub">A QR + title card per tag — print on sticker paper and stick one beside each tag for shelves or parties.</p>
+        <div><button className="tap-btn tap-btn--primary" onClick={() => window.print()} disabled={!printable.length}>Print sheet</button></div>
+      </header>
+
+      {tags === null ? <div className="tap-card__meta tap-print__bar"><span className="tap-spinner" aria-hidden="true" /> Loading…</div> : null}
+      {tags && printable.length === 0 ? <div className="tap-empty tap-print__bar"><strong>No tags to print yet.</strong><span>Bind a tag first, then come back to print its label.</span></div> : null}
+
+      {printable.length > 0 ? (
+        <div className="tap-labels">
+          {printable.map((t) => (
+            <div className="tap-label" key={t.tagId}>
+              <div className="tap-label__qr"><QRCodeSVG value={tapUrlFor(t.tagId, t.token!)} size={120} /></div>
+              <div className="tap-label__text">
+                <strong>{t.display?.title || "Squeezebox Tap"}</strong>
+                <span>{t.display?.artist}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 // ---------- shell ----------
 export function TapConsole() {
   const [token, setToken] = useState<string | null>(() => (typeof localStorage !== "undefined" ? localStorage.getItem(TOKEN_KEY) : null));
-  const [view, setView] = useState<"tags" | "write" | "analytics">("tags");
+  const [view, setView] = useState<"tags" | "write" | "analytics" | "print">("tags");
   const [refreshKey, setRefreshKey] = useState(0);
 
   if (!token) return <LoginGate onAuthed={setToken} />;
 
   const signOut = () => { localStorage.removeItem(TOKEN_KEY); setToken(null); };
-  const navItem = (key: "tags" | "write" | "analytics", label: string) => (
+  const navItem = (key: "tags" | "write" | "analytics" | "print", label: string) => (
     <a className="tap-nav__item" href={`#${key}`} aria-current={view === key ? "page" : undefined} onClick={(e) => { e.preventDefault(); setView(key); }}>{label}</a>
   );
 
@@ -475,11 +510,13 @@ export function TapConsole() {
         {navItem("tags", "Tags")}
         {navItem("write", "Write a tag")}
         {navItem("analytics", "Analytics")}
+        {navItem("print", "Print labels")}
         <a className="tap-nav__item" aria-disabled="true" href="#stations">Reader stations<span className="tap-nav__soon">soon</span></a>
         <button className="tap-btn tap-btn--ghost" style={{ marginTop: "auto" }} onClick={signOut}>Sign out</button>
       </nav>
       {view === "tags" ? <TagsView token={token} refreshKey={refreshKey} />
         : view === "analytics" ? <AnalyticsView token={token} />
+        : view === "print" ? <PrintLabelsView token={token} />
         : <WriteView token={token} onCreated={() => setRefreshKey((k) => k + 1)} />}
     </div>
   );
