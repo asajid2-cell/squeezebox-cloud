@@ -8,11 +8,31 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket, WebSocketServer } from "ws";
+import { handleCastUpgrade, hasCastSession, serveCast, handleCanonPlay } from "./castRelay.js";
 
 const lms = new LmsClient();
 await prewarmLibraryCaches(lms).catch(() => null);
 const app = createApp({ lms });
-const server = http.createServer(app);
+
+// Live Squeezebox cast (the reverse bridge): serve the browser's relayed audio to
+// LMS, and the play trigger, at the raw-server level so they bypass Express and its
+// https redirect. Everything else falls through to the Express app unchanged.
+const server = http.createServer((req, res) => {
+  let pathname;
+  try { pathname = new URL(req.url, "http://x").pathname; } catch { pathname = req.url || ""; }
+  if (req.method === "GET" && pathname.startsWith("/api/canon-stream/")) {
+    const session = pathname.slice("/api/canon-stream/".length).split("/")[0].replace(/[^A-Za-z0-9+_-]/g, "");
+    if (session && hasCastSession(session)) { serveCast(session, req, res); return; }
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "No live cast for this session" }));
+    return;
+  }
+  if (req.method === "POST" && pathname === "/api/player/canon") {
+    handleCanonPlay(req, res, lms);
+    return;
+  }
+  app(req, res);
+});
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.resolve(__dirname, "../dist");
 const socketsBySession = new Map();
@@ -31,7 +51,21 @@ const sync = createSyncCoordinator({
   }
 });
 
-const wss = new WebSocketServer({ server, path: "/sync" });
+// Single upgrade router: /sync (watch-together sync) + /api/cast-ingest/<session>
+// (the live Squeezebox cast). noServer mode so both coexist on one server.
+const wss = new WebSocketServer({ noServer: true });
+
+server.on("upgrade", (req, socket, head) => {
+  let pathname;
+  try { pathname = new URL(req.url, "http://x").pathname; } catch { socket.destroy(); return; }
+  if (pathname === "/sync") {
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
+  } else if (pathname.startsWith("/api/cast-ingest/")) {
+    handleCastUpgrade(req, socket, head);
+  } else {
+    socket.destroy();
+  }
+});
 
 wss.on("connection", (socket) => {
   socket.on("message", (raw) => {

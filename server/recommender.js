@@ -6,8 +6,8 @@ const TRACK_RECENT_MS = 18 * 60 * 60 * 1000;
 const ARTIST_RECENT_MS = 90 * 60 * 1000;
 const ARTIST_SATIATION_MS = 6 * 60 * 60 * 1000;
 
-export function recommendationSeedArtists(tasteState = {}, nowPlaying = {}, seed = "", limit = MAX_SEED_ARTISTS) {
-  const profile = sharedTasteProfile(tasteState);
+export function recommendationSeedArtists(tasteState = {}, nowPlaying = {}, seed = "", limit = MAX_SEED_ARTISTS, profileOverride = null) {
+  const profile = profileOverride || sharedTasteProfile(tasteState);
   const seeds = [
     nowPlaying?.artist,
     seed,
@@ -20,7 +20,7 @@ export function recommendationSeedArtists(tasteState = {}, nowPlaying = {}, seed
 
 export function rankRecommendationCandidates(candidates = [], options = {}) {
   const limit = Math.max(1, Number(options.limit) || DEFAULT_LIMIT);
-  const profile = sharedTasteProfile(options.tasteState || {});
+  const profile = options.profile || sharedTasteProfile(options.tasteState || {});
   const now = Number(options.now) || Date.now();
   const queueKeys = new Set((options.queue || []).map(candidateKey).filter(Boolean));
   const historyKeys = new Set((options.history || []).map((item) => String(item || "").toLowerCase()).filter(Boolean));
@@ -87,6 +87,22 @@ export function sharedTasteProfile(tasteState = {}) {
   }
   shared.events = Array.isArray(tasteState.events) ? tasteState.events.slice(-500) : [];
   return shared;
+}
+
+// One listener's own taste, on top of the shared profile as a light baseline so a
+// fresh account still gets sensible recommendations (their own signal dominates).
+export function listenerTasteProfile(tasteState = {}, listenerId = "") {
+  const id = String(listenerId || "").toLowerCase();
+  const listeners = tasteState.listeners || {};
+  const listener = listeners[id] || listeners[listenerId] || null;
+  if (!listener) return sharedTasteProfile(tasteState);
+  const profile = sharedTasteProfile(tasteState);
+  mergeAggregateMap(profile.tracks, listener.tracks || {});
+  mergeAggregateMap(profile.artists, listener.artists || {});
+  mergeAggregateMap(profile.albums, listener.albums || {});
+  mergeAggregateMap(profile.sources, listener.sources || {});
+  mergeAggregateMap(profile.seeds, listener.seeds || {});
+  return profile;
 }
 
 function mergeAggregateMap(target, source) {
