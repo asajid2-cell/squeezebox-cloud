@@ -394,10 +394,12 @@ nav button.active {
 }
 .primary, .primary-small {
   border-color: transparent;
-  background: linear-gradient(180deg, #ff6b8d, #ff4772);
-  color: #fff;
+  background: linear-gradient(180deg, #ff7d9b, #ff4f79);
+  color: #240810;                 /* dark ink on bright rose — ~8:1, was white ~3:1 */
+  font-weight: 800;
   box-shadow: 0 10px 32px rgba(255, 71, 114, .18);
 }
+.primary:hover, .primary-small:hover { filter: brightness(1.06); }
 
 .content-grid {
   display: grid;
@@ -837,6 +839,7 @@ input[type="range"] {
 /* secondary row action — quiet by default, warms on hover so it recedes behind
    the primary Play button (clear weight hierarchy instead of a wall of rose). */
 .ghost-add {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -891,7 +894,9 @@ input[type="range"] {
   color: var(--rose);
 }
 .icon-button[data-tooltip]:hover::after,
-.icon-button[data-tooltip]:focus-visible::after {
+.icon-button[data-tooltip]:focus-visible::after,
+.ghost-add[data-tooltip]:hover::after,
+.ghost-add[data-tooltip]:focus-visible::after {
   content: attr(data-tooltip);
   position: absolute;
   right: 0;
@@ -1425,13 +1430,13 @@ input[type="range"] {
   .queue-row > span:nth-of-type(1), .queue-row > span:nth-of-type(2) { display: none; }
   /* search results: drop the fixed 260px action column that starved the title/artist
      text to zero width; stack actions onto their own full-width row instead. */
-  .result-row {
+  .result-row:not(.browse-row) {
     grid-template-columns: 42px minmax(0, 1fr);
     gap: 10px;
     align-items: start;
   }
-  .result-row > span { grid-column: 2; }
-  .result-row .track-actions {
+  .result-row:not(.browse-row) > span { grid-column: 2; }
+  .result-row:not(.browse-row) .track-actions {
     grid-column: 1 / -1;
     justify-content: flex-start;
     flex-wrap: wrap;
@@ -1439,6 +1444,9 @@ input[type="range"] {
   }
   .result-row strong { white-space: normal; }
   .result-row small { overflow-wrap: anywhere; }
+  /* 44px touch targets on mobile (ui-craft floor) */
+  button, .ghost-add, .row-play, .top-link { min-height: 44px; }
+  .icon-button { min-height: 44px; min-width: 44px; }
 }
 
 /* ---- Grouped Spotify search + playlists ---- */
@@ -1462,6 +1470,9 @@ input[type="range"] {
 
 .browse-row {
   width: 100%;
+  /* browse rows have no action buttons — art, metadata, chip, chevron — so don't
+     reserve the 260px action column (it starved the metadata, esp. on mobile). */
+  grid-template-columns: 42px minmax(0, 1fr) auto auto;
   background: transparent;
   border: none;
   color: inherit;

@@ -1922,8 +1922,8 @@ function AppPlaylistDetail({
             </div>
             <span>{track.duration ? formatTime(track.duration) : "--:--"}</span>
             <div className="track-actions">
-              <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("play-now", track); await onRefresh(); })}>Play</button>
-              <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("add-queue", track); await onRefresh(); })}>Queue</button>
+              <button className="primary-small row-play" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("play-now", track); await onRefresh(); })}><Play size={14} />Play</button>
+              <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("add-queue", track); await onRefresh(); })} data-tooltip="Add to queue"><ListMusic size={14} /><span className="action-label">Queue</span></button>
               {isAdmin && (
                 <button className="icon-button" title="Move up" disabled={index === 0} onClick={() => move(track, "up")}>
                   <ChevronUp size={14} />
