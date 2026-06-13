@@ -18,8 +18,14 @@ const spotifyAlbumUri = z
   .string()
   .regex(/^spotify:album:[A-Za-z0-9]+$/i, "expected a spotify:album:<id> URI");
 
+const spotifyPlaylistUri = z
+  .string()
+  .regex(/^spotify:playlist:[A-Za-z0-9]+$/i, "expected a spotify:playlist:<id> URI");
+
 const localAlbumId = z.string().min(1);
 const startIndex = z.number().int().nonnegative();
+// A discovery tag's optional theming seed (artist/genre text); empty => pure taste.
+const discoverSeed = z.string().max(120).optional();
 
 const trackInput = z
   .object({
@@ -45,7 +51,12 @@ const playSpecSchema = z.union([
   z.object({ kind: z.literal("album-from-top"), source: z.literal("local"), albumId: localAlbumId }),
   z.object({ kind: z.literal("album-from-track"), source: z.literal("spotify"), albumUri: spotifyAlbumUri, startIndex }),
   z.object({ kind: z.literal("album-from-track"), source: z.literal("local"), albumId: localAlbumId, startIndex }),
-  z.object({ kind: z.literal("track"), track: trackInput })
+  z.object({ kind: z.literal("track"), track: trackInput }),
+  // A whole Spotify playlist plays start-to-finish (colon form, like albums).
+  z.object({ kind: z.literal("playlist"), source: z.literal("spotify"), playlistUri: spotifyPlaylistUri }),
+  // A "surprise me" tag: every tap resolves a FRESH pick from the taste-seeded
+  // recommender at play time, so it stores no fixed target — only an optional seed.
+  z.object({ kind: z.literal("discover"), source: z.literal("spotify"), seed: discoverSeed })
 ]);
 
 export function validatePlaySpec(spec) {
@@ -65,6 +76,23 @@ export function buildPlaySpec(input = {}) {
       throw new Error("Track binding needs a playable reference (uri, path, lmsTrackId, or local/archive id)");
     }
     return { kind: "track", track: input.track };
+  }
+
+  if (intent === "playlist") {
+    if (input.source !== "spotify") {
+      throw new Error("Playlist binding currently supports Spotify playlists only");
+    }
+    if (!/^spotify:playlist:[A-Za-z0-9]+$/i.test(String(input.playlistUri || ""))) {
+      throw new Error("expected a spotify:playlist:<id> URI");
+    }
+    return { kind: "playlist", source: "spotify", playlistUri: input.playlistUri };
+  }
+
+  if (intent === "discover") {
+    const seed = String(input.seed || "").trim();
+    const spec = { kind: "discover", source: "spotify" };
+    if (seed) spec.seed = seed.slice(0, 120);
+    return spec;
   }
 
   if (intent === "album-from-top" || intent === "album-from-track") {

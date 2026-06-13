@@ -255,16 +255,23 @@ export class LmsClient {
     const rawIndex = Number(spec.startIndex);
     const startIndex = Number.isFinite(rawIndex) ? Math.max(0, Math.floor(rawIndex)) : 0;
     const source = String(spec.source || (spec.albumUri ? "spotify" : "local")).toLowerCase();
+    // Party-queue mode: APPEND the album to the running playlist instead of
+    // replacing it (no index jump, no forced play — the current track keeps going).
+    const queue = Boolean(spec.queue);
 
     if (source === "spotify") {
       const albumUri = String(spec.albumUri || "");
       if (!/^spotify:album:[A-Za-z0-9]+$/i.test(albumUri)) {
         throw new Error("A spotify:album:<id> URI is required to load a Spotify album");
       }
+      const encoded = encodeURIComponent(playerId);
+      if (queue) {
+        await this.command(`${encoded} playlist add ${albumUri}`);
+        return { source: "spotify", albumUri, queued: true };
+      }
       // Spotty plays a Spotify ALBUM via the plain `spotify:album:<id>` form —
       // NOT the `spotify://album:` slash form that tracks use (that one silently
       // loads 0 tracks). Verified against the live Spotty/LMS.
-      const encoded = encodeURIComponent(playerId);
       await this.command(`${encoded} playlist play ${albumUri}`);
       if (startIndex > 0) await this.command(`${encoded} playlist index ${startIndex}`);
       await this.control(playerId, "play");
@@ -273,6 +280,10 @@ export class LmsClient {
 
     const albumId = String(spec.albumId || "");
     if (!albumId) throw new Error("An album_id is required to load a local album");
+    if (queue) {
+      await this.jsonRequest([playerId, ["playlistcontrol", "cmd:add", `album_id:${albumId}`]]);
+      return { source: "local", albumId, queued: true };
+    }
     // Native atomic album load. `play_index:N` on cmd:load starts playback AT that
     // track in one command (LMS docs) — avoids the race where a follow-up
     // `playlist index N` runs before the playlist is populated.
@@ -281,6 +292,38 @@ export class LmsClient {
     await this.jsonRequest([playerId, loadArgs]);
     await this.control(playerId, "play");
     return { source: "local", albumId, startIndex };
+  }
+
+  // Load (or, in queue mode, append) a whole Spotify playlist. Like albums,
+  // Spotty wants the plain `spotify:playlist:<id>` colon form — the slash form
+  // silently loads nothing.
+  async loadPlaylist(playerId, spec = {}) {
+    if (!playerId || !spec) return null;
+    const playlistUri = String(spec.playlistUri || "");
+    if (!/^spotify:playlist:[A-Za-z0-9]+$/i.test(playlistUri)) {
+      throw new Error("A spotify:playlist:<id> URI is required to load a Spotify playlist");
+    }
+    const encoded = encodeURIComponent(playerId);
+    if (spec.queue) {
+      await this.command(`${encoded} playlist add ${playlistUri}`);
+      return { source: "spotify", playlistUri, queued: true };
+    }
+    await this.command(`${encoded} playlist play ${playlistUri}`);
+    await this.control(playerId, "play");
+    return { source: "spotify", playlistUri };
+  }
+
+  // Where the player currently is in its playlist — the live track index and
+  // elapsed seconds. Used to bookmark a resume-enabled tag before switching away.
+  async playlistPosition(playerId) {
+    if (!playerId) return null;
+    const encoded = encodeURIComponent(playerId);
+    const idxRaw = Number(lastToken(await this.command(`${encoded} playlist index ?`)));
+    const timeRaw = Number(decodeURIComponent(lastToken(await this.command(`${encoded} time ?`))));
+    return {
+      index: Number.isFinite(idxRaw) && idxRaw >= 0 ? Math.floor(idxRaw) : 0,
+      seconds: Number.isFinite(timeRaw) && timeRaw >= 0 ? Math.floor(timeRaw) : 0
+    };
   }
 
   async resolvePlayableTarget(track) {

@@ -83,6 +83,10 @@ async function requireTapAccess(req, res, next) {
 // album from 0:00 (NFC fires readily; people tap twice).
 const tapPlayState = new Map();
 const TAP_DEBOUNCE_MS = Number(process.env.TAP_DEBOUNCE_MS || 3000);
+// The resume-enabled tag whose content is (as far as Tap knows) on the speaker
+// right now. When a DIFFERENT tag is tapped we bookmark this one's position
+// first, so it can be picked up later — the "vinyl bookmark" behavior.
+let activeResumeTagId = null;
 
 const requiredText = z.string().trim().min(1);
 const optionalText = z.preprocess(
@@ -2061,7 +2065,39 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       if (policy.volume !== null && policy.volume !== undefined) {
         await lms.control(playerId, "volume", policy.volume).catch(() => {});
       }
-      await playTapTarget(lms, playerId, tag.playSpec, policy);
+
+      // Smart resume — BOOKMARK the tag that was playing before this tap. If a
+      // different resume-enabled tag held the speaker, save where it left off so
+      // it can pick back up; switching away is exactly when "where I left off"
+      // gets defined. Best-effort: a failed read must not block the new tap.
+      if (activeResumeTagId && activeResumeTagId !== tagId) {
+        const prevTag = tapStore.get(activeResumeTagId);
+        if (prevTag?.policy?.resume) {
+          try {
+            const pos = await lms.playlistPosition(playerId);
+            if (pos) tapStore.setResume(activeResumeTagId, pos);
+          } catch { /* couldn't read position — leave the old bookmark */ }
+        }
+      }
+
+      // Party queue (global): when on, every tap appends instead of replacing —
+      // overrides each tag's own playMode. Resume-from-bookmark only applies when
+      // we're actually taking over the speaker (replace), never when appending.
+      const partyQueue = Boolean(settings.partyQueue);
+      const isAlbum = tag.playSpec?.kind === "album-from-top" || tag.playSpec?.kind === "album-from-track";
+      const resumeTo = !partyQueue && policy.resume && isAlbum && tag.resumeState ? tag.resumeState : null;
+      const behavior = { ...policy, playMode: partyQueue ? "queue" : policy.playMode, resumeTo };
+
+      if (tag.playSpec?.kind === "discover") {
+        await playDiscoverTag(lms, playerId, tag.playSpec, { taste });
+      } else {
+        await playTapTarget(lms, playerId, tag.playSpec, behavior);
+      }
+
+      // Track the resume "owner" of the speaker. A non-resume tag (or a queued
+      // append, which doesn't take over) clears ownership.
+      activeResumeTagId = !partyQueue && policy.resume && isAlbum ? tagId : null;
+
       tapPlayState.set(tagId, { lastPlayedAt: Date.now() });
       const updated = tapStore.recordTap(tagId);
       logEvent("tap.play.ok", { tagId, kind: tag.playSpec?.kind });
@@ -3157,6 +3193,22 @@ async function activateGeneratedQueue(lms, playerId, { smart = false, shuffle: s
   updatePlayback(smart ? { lastShuffleRefillAt: Date.now(), repeat: "off" } : { lastShuffleRefillAt: Date.now() });
   logEvent("queue.activate-generated", { type: smart ? "smart shuffle" : "shuffle", mode, queued: queued.map(trackSummary), queue: queueSummary() });
   return queued;
+}
+
+// Resolve + play a "discover" tag: activate a FRESH taste-seeded smart-radio
+// queue, so every tap yields new on-taste music that keeps refilling itself.
+// Reuses the same generated-queue engine the Smart Shuffle button drives.
+async function playDiscoverTag(lms, playerId, playSpec, { taste = defaultListenerTasteStore } = {}) {
+  if (!spotifyBrowsingAvailable()) {
+    throw new Error("Spotify browsing is unavailable for discovery right now");
+  }
+  const seed = String(playSpec?.seed || "").trim();
+  const queued = await activateGeneratedQueue(lms, playerId, { smart: true, mode: "spotify", count: 5, seed, taste });
+  if (!queued || queued.length === 0) {
+    throw new Error("No discovery tracks were found");
+  }
+  await refreshLms(lms, { taste });
+  return { kind: "discover", queued: queued.length };
 }
 
 async function buildGeneratedQueue(lms, playerId, seed, mode, count, requestedBy, { allowLocalWideFallback = true, taste = defaultListenerTasteStore } = {}) {

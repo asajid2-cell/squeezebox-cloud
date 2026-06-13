@@ -1,38 +1,56 @@
 // Squeezebox Tap — trusted play engine.
 //
 // Dispatches a stored Tap PlaySpec straight to the native LMS primitives
-// (`loadAlbum` for albums, `playTrack` for single tracks). It is TRUSTED BY
-// CONSTRUCTION: a Tap binding is created by an admin from a real search/library
-// result, so the resolver replays it without re-running the guest-facing
-// `spotifyTracksAreKnown` gate. This module never imports or calls that gate.
+// (`loadAlbum` for albums, `loadPlaylist` for playlists, `playTrack` for single
+// tracks). It is TRUSTED BY CONSTRUCTION: a Tap binding is created by an admin
+// from a real search/library result, so the resolver replays it without
+// re-running the guest-facing `spotifyTracksAreKnown` gate. This module never
+// imports or calls that gate.
 //
-// `policy` is the per-tag BEHAVIOR (how it plays, separate from what plays):
-//   { playMode: "replace" | "queue", volume: number|null }
-// - playMode "queue" adds a single-track tag to the queue instead of replacing
-//   playback (album tags always replace — queuing a whole album is a future tier).
-// - volume (0-100), when set, is applied by the resolver before playback.
+// `behavior` is the resolved per-tap BEHAVIOR (how it plays, separate from what
+// plays) — the play handler folds the per-tag policy AND the global party-queue
+// switch into it before calling here:
+//   { playMode: "replace" | "queue", resumeTo: { index, seconds } | null }
+// - playMode "queue" ADDS to the queue instead of replacing playback (tracks,
+//   albums, and playlists all support append).
+// - resumeTo, when set, plays an album from a saved bookmark (index + seek) so a
+//   resume-enabled tag picks up where it left off. Ignored in queue mode and for
+//   non-album kinds.
+//
+// The "discover" kind is NOT handled here — it needs the recommender + listener
+// taste + appState, so the play handler resolves it directly.
 
-export async function playTapTarget(lms, playerId, playSpec, policy = {}) {
+export async function playTapTarget(lms, playerId, playSpec, behavior = {}) {
   if (!playerId) throw new Error("No active player to play the tap on");
   const kind = playSpec?.kind;
-  const queue = policy?.playMode === "queue";
+  const queue = behavior?.playMode === "queue";
+  const resumeTo = !queue && behavior?.resumeTo ? behavior.resumeTo : null;
 
   switch (kind) {
     case "album-from-top":
-      return lms.loadAlbum(playerId, {
+    case "album-from-track": {
+      const startIndex = resumeTo
+        ? resumeTo.index
+        : kind === "album-from-track"
+          ? playSpec.startIndex
+          : undefined;
+      const result = await lms.loadAlbum(playerId, {
         source: playSpec.source,
         albumId: playSpec.albumId,
         albumUri: playSpec.albumUri,
-        startIndex: undefined
+        startIndex,
+        queue
       });
+      // Resuming: jump to the saved elapsed position. Best-effort — the album may
+      // still be streaming in, so a failed seek must not fail the whole tap.
+      if (resumeTo && resumeTo.seconds > 0) {
+        await lms.control(playerId, "seek", resumeTo.seconds).catch(() => {});
+      }
+      return result;
+    }
 
-    case "album-from-track":
-      return lms.loadAlbum(playerId, {
-        source: playSpec.source,
-        albumId: playSpec.albumId,
-        albumUri: playSpec.albumUri,
-        startIndex: playSpec.startIndex
-      });
+    case "playlist":
+      return lms.loadPlaylist(playerId, { source: playSpec.source, playlistUri: playSpec.playlistUri, queue });
 
     case "track":
       return lms.playTrack(playerId, playSpec.track, queue ? "add-queue" : "play-now");

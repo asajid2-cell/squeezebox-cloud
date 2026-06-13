@@ -43,6 +43,27 @@ describe("Tap PlaySpec construction", () => {
     expect(() => buildPlaySpec({ intent: "track", track: { title: "x" } })).toThrow(/playable|uri|path|track/i);
   });
 
+  it("builds a playlist spec from a Spotify playlist URI", () => {
+    const spec = buildPlaySpec({ intent: "playlist", source: "spotify", playlistUri: "spotify:playlist:abc123" });
+    expect(spec).toEqual({ kind: "playlist", source: "spotify", playlistUri: "spotify:playlist:abc123" });
+  });
+
+  it("rejects a malformed Spotify playlist URI", () => {
+    expect(() =>
+      buildPlaySpec({ intent: "playlist", source: "spotify", playlistUri: "spotify:album:xyz789" })
+    ).toThrow(/spotify:playlist/i);
+  });
+
+  it("builds a discover spec with no fixed target (pure-taste surprise)", () => {
+    const spec = buildPlaySpec({ intent: "discover", source: "spotify" });
+    expect(spec).toEqual({ kind: "discover", source: "spotify" });
+  });
+
+  it("builds a discover spec carrying an optional theming seed", () => {
+    const spec = buildPlaySpec({ intent: "discover", source: "spotify", seed: "phoebe bridgers" });
+    expect(spec).toEqual({ kind: "discover", source: "spotify", seed: "phoebe bridgers" });
+  });
+
   it("rejects an unknown intent", () => {
     // @ts-expect-error deliberately invalid
     expect(() => buildPlaySpec({ intent: "teleport" })).toThrow(/intent/i);
@@ -55,7 +76,10 @@ describe("Tap PlaySpec validation (round-trip)", () => {
       buildPlaySpec({ intent: "track", track: { uri: "spotify:track:0123456789abcdefghijAB" } }),
       buildPlaySpec({ intent: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" }),
       buildPlaySpec({ intent: "album-from-top", source: "local", albumId: "42" }),
-      buildPlaySpec({ intent: "album-from-track", source: "local", albumId: "42", startIndex: 2 })
+      buildPlaySpec({ intent: "album-from-track", source: "local", albumId: "42", startIndex: 2 }),
+      buildPlaySpec({ intent: "playlist", source: "spotify", playlistUri: "spotify:playlist:abc123" }),
+      buildPlaySpec({ intent: "discover", source: "spotify" }),
+      buildPlaySpec({ intent: "discover", source: "spotify", seed: "mitski" })
     ];
     for (const spec of specs) {
       expect(validatePlaySpec(spec).ok).toBe(true);

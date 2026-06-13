@@ -6644,7 +6644,10 @@ describe("Tap resolver golden cases", () => {
       calls,
       ...mockLms,
       async loadAlbum(...args: unknown[]) { calls.push({ m: "loadAlbum", args }); return "ok"; },
+      async loadPlaylist(...args: unknown[]) { calls.push({ m: "loadPlaylist", args }); return "ok"; },
       async playTrack(...args: unknown[]) { calls.push({ m: "playTrack", args }); return "ok"; },
+      async control(...args: unknown[]) { calls.push({ m: "control", args }); return "ok"; },
+      async playlistPosition() { return { index: 7, seconds: 33 }; },
       ...overrides
     };
   }
@@ -6741,5 +6744,69 @@ describe("Tap resolver golden cases", () => {
     expect(second.body.debounced).toBe(true);
     // The album was loaded only ONCE — the second tap did not restart it.
     expect(lms.calls.filter((c) => c.m === "loadAlbum")).toHaveLength(1);
+  });
+
+  it("plays a playlist tag via loadPlaylist", async () => {
+    const lms = recordingLms();
+    const { app, tapStore } = setup(lms);
+    const tag = tapStore.create({ playSpec: { kind: "playlist", source: "spotify", playlistUri: "spotify:playlist:abc123" }, display: {} });
+    const token = tapStore.tokenFor(tag.tagId);
+
+    await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token }).expect(200);
+    const calls = lms.calls.filter((c) => c.m === "loadPlaylist");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].args[1]).toMatchObject({ playlistUri: "spotify:playlist:abc123", queue: false });
+  });
+
+  it("party queue (global) makes a tap APPEND instead of replacing", async () => {
+    const lms = recordingLms();
+    const { app, tapStore } = setup(lms);
+    tapStore.setSettings({ partyQueue: true });
+    const trackTag = tapStore.create({ playSpec: { kind: "track", track: unknownSpotifyTrack }, display: {} });
+
+    await request(app).post(`/api/tap/${trackTag.tagId}/play`).send({ token: tapStore.tokenFor(trackTag.tagId) }).expect(200);
+    const play = lms.calls.find((c) => c.m === "playTrack");
+    expect(play?.args[2]).toBe("add-queue");
+
+    const albumTag = tapStore.create({ playSpec: { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" }, display: {} });
+    await request(app).post(`/api/tap/${albumTag.tagId}/play`).send({ token: tapStore.tokenFor(albumTag.tagId) }).expect(200);
+    const load = lms.calls.find((c) => c.m === "loadAlbum");
+    expect(load?.args[1]).toMatchObject({ queue: true });
+  });
+
+  it("smart resume: restores a resume-enabled album to its saved bookmark, then seeks", async () => {
+    const lms = recordingLms();
+    const { app, tapStore } = setup(lms);
+    const tag = tapStore.create({ playSpec: { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" }, display: {}, policy: { resume: true } });
+    tapStore.setResume(tag.tagId, { index: 5, seconds: 88 });
+
+    await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token: tapStore.tokenFor(tag.tagId) }).expect(200);
+    const load = lms.calls.find((c) => c.m === "loadAlbum");
+    expect(load?.args[1]).toMatchObject({ startIndex: 5 });
+    expect(lms.calls.some((c) => c.m === "control" && c.args[1] === "seek" && c.args[2] === 88)).toBe(true);
+  });
+
+  it("smart resume: bookmarks the previous resume tag's position when you switch away", async () => {
+    const lms = recordingLms();
+    const { app, tapStore } = setup(lms);
+    const a = tapStore.create({ playSpec: { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:aaaaaa1" }, display: {}, policy: { resume: true } });
+    const b = tapStore.create({ playSpec: { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:bbbbbb2" }, display: {} });
+
+    await request(app).post(`/api/tap/${a.tagId}/play`).send({ token: tapStore.tokenFor(a.tagId) }).expect(200);
+    await request(app).post(`/api/tap/${b.tagId}/play`).send({ token: tapStore.tokenFor(b.tagId) }).expect(200);
+
+    // Switching to B bookmarked A at the player's live position (mock: index 7, 33s).
+    expect(tapStore.get(a.tagId)?.resumeState).toMatchObject({ index: 7, seconds: 33 });
+  });
+
+  it("binds a discovery tag (no fixed target, just a kind)", async () => {
+    const { app } = setup(recordingLms());
+    const auth = await request(app).post("/api/admin/login").send({ password: "admin" }).then((r) => `Bearer ${r.body.token}`);
+    const res = await request(app)
+      .post("/api/tap")
+      .set("Authorization", auth)
+      .send({ intent: "discover", source: "spotify", display: { title: "Surprise me", kind: "discover" } })
+      .expect(200);
+    expect(res.body.tag.playSpec).toEqual({ kind: "discover", source: "spotify" });
   });
 });

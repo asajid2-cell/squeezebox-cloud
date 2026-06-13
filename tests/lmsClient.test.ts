@@ -755,6 +755,54 @@ describe("LMS client parsing", () => {
     expect(commands).toContain("player-1 playlist index 2");
   });
 
+  // --- Squeezebox Tap QoL: party-queue append, playlists, resume position ---
+  it("loadAlbum APPENDS (not replaces) when queuing a Spotify album for party mode", async () => {
+    const commands: string[] = [];
+    const client = new LmsClient();
+    client.command = async (command: string) => { commands.push(command); return "ok"; };
+
+    const result = await client.loadAlbum("player-1", { source: "spotify", albumUri: "spotify:album:xyz789", queue: true });
+
+    expect(commands).toContain("player-1 playlist add spotify:album:xyz789");
+    expect(commands).not.toContain("player-1 playlist play spotify:album:xyz789");
+    expect(commands).not.toContain("player-1 play"); // appending never seizes playback
+    expect(result).toMatchObject({ queued: true });
+  });
+
+  it("loadPlaylist plays a whole Spotify playlist via the colon form", async () => {
+    const commands: string[] = [];
+    const client = new LmsClient();
+    client.command = async (command: string) => { commands.push(command); return "ok"; };
+
+    await client.loadPlaylist("player-1", { playlistUri: "spotify:playlist:abc123" });
+
+    expect(commands).toContain("player-1 playlist play spotify:playlist:abc123");
+    expect(commands).toContain("player-1 play");
+  });
+
+  it("loadPlaylist appends in queue mode and rejects a non-playlist URI", async () => {
+    const commands: string[] = [];
+    const client = new LmsClient();
+    client.command = async (command: string) => { commands.push(command); return "ok"; };
+
+    await client.loadPlaylist("player-1", { playlistUri: "spotify:playlist:abc123", queue: true });
+    expect(commands).toContain("player-1 playlist add spotify:playlist:abc123");
+
+    await expect(client.loadPlaylist("player-1", { playlistUri: "spotify:album:xyz789" })).rejects.toThrow(/playlist/i);
+  });
+
+  it("playlistPosition reads the live track index and elapsed seconds", async () => {
+    const client = new LmsClient();
+    client.command = async (command: string) => {
+      if (command.endsWith("playlist index ?")) return "player-1 playlist index 4";
+      if (command.endsWith("time ?")) return "player-1 time 92.5";
+      return "ok";
+    };
+
+    const pos = await client.playlistPosition("player-1");
+    expect(pos).toEqual({ index: 4, seconds: 92 });
+  });
+
   it("prefers a local file path over enrichment Spotify metadata for local tracks", async () => {
     const commands: string[] = [];
     const requests: unknown[] = [];

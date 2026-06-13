@@ -101,3 +101,43 @@ describe("Tap store", () => {
     expect(reloaded?.playSpec).toEqual(spec());
   });
 });
+
+describe("Tap store — QoL: party queue, smart resume", () => {
+  it("defaults party queue OFF and round-trips the global toggle", () => {
+    const store = createTapStore({ file });
+    expect(store.publicSettings().partyQueue).toBe(false);
+    expect(store.setSettings({ partyQueue: true }).partyQueue).toBe(true);
+    expect(store.settings().partyQueue).toBe(true);
+    // Reloads from disk preserve it.
+    expect(createTapStore({ file }).publicSettings().partyQueue).toBe(true);
+  });
+
+  it("defaults a tag's resume policy OFF and lets it be enabled per tag", () => {
+    const store = createTapStore({ file });
+    const tag = store.create({ playSpec: spec(), display });
+    expect(tag.policy.resume).toBe(false);
+    const updated = store.update(tag.tagId, { policy: { resume: true } });
+    expect(updated.policy.resume).toBe(true);
+  });
+
+  it("saves and clears a resume bookmark, clamping bad input", () => {
+    const store = createTapStore({ file });
+    const tag = store.create({ playSpec: spec(), display, policy: { resume: true } });
+    const saved = store.setResume(tag.tagId, { index: 4, seconds: 92 });
+    expect(saved?.resumeState).toMatchObject({ index: 4, seconds: 92 });
+    expect(typeof saved?.resumeState.savedAt).toBe("string");
+    // Negative/garbage -> treated as "clear".
+    expect(store.setResume(tag.tagId, { index: -1 })?.resumeState).toBeUndefined();
+    store.setResume(tag.tagId, { index: 2, seconds: 5 });
+    expect(store.setResume(tag.tagId, null)?.resumeState).toBeUndefined();
+  });
+
+  it("drops the resume bookmark when the tag is re-pointed (it pointed at the old album)", () => {
+    const store = createTapStore({ file });
+    const tag = store.create({ playSpec: spec(), display, policy: { resume: true } });
+    store.setResume(tag.tagId, { index: 3, seconds: 40 });
+    const newSpec = { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:NEWalbum1" };
+    const updated = store.update(tag.tagId, { playSpec: newSpec });
+    expect(updated.resumeState).toBeUndefined();
+  });
+});

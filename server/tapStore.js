@@ -28,7 +28,19 @@ function normalizePolicy(policy = {}) {
     const v = Math.round(Number(policy.volume));
     if (Number.isFinite(v)) volume = Math.max(0, Math.min(100, v));
   }
-  return { playMode, volume };
+  // Smart resume (opt-in per tag): an album tag remembers where it left off and
+  // picks back up there on the next tap, instead of always restarting from top.
+  const resume = Boolean(policy?.resume);
+  return { playMode, volume, resume };
+}
+
+// A saved playback bookmark for a resume-enabled tag. Clamped to sane values.
+function normalizeResumeState(state) {
+  if (!state) return null;
+  const index = Math.round(Number(state.index));
+  if (!Number.isFinite(index) || index < 0) return null;
+  const seconds = Math.max(0, Math.round(Number(state.seconds) || 0));
+  return { index, seconds, savedAt: state.savedAt || new Date().toISOString() };
 }
 
 const MAX_EVENTS = 5000; // bounded tap-history log for analytics
@@ -40,7 +52,7 @@ function isImportableTagId(id) {
   return typeof id === "string" && /^[A-Za-z0-9_-]{6,64}$/.test(id) && !RESERVED_TAG_IDS.has(id);
 }
 
-const DEFAULT_SETTINGS = { debounceMs: 3000, partyMode: "open", requirePassword: false, password: "" };
+const DEFAULT_SETTINGS = { debounceMs: 3000, partyMode: "open", requirePassword: false, password: "", partyQueue: false };
 
 // Runtime Tap settings (clamped + defaulted). The password is never echoed back
 // in plain form by the API — callers expose only `hasPassword`.
@@ -51,7 +63,11 @@ function normalizeSettings(s = {}) {
     debounceMs,
     partyMode: s?.partyMode === "closed" ? "closed" : "open",
     requirePassword: Boolean(s?.requirePassword),
-    password: typeof s?.password === "string" ? s.password : ""
+    password: typeof s?.password === "string" ? s.password : "",
+    // Party queue: when on, every tap ADDS to the queue instead of replacing
+    // playback — so a room full of people can stack records without cutting
+    // each other off. A global flip, independent of each tag's own playMode.
+    partyQueue: Boolean(s?.partyQueue)
   };
 }
 
@@ -131,6 +147,9 @@ export function createTapStore({ file = defaultFile(), persist: persistEnabled =
         const validated = validatePlaySpec(patch.playSpec);
         if (!validated.ok) throw new Error("Invalid PlaySpec for tag");
         tag.playSpec = patch.playSpec;
+        // Re-pointing a tag invalidates any saved resume bookmark — it pointed
+        // at the OLD album, so picking up "where you left off" would be wrong.
+        delete tag.resumeState;
       }
       if (patch.display !== undefined) tag.display = patch.display;
       if (patch.label !== undefined) tag.label = patch.label;
@@ -153,6 +172,18 @@ export function createTapStore({ file = defaultFile(), persist: persistEnabled =
       if (!tag || !tag.sun) return;
       tag.sun.lastCtr = Math.max(Number(tag.sun.lastCtr) || 0, Number(ctr) || 0);
       persist();
+    },
+
+    // Save (or, with null, clear) a resume-enabled tag's playback bookmark.
+    // Returns the updated tag, or null if the tag is gone.
+    setResume(tagId, state) {
+      const tag = tags.get(tagId);
+      if (!tag) return null;
+      const next = normalizeResumeState(state);
+      if (next) tag.resumeState = next;
+      else delete tag.resumeState;
+      persist();
+      return clone(tag);
     },
 
     remove(tagId) {
@@ -214,7 +245,7 @@ export function createTapStore({ file = defaultFile(), persist: persistEnabled =
 
     // Safe settings for the admin API — never echoes the password back.
     publicSettings() {
-      return { debounceMs: settings.debounceMs, partyMode: settings.partyMode, requirePassword: settings.requirePassword, hasPassword: Boolean(settings.password) };
+      return { debounceMs: settings.debounceMs, partyMode: settings.partyMode, requirePassword: settings.requirePassword, hasPassword: Boolean(settings.password), partyQueue: settings.partyQueue };
     },
 
     setSettings(patch = {}) {

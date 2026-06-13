@@ -15,6 +15,14 @@ function fakeLms() {
     playTrack: async (...args: unknown[]) => {
       calls.push({ method: "playTrack", args });
       return { ok: true };
+    },
+    loadPlaylist: async (...args: unknown[]) => {
+      calls.push({ method: "loadPlaylist", args });
+      return { ok: true };
+    },
+    control: async (...args: unknown[]) => {
+      calls.push({ method: "control", args });
+      return { ok: true };
     }
   };
 }
@@ -28,7 +36,7 @@ describe("Tap play engine (trusted replay)", () => {
       albumUri: "spotify:album:xyz789"
     });
     expect(lms.calls).toEqual([
-      { method: "loadAlbum", args: ["player-1", { source: "spotify", albumUri: "spotify:album:xyz789", albumId: undefined, startIndex: undefined }] }
+      { method: "loadAlbum", args: ["player-1", { source: "spotify", albumUri: "spotify:album:xyz789", albumId: undefined, startIndex: undefined, queue: false }] }
     ]);
   });
 
@@ -58,6 +66,52 @@ describe("Tap play engine (trusted replay)", () => {
     expect(lms.calls).toEqual([
       { method: "playTrack", args: ["player-1", unknownSpotifyTrack, "play-now"] }
     ]);
+  });
+
+  it("playlist kind loads a whole Spotify playlist", async () => {
+    const lms = fakeLms();
+    await playTapTarget(lms, "player-1", { kind: "playlist", source: "spotify", playlistUri: "spotify:playlist:abc123" });
+    expect(lms.calls[0].method).toBe("loadPlaylist");
+    expect(lms.calls[0].args[1]).toMatchObject({ source: "spotify", playlistUri: "spotify:playlist:abc123", queue: false });
+  });
+
+  it("party-queue behavior APPENDS instead of replacing (album, playlist, track)", async () => {
+    const album = fakeLms();
+    await playTapTarget(album, "p", { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" }, { playMode: "queue" });
+    expect(album.calls[0].args[1]).toMatchObject({ queue: true });
+
+    const list = fakeLms();
+    await playTapTarget(list, "p", { kind: "playlist", source: "spotify", playlistUri: "spotify:playlist:abc123" }, { playMode: "queue" });
+    expect(list.calls[0].args[1]).toMatchObject({ queue: true });
+
+    const track = fakeLms();
+    await playTapTarget(track, "p", { kind: "track", track: { uri: "spotify:track:0123456789abcdefghijAB" } }, { playMode: "queue" });
+    expect(track.calls).toEqual([{ method: "playTrack", args: ["p", { uri: "spotify:track:0123456789abcdefghijAB" }, "add-queue"] }]);
+  });
+
+  it("smart resume restores an album to its saved index + seeks to the elapsed position", async () => {
+    const lms = fakeLms();
+    await playTapTarget(
+      lms,
+      "player-1",
+      { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" },
+      { resumeTo: { index: 4, seconds: 92 } }
+    );
+    expect(lms.calls[0].method).toBe("loadAlbum");
+    expect(lms.calls[0].args[1]).toMatchObject({ startIndex: 4, queue: false });
+    expect(lms.calls[1]).toEqual({ method: "control", args: ["player-1", "seek", 92] });
+  });
+
+  it("ignores a resume bookmark in party-queue mode (append, don't seek)", async () => {
+    const lms = fakeLms();
+    await playTapTarget(
+      lms,
+      "player-1",
+      { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" },
+      { playMode: "queue", resumeTo: { index: 4, seconds: 92 } }
+    );
+    expect(lms.calls[0].args[1]).toMatchObject({ queue: true });
+    expect(lms.calls.some((c) => c.method === "control")).toBe(false);
   });
 
   it("rejects an unknown PlaySpec kind instead of silently doing nothing", async () => {
