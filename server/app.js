@@ -34,6 +34,7 @@ import { rankRecommendationCandidates, recommendationSeedArtists } from "./recom
 import { defaultTapStore } from "./tapStore.js";
 import { buildPlaySpec } from "./tapPlaySpec.js";
 import { playTapTarget } from "./tapPlayback.js";
+import { verifySun } from "./tapSun.js";
 
 // Squeezebox Tap — per-tag debounce so a rapid double-tap doesn't restart the
 // album from 0:00 (NFC fires readily; people tap twice).
@@ -1906,6 +1907,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       if (body.label !== undefined) patch.label = body.label;
       if (body.enabled !== undefined) patch.enabled = body.enabled;
       if (body.policy !== undefined) patch.policy = body.policy;
+      if (body.sun !== undefined) patch.sun = body.sun;
       const tag = tapStore.update(req.params.id, patch);
       logEvent("tap.repoint", { tagId: tag.tagId, kind: tag.playSpec?.kind });
       res.json({ tag, token: tapStore.tokenFor(tag.tagId) });
@@ -1937,7 +1939,24 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       res.status(404).json({ ok: false, reason: "unbound", message: "This tag isn't set up yet." });
       return;
     }
-    if (!tapStore.verify(tagId, token)) {
+    // Auth: SECURE tags (NTAG 424 DNA SUN) verify a fresh per-tap CMAC + a
+    // strictly-increasing counter — this is the only path that rejects a
+    // forwarded/replayed URL. Other tags use the static signed token.
+    if (tag.sun?.key) {
+      const ctr = Number(req.body?.ctr ?? req.query?.ctr);
+      const cmac = String(req.body?.cmac ?? req.query?.cmac ?? "");
+      if (!Number.isInteger(ctr) || ctr <= (Number(tag.sun.lastCtr) || 0)) {
+        logEvent("tap.play.fail", { tagId, reason: "replay" });
+        res.status(409).json({ ok: false, reason: "replay", message: "This tap was already used — tap the tag again." });
+        return;
+      }
+      if (!verifySun({ keyHex: tag.sun.key, tagId, ctr, cmacHex: cmac })) {
+        logEvent("tap.play.fail", { tagId, reason: "bad_cmac" });
+        res.status(401).json({ ok: false, reason: "bad-cmac", message: "This tap couldn't be verified." });
+        return;
+      }
+      tapStore.bumpSunCounter(tagId, ctr);
+    } else if (!tapStore.verify(tagId, token)) {
       logEvent("tap.play.fail", { tagId, reason: "bad_token" });
       res.status(401).json({ ok: false, reason: "bad-token", message: "This tap couldn't be verified." });
       return;

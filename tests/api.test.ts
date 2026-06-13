@@ -10,6 +10,7 @@ import { createPlaylistStore } from "../server/playlists.js";
 import { createCurationStore } from "../server/curation.js";
 import { createTapStore } from "../server/tapStore.js";
 import { verifyTag } from "../server/tapToken.js";
+import { aesCmac } from "../server/tapSun.js";
 import crypto from "node:crypto";
 
 const tinyMp3 = Buffer.from(
@@ -6823,5 +6824,29 @@ describe("Tap resolver golden cases", () => {
     await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token }).expect(401); // no password
     await request(app).post(`/api/tap/${tag.tagId}/play`).set("x-tap-password", "sesame").send({ token }).expect(200);
     expect(lms.calls.filter((c) => c.m === "loadAlbum")).toHaveLength(1);
+  });
+
+  it("secure (SUN) tags require a valid CMAC + strictly-increasing counter", async () => {
+    const lms = recordingLms();
+    const { app, tapStore } = setup(lms);
+    const tag = tapStore.create({ playSpec: { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" }, display: {} });
+    const keyHex = "00112233445566778899aabbccddeeff";
+    tapStore.update(tag.tagId, { sun: { key: keyHex } });
+    const cmacFor = (ctr: number) => aesCmac(Buffer.from(keyHex, "hex"), Buffer.from(`${tag.tagId}|${ctr}`, "utf8")).toString("hex");
+
+    // A valid fresh SUN message plays.
+    await request(app).post(`/api/tap/${tag.tagId}/play`).send({ ctr: 5, cmac: cmacFor(5) }).expect(200);
+    expect(lms.calls.filter((c) => c.m === "loadAlbum")).toHaveLength(1);
+
+    // Replaying the same counter (a forwarded URL) is rejected.
+    const replay = await request(app).post(`/api/tap/${tag.tagId}/play`).send({ ctr: 5, cmac: cmacFor(5) }).expect(409);
+    expect(replay.body.reason).toBe("replay");
+
+    // A forged CMAC is rejected.
+    const bad = await request(app).post(`/api/tap/${tag.tagId}/play`).send({ ctr: 6, cmac: "deadbeef".repeat(4) }).expect(401);
+    expect(bad.body.reason).toBe("bad-cmac");
+
+    // The static-token path no longer works for a secure tag.
+    await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token: tapStore.tokenFor(tag.tagId) }).expect(409);
   });
 });

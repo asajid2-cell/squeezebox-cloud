@@ -129,8 +129,23 @@ export function createTapStore({ file = defaultFile(), persist: persistEnabled =
       if (patch.label !== undefined) tag.label = patch.label;
       if (patch.enabled !== undefined) tag.enabled = Boolean(patch.enabled);
       if (patch.policy !== undefined) tag.policy = normalizePolicy(patch.policy);
+      if (patch.sun !== undefined) {
+        // Opt a tag into the NTAG 424 SUN tier by giving it a 16-byte hex AES key;
+        // clearing the key reverts it to the static-token path.
+        const key = patch.sun && typeof patch.sun.key === "string" ? patch.sun.key.trim() : "";
+        if (key) tag.sun = { key, lastCtr: Number(tag.sun?.lastCtr) || 0 };
+        else delete tag.sun;
+      }
       persist();
       return clone(tag);
+    },
+
+    // Advance a secure tag's last-seen SUN counter (after a verified tap).
+    bumpSunCounter(tagId, ctr) {
+      const tag = tags.get(tagId);
+      if (!tag || !tag.sun) return;
+      tag.sun.lastCtr = Math.max(Number(tag.sun.lastCtr) || 0, Number(ctr) || 0);
+      persist();
     },
 
     remove(tagId) {
