@@ -1939,6 +1939,28 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       res.status(404).json({ ok: false, reason: "unbound", message: "This tag isn't set up yet." });
       return;
     }
+    if (!tag.enabled) {
+      res.status(409).json({ ok: false, reason: "disabled", message: "This tag is turned off." });
+      return;
+    }
+
+    // Global gates (party-mode, optional password) are checked BEFORE the
+    // per-tag auth so a missing password never burns a secure tag's one-time
+    // SUN counter.
+    const settings = tapStore.settings();
+    if (settings.partyMode === "closed") {
+      res.status(423).json({ ok: false, reason: "closed", message: "Tap is paused right now." });
+      return;
+    }
+    // Optional password (off by default) — the one guard that also stops a
+    // forwarded full URL from playing remotely. Configured in Tap settings;
+    // falls back to the TAP_PASSWORD env if set and no runtime password is on.
+    const requiredPassword = settings.requirePassword ? settings.password : process.env.TAP_PASSWORD || "";
+    if (requiredPassword && req.get("x-tap-password") !== requiredPassword) {
+      res.status(401).json({ ok: false, reason: "password", message: "A password is required to play this." });
+      return;
+    }
+
     // Auth: SECURE tags (NTAG 424 DNA SUN) verify a fresh per-tap CMAC + a
     // strictly-increasing counter — this is the only path that rejects a
     // forwarded/replayed URL. Other tags use the static signed token.
@@ -1959,25 +1981,6 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     } else if (!tapStore.verify(tagId, token)) {
       logEvent("tap.play.fail", { tagId, reason: "bad_token" });
       res.status(401).json({ ok: false, reason: "bad-token", message: "This tap couldn't be verified." });
-      return;
-    }
-    if (!tag.enabled) {
-      res.status(409).json({ ok: false, reason: "disabled", message: "This tag is turned off." });
-      return;
-    }
-
-    // Runtime settings (party-mode, optional password, debounce window).
-    const settings = tapStore.settings();
-    if (settings.partyMode === "closed") {
-      res.status(423).json({ ok: false, reason: "closed", message: "Tap is paused right now." });
-      return;
-    }
-    // Optional password (off by default) — the one guard that also stops a
-    // forwarded full URL from playing remotely. Configured in Tap settings;
-    // falls back to the TAP_PASSWORD env if set and no runtime password is on.
-    const requiredPassword = settings.requirePassword ? settings.password : process.env.TAP_PASSWORD || "";
-    if (requiredPassword && req.get("x-tap-password") !== requiredPassword) {
-      res.status(401).json({ ok: false, reason: "password", message: "A password is required to play this." });
       return;
     }
 
@@ -2009,8 +2012,10 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       logEvent("tap.play.ok", { tagId, kind: tag.playSpec?.kind });
       res.json({ ok: true, played: true, tag: publicTapTag(updated), nowPlaying: appState.nowPlaying });
     } catch (error) {
+      // Log the internal detail server-side only — never echo LMS/socket/path
+      // internals to a public tag caller.
       logEvent("tap.play.fail", { tagId, reason: "lms_error", error: error?.message });
-      res.status(502).json({ ok: false, reason: "lms_error", message: "Couldn't start playback.", detail: error?.message });
+      res.status(502).json({ ok: false, reason: "lms_error", message: "Couldn't start playback." });
     }
   });
 

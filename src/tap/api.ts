@@ -27,11 +27,20 @@ async function asJson(res: Response) {
 }
 
 // ---- public tapper ----
-export async function playTap(tagId: string, token: string): Promise<{ status: number; body: TapPlayResult }> {
+export type TapAuth = { ctr?: string | number | null; cmac?: string | null; password?: string };
+
+export async function playTap(tagId: string, token: string, auth: TapAuth = {}): Promise<{ status: number; body: TapPlayResult }> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (auth.password) headers["x-tap-password"] = auth.password;
+  const body: Record<string, unknown> = { token };
+  // NTAG 424 SUN tags carry a fresh counter + CMAC in the URL query — forward
+  // them so the secure resolver path can verify the tap.
+  if (auth.ctr !== undefined && auth.ctr !== null && auth.ctr !== "") body.ctr = Number(auth.ctr);
+  if (auth.cmac) body.cmac = auth.cmac;
   const res = await fetch(`/api/tap/${encodeURIComponent(tagId)}/play`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token })
+    headers,
+    body: JSON.stringify(body)
   });
   return { status: res.status, body: (await asJson(res)) as TapPlayResult };
 }

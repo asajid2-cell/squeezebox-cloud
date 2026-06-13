@@ -4,18 +4,22 @@ import { playTap, pausePlayer, nextTrack, tokenFromHash, type TapDisplay, type T
 type TapState =
   | { phase: "loading" }
   | { phase: "playing"; debounced: boolean; display: TapDisplay; where: string; tapCount?: number }
+  | { phase: "password"; error?: boolean }
   | { phase: "error"; reason: string; title: string; body: string; offerConsole?: boolean };
 
 const ERRORS: Record<string, { title: string; body: string; offerConsole?: boolean }> = {
   unbound: { title: "This tag isn't set up yet", body: "Bind it to an album in the Tap console and it'll play the moment you tap.", offerConsole: true },
   "bad-token": { title: "Couldn't verify this tap", body: "The tag's code didn't match. Hold your phone to the tag again." },
+  "bad-cmac": { title: "Couldn't verify this tap", body: "This secure tag's code didn't check out. Hold your phone to the tag again." },
+  replay: { title: "This tap was already used", body: "Secure tags only work once per tap — hold your phone to the tag again." },
   disabled: { title: "This tag is switched off", body: "Turn it back on from the Tap console to start playing it again.", offerConsole: true },
+  closed: { title: "The jukebox is paused", body: "Tap is closed right now. Open it from the Tap console to play again.", offerConsole: true },
   speaker_offline: { title: "The speaker's offline", body: "Wake the Squeezebox, give it a moment, then tap again." },
   lms_error: { title: "Couldn't start playback", body: "The speaker didn't take the request. Try tapping once more." },
   network: { title: "Something went wrong", body: "Check your connection and tap the tag again." }
 };
 
-function mapResult(status: number, body: TapPlayResult): TapState {
+function mapResult(status: number, body: TapPlayResult, opts: { passwordTried?: boolean } = {}): TapState {
   if (status >= 200 && status < 300 && body.ok) {
     const display = body.tag?.display ?? {};
     return {
@@ -30,6 +34,7 @@ function mapResult(status: number, body: TapPlayResult): TapState {
       tapCount: body.tag?.tapCount
     };
   }
+  if (body.reason === "password") return { phase: "password", error: opts.passwordTried };
   const reason = body.reason || "network";
   const e = ERRORS[reason] || ERRORS.network;
   return { phase: "error", reason, ...e };
@@ -70,22 +75,23 @@ export function TapNow({
 }) {
   const [state, setState] = useState<TapState>(demo ?? { phase: "loading" });
   const [paused, setPaused] = useState(false);
+  const [pwd, setPwd] = useState("");
+
+  // Forward the static token (#k= fragment) AND, for NTAG 424 SUN tags, the
+  // fresh ?ctr=&cmac= from the URL query, plus an optional password.
+  const doPlay = (password?: string) => {
+    const t = token ?? tokenFromHash();
+    const params = new URLSearchParams(window.location.search);
+    return play(tagId, t, { ctr: params.get("ctr"), cmac: params.get("cmac"), password })
+      .then(({ status, body }) => setState(mapResult(status, body, { passwordTried: Boolean(password) })))
+      .catch(() => setState({ phase: "error", reason: "network", ...ERRORS.network }));
+  };
 
   useEffect(() => {
     if (demo) return;
-    let alive = true;
-    const t = token ?? tokenFromHash();
-    play(tagId, t)
-      .then(({ status, body }) => {
-        if (alive) setState(mapResult(status, body));
-      })
-      .catch(() => {
-        if (alive) setState({ phase: "error", reason: "network", ...ERRORS.network });
-      });
-    return () => {
-      alive = false;
-    };
-  }, [tagId, token, play, demo]);
+    doPlay();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tagId, token, demo]);
 
   if (state.phase === "loading") {
     return (
@@ -98,6 +104,26 @@ export function TapNow({
           </div>
         </section>
         <footer className="tap-now__bottom">Tap to play — bridging your records and your speaker.</footer>
+      </main>
+    );
+  }
+
+  if (state.phase === "password") {
+    return (
+      <main className="tap-state">
+        <form className="tap-state__card" onSubmit={(e) => { e.preventDefault(); setState({ phase: "loading" }); doPlay(pwd); }}>
+          <div className="tap-state__icon" aria-hidden="true">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>
+          </div>
+          <h1 className="tap-state__title">Password required</h1>
+          <p className="tap-state__body">Enter the Tap password to play this.</p>
+          <div className="tap-field" style={{ width: "100%" }}>
+            <input type="password" value={pwd} onChange={(e) => setPwd(e.target.value)} placeholder="Password" aria-label="Tap password" autoFocus />
+          </div>
+          {state.error ? <div className="tap-alert tap-alert--err" role="alert" style={{ width: "100%" }}>That password didn't work — try again.</div> : null}
+          <button className="tap-btn tap-btn--primary" type="submit" disabled={!pwd} style={{ width: "100%" }}>Play</button>
+          <Wordmark />
+        </form>
       </main>
     );
   }

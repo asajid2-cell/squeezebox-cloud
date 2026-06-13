@@ -7,11 +7,14 @@
 import crypto from "node:crypto";
 
 function secret() {
-  return (
-    process.env.TAP_TOKEN_SECRET ||
-    process.env.CLOUD_SQUEEZE_ADMIN_PASSWORD_HASH ||
-    "tap-dev-secret-change-me"
-  );
+  const configured = process.env.TAP_TOKEN_SECRET || process.env.CLOUD_SQUEEZE_ADMIN_PASSWORD_HASH;
+  if (configured) return configured;
+  // Never sign tap tokens with the public dev fallback in production — every
+  // static token would be forgeable. Fail loud instead.
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("TAP_TOKEN_SECRET (or CLOUD_SQUEEZE_ADMIN_PASSWORD_HASH) must be set in production");
+  }
+  return "tap-dev-secret-change-me";
 }
 
 export function signTag(tagId) {

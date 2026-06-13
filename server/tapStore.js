@@ -33,6 +33,13 @@ function normalizePolicy(policy = {}) {
 
 const MAX_EVENTS = 5000; // bounded tap-history log for analytics
 
+// Tag ids registered as fixed sub-routes before /api/tap/:id — an imported tag
+// must never be allowed to claim one (or use slashes / absurd length).
+const RESERVED_TAG_IDS = new Set(["analytics", "settings", "export", "import"]);
+function isImportableTagId(id) {
+  return typeof id === "string" && /^[A-Za-z0-9_-]{6,64}$/.test(id) && !RESERVED_TAG_IDS.has(id);
+}
+
 const DEFAULT_SETTINGS = { debounceMs: 3000, partyMode: "open", requirePassword: false, password: "" };
 
 // Runtime Tap settings (clamped + defaulted). The password is never echoed back
@@ -234,8 +241,10 @@ export function createTapStore({ file = defaultFile(), persist: persistEnabled =
       let imported = 0;
       let skipped = 0;
       for (const raw of incoming) {
-        if (!raw?.tagId || !validatePlaySpec(raw.playSpec).ok) { skipped++; continue; }
-        tags.set(raw.tagId, {
+        // Reject ids that aren't safe/addressable (route collisions, slashes,
+        // control chars, absurd length) or carry an invalid PlaySpec.
+        if (!isImportableTagId(raw?.tagId) || !validatePlaySpec(raw.playSpec).ok) { skipped++; continue; }
+        const tag = {
           tagId: raw.tagId,
           enabled: raw.enabled !== false,
           playSpec: raw.playSpec,
@@ -245,7 +254,13 @@ export function createTapStore({ file = defaultFile(), persist: persistEnabled =
           createdAt: raw.createdAt || new Date().toISOString(),
           tapCount: Number(raw.tapCount) || 0,
           lastTappedAt: raw.lastTappedAt || null
-        });
+        };
+        // Preserve the NTAG 424 SUN security material so secure tags restore as
+        // secure (not silently downgraded to static-token).
+        if (raw.sun && typeof raw.sun.key === "string" && raw.sun.key.trim()) {
+          tag.sun = { key: raw.sun.key.trim(), lastCtr: Number(raw.sun.lastCtr) || 0 };
+        }
+        tags.set(raw.tagId, tag);
         imported++;
       }
       if (data?.settings) settings = normalizeSettings(data.settings);
