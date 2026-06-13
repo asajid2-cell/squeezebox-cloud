@@ -2,6 +2,7 @@ import React, { Suspense } from "react";
 import ReactDOM from "react-dom/client";
 import "./tap.css";
 import { TapNow } from "./TapNow";
+import { TapWrite } from "./TapWrite";
 
 // The console (search/bind/QR/manage) is lazy-loaded so the public tapper page
 // never downloads it — the tapper bundle stays tiny.
@@ -42,6 +43,12 @@ function render() {
   // server / battery) without the /tap/t/:id rewrite.
   if (tagMatch || params.get("view") === "now") {
     return <TapNow tagId={tagMatch ? decodeURIComponent(tagMatch[1]) : "demo"} demo={demoFromQuery()} />;
+  }
+  // The "write" page a phone reaches by scanning the console's QR — writes the
+  // tag via Web NFC, never plays.
+  const writeMatch = path.match(/\/tap\/write\/([^/]+)\/?$/);
+  if (writeMatch || params.get("view") === "write") {
+    return <TapWrite tagId={writeMatch ? decodeURIComponent(writeMatch[1]) : "demo"} />;
   }
   return (
     <Suspense fallback={<div className="tap-state"><span className="tap-spinner" aria-label="Loading" /></div>}>

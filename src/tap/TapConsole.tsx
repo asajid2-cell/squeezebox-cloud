@@ -29,6 +29,14 @@ function tapUrlFor(tagId: string, token: string): string {
   return `${window.location.origin}${base}/tap/t/${tagId}#k=${token}`;
 }
 
+// The phone-facing WRITE page (what the console QR points to): scanning it opens
+// the writer (Web NFC), it never plays.
+function writeUrlFor(tagId: string, token: string, title?: string): string {
+  const base = window.location.pathname.replace(/\/tap\/link.*$/, "");
+  const t = title ? `?t=${encodeURIComponent(title)}` : "";
+  return `${window.location.origin}${base}/tap/write/${tagId}${t}#k=${token}`;
+}
+
 function Wordmark() {
   return <span className="tap-wordmark"><span className="tap-wordmark__dot" aria-hidden="true" />Tap</span>;
 }
@@ -161,7 +169,7 @@ function WriteView({ onCreated }: { onCreated: () => void }) {
         <header className="tap-head">
           <span className="tap-head__eyebrow">Step 3 · Write</span>
           <h1 className="tap-head__title">Burn it onto a tag</h1>
-          <p className="tap-head__sub">Hold a blank NFC tag to your phone and write it once. Future taps play <strong>{created.display.title}</strong>.</p>
+          <p className="tap-head__sub">Write it once and future taps play <strong>{created.display.title}</strong>. On an Android phone, tap “Write to NFC tag” below. On a computer, scan the QR to open the writer on your phone.</p>
         </header>
         <div className="tap-card" style={{ maxWidth: "36rem" }}>
           <div className="tap-card__row">
@@ -179,8 +187,8 @@ function WriteView({ onCreated }: { onCreated: () => void }) {
           {!isNfcWriteSupported() ? <div className="tap-alert tap-alert--err">NFC writing needs Chrome on Android. Use the QR code or copy the link to write from a phone that supports it.</div> : null}
           {writeState ? <div className={`tap-alert ${writeState.ok ? "tap-alert--ok" : "tap-alert--err"}`} role="status">{writeState.msg}</div> : null}
           <div style={{ display: "grid", gap: "8px", justifyItems: "center", padding: "8px 0" }}>
-            <div style={{ background: "#fff", padding: 12, borderRadius: 12 }}><QRCodeSVG value={created.url} size={148} /></div>
-            <small>Scan to open this tag's page (or write the tag from that phone).</small>
+            <div style={{ background: "#fff", padding: 12, borderRadius: 12 }}><QRCodeSVG value={writeUrlFor(created.tagId, created.token, created.display.title)} size={148} /></div>
+            <small>On your phone? Scan to open the writer and burn the tag there — it won't play.</small>
           </div>
         </div>
       </section>
