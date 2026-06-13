@@ -295,6 +295,24 @@ export class LmsClient {
         title: titleParts || filename.replace(/\.flac$/i, "")
       };
     }
+    // Harmonizer canon/jukebox live-drive stream (the reverse bridge): an endless
+    // HTTP stream served by Cloud Squeeze's own /api/canon-stream proxy (which pulls
+    // from Harmonizer). Exempt from the https redirect so LMS can pull it over plain
+    // HTTP on the LAN — same mechanism as archive: streams above.
+    if (archiveId.startsWith("canon:")) {
+      const canonTrackId = archiveId.slice("canon:".length);
+      const params = new URLSearchParams();
+      if (track.canonMode) params.set("mode", String(track.canonMode));
+      if (track.canonVoices) params.set("voiceCount", String(track.canonVoices));
+      if (track.canonSeed) params.set("seed", String(track.canonSeed));
+      const qs = params.toString();
+      const titleParts = [track.artist, track.title].filter(Boolean).join(" - ");
+      return {
+        type: "uri",
+        value: `http://${config.lanLmsHost}:${config.port}/api/canon-stream/${encodeURIComponent(canonTrackId)}${qs ? `?${qs}` : ""}`,
+        title: titleParts || "Harmonizer canon"
+      };
+    }
     if (track.lmsTrackId) return { type: "track_id", value: track.lmsTrackId };
     if (track.uri && (!track.path || isSpotifySource(track))) {
       if (!isSpotifyTrackUri(track.uri)) return null;
