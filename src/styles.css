@@ -83,7 +83,7 @@ small { display: block; font-size: 13px; }
   grid-template-columns: 310px minmax(0, 1fr);
   background:
     radial-gradient(circle at 70% 0%, rgba(255,255,255,.035), transparent 34%),
-    #000;
+    var(--bg);
 }
 
 .sidebar {
@@ -95,7 +95,7 @@ small { display: block; font-size: 13px; }
   display: flex;
   flex-direction: column;
   gap: 16px;
-  background: linear-gradient(180deg, #020205, #000);
+  background: linear-gradient(180deg, var(--bg-soft), var(--bg));
   border-right: 1px solid var(--line);
 }
 .brand {
@@ -418,9 +418,9 @@ nav button.active {
   grid-area: search;
 }
 .panel {
-  background: linear-gradient(180deg, #0b0c12, #08090e);
+  background: linear-gradient(180deg, var(--panel), var(--bg-soft));
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius-panel);
 }
 .now-playing {
   grid-area: now;
@@ -428,7 +428,7 @@ nav button.active {
   padding: 24px 22px;
   background:
     radial-gradient(circle at 34% 35%, rgba(255, 95, 131, .10), transparent 38%),
-    linear-gradient(180deg, #0d0e15, #090a0f);
+    linear-gradient(180deg, var(--panel), var(--bg-soft));
 }
 .playing-layout {
   display: grid;
