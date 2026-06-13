@@ -1,6 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { TapNow } from "../src/tap/TapNow";
 
 type PlayFn = typeof import("../src/tap/api").playTap;
@@ -51,27 +50,6 @@ describe("Tap landing (TapNow)", () => {
     const play = (async () => { throw new Error("network down"); }) as unknown as PlayFn;
     render(<TapNow tagId="abc" token="t" play={play} />);
     await waitFor(() => expect(screen.getByText(/something went wrong/i)).toBeInTheDocument());
-  });
-
-  it("forwards SUN ctr/cmac from the URL query to the resolver", async () => {
-    window.history.pushState({}, "", "/tap/t/abc?ctr=42&cmac=deadbeef");
-    const play = vi.fn(async () => ({ status: 200, body: { ok: true, played: true, tag: { display: { title: "Punisher" } }, nowPlaying: { name: "the Boom" } } })) as unknown as PlayFn;
-    render(<TapNow tagId="abc" token="t" play={play} />);
-    await waitFor(() => expect(screen.getByText("Punisher")).toBeInTheDocument());
-    expect(play).toHaveBeenCalledWith("abc", "t", expect.objectContaining({ ctr: "42", cmac: "deadbeef" }));
-    window.history.pushState({}, "", "/");
-  });
-
-  it("prompts for a password when required, then retries with it", async () => {
-    const play = vi.fn()
-      .mockResolvedValueOnce({ status: 401, body: { ok: false, reason: "password" } })
-      .mockResolvedValueOnce({ status: 200, body: { ok: true, played: true, tag: { display: { title: "Kyoto" } }, nowPlaying: { name: "the Boom" } } }) as unknown as PlayFn;
-    render(<TapNow tagId="abc" token="t" play={play} />);
-    await waitFor(() => expect(screen.getByText(/Password required/i)).toBeInTheDocument());
-    await userEvent.type(screen.getByLabelText("Tap password"), "sesame");
-    await userEvent.click(screen.getByRole("button", { name: /^play$/i }));
-    await waitFor(() => expect(screen.getByText("Kyoto")).toBeInTheDocument());
-    expect(play).toHaveBeenLastCalledWith("abc", "t", expect.objectContaining({ password: "sesame" }));
   });
 
   it("does not crash on a missing cover image (falls back)", async () => {

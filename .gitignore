@@ -9,3 +9,18 @@ tmp/
 *.log
 npm-debug.log*
 PUBLIC_REPO_AUDIT.md
+
+# planning / ledgers / AI notes — kept locally, never published
+LOOPS.md
+TANDEM.md
+docs/multiroom-plan.md
+docs/recommender-research.md
+docs/squeezebox-tap-plan.md
+*.READY.md
+
+# backup files — kept locally, never published
+*.bak
+*.bak-*
+*.bak_*
+server.bak-archive/
+*.proto.bak

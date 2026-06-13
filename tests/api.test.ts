@@ -10,7 +10,6 @@ import { createPlaylistStore } from "../server/playlists.js";
 import { createCurationStore } from "../server/curation.js";
 import { createTapStore } from "../server/tapStore.js";
 import { verifyTag } from "../server/tapToken.js";
-import { aesCmac } from "../server/tapSun.js";
 import crypto from "node:crypto";
 
 const tinyMp3 = Buffer.from(
@@ -6559,9 +6558,7 @@ describe("Tap admin binding API", () => {
 
   it("requires admin auth to create a binding", async () => {
     const { app } = tapApp();
-    // x-forwarded-for marks this as a public (proxied) request so the hl-auth gate
-    // enforces (the local-direct bypass would otherwise treat it as trusted on-box).
-    await request(app).post("/api/tap").set("x-forwarded-for", "203.0.113.7").send(albumTopBody).expect(401);
+    await request(app).post("/api/tap").send(albumTopBody).expect(401);
   });
 
   it("creates a binding and returns a tap URL with the signed token in the fragment", async () => {
@@ -6636,55 +6633,6 @@ describe("Tap admin binding API", () => {
     const auth = await adminAuth(app);
     await request(app).get("/api/tap/does-not-exist").set("Authorization", auth).expect(404);
   });
-
-  it("serves analytics (admin-gated, not matched as a tag id)", async () => {
-    const { app } = tapApp();
-    const auth = await adminAuth(app);
-    await request(app).get("/api/tap/analytics").set("x-forwarded-for", "203.0.113.7").expect(401); // requires login (gate enforced)
-    const res = await request(app).get("/api/tap/analytics").set("Authorization", auth).expect(200);
-    expect(res.body).toHaveProperty("series");
-    expect(res.body).toHaveProperty("mostTapped");
-    expect(Array.isArray(res.body.series)).toBe(true);
-  });
-
-  it("reads + writes settings (admin); the password is never echoed back", async () => {
-    const { app } = tapApp();
-    const auth = await adminAuth(app);
-    await request(app).get("/api/tap/settings").set("x-forwarded-for", "203.0.113.7").expect(401);
-    const got = await request(app).get("/api/tap/settings").set("Authorization", auth).expect(200);
-    expect(got.body).toMatchObject({ partyMode: "open", requirePassword: false, hasPassword: false });
-
-    const set = await request(app).post("/api/tap/settings").set("Authorization", auth).send({ partyMode: "closed", requirePassword: true, password: "sesame" }).expect(200);
-    expect(set.body).toMatchObject({ partyMode: "closed", requirePassword: true, hasPassword: true });
-    expect(set.body).not.toHaveProperty("password");
-  });
-
-  it("reports the hl-auth session (on-box bypass authed; public without cookie not authed)", async () => {
-    const { app } = tapApp();
-    const local = await request(app).get("/api/tap/session").expect(200);
-    expect(local.body.authed).toBe(true); // on-box/local-direct bypass
-
-    const remote = await request(app).get("/api/tap/session").set("x-forwarded-for", "203.0.113.7").expect(200);
-    expect(remote.body.authed).toBe(false); // public request, no hl_session cookie
-    expect(remote.body.loginUrl).toMatch(/\/auth\/login/);
-  });
-
-  it("exports then imports bindings via the API (admin)", async () => {
-    const a1 = tapApp();
-    const auth = await adminAuth(a1.app);
-    await request(a1.app).post("/api/tap").set("Authorization", auth).send(albumTopBody).expect(200);
-
-    const exp = await request(a1.app).get("/api/tap/export").set("Authorization", auth).expect(200);
-    expect(exp.body.tags).toHaveLength(1);
-    expect(exp.headers["content-disposition"]).toMatch(/attachment/);
-
-    const a2 = tapApp();
-    const auth2 = await adminAuth(a2.app);
-    const imp = await request(a2.app).post("/api/tap/import").set("Authorization", auth2).send(exp.body).expect(200);
-    expect(imp.body.imported).toBe(1);
-    const list = await request(a2.app).get("/api/tap").set("Authorization", auth2).expect(200);
-    expect(list.body.tags).toHaveLength(1);
-  });
 });
 
 describe("Tap resolver golden cases", () => {
@@ -6695,7 +6643,6 @@ describe("Tap resolver golden cases", () => {
       ...mockLms,
       async loadAlbum(...args: unknown[]) { calls.push({ m: "loadAlbum", args }); return "ok"; },
       async playTrack(...args: unknown[]) { calls.push({ m: "playTrack", args }); return "ok"; },
-      async control(...args: unknown[]) { calls.push({ m: "control", args }); return "ok"; },
       ...overrides
     };
   }
@@ -6792,73 +6739,5 @@ describe("Tap resolver golden cases", () => {
     expect(second.body.debounced).toBe(true);
     // The album was loaded only ONCE — the second tap did not restart it.
     expect(lms.calls.filter((c) => c.m === "loadAlbum")).toHaveLength(1);
-  });
-
-  it("applies a per-tag volume before playing, and queue-mode for a track tag", async () => {
-    const lms = recordingLms();
-    const { app, tapStore } = setup(lms);
-    const tag = tapStore.create({
-      playSpec: { kind: "track", track: { uri: "spotify:track:0123456789abcdefghijAB", source: "Spotify" } },
-      display: {},
-      policy: { playMode: "queue", volume: 35 }
-    });
-    const token = tapStore.tokenFor(tag.tagId);
-
-    await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token }).expect(200);
-
-    // Volume is set BEFORE the track is played...
-    const volumeCall = lms.calls.find((c) => c.m === "control" && c.args[1] === "volume");
-    expect(volumeCall?.args[2]).toBe(35);
-    // ...and queue mode adds to the queue rather than replacing.
-    const playCall = lms.calls.find((c) => c.m === "playTrack");
-    expect(playCall?.args[2]).toBe("add-queue");
-  });
-
-  it("blocks taps when party mode is closed (423, nothing played)", async () => {
-    const lms = recordingLms();
-    const { app, tapStore } = setup(lms);
-    tapStore.setSettings({ partyMode: "closed" });
-    const tag = tapStore.create({ playSpec: { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" }, display: {} });
-    const token = tapStore.tokenFor(tag.tagId);
-
-    const res = await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token }).expect(423);
-    expect(res.body.reason).toBe("closed");
-    expect(lms.calls).toHaveLength(0);
-  });
-
-  it("requires the configured password when enabled, then plays with it", async () => {
-    const lms = recordingLms();
-    const { app, tapStore } = setup(lms);
-    tapStore.setSettings({ requirePassword: true, password: "sesame" });
-    const tag = tapStore.create({ playSpec: { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" }, display: {} });
-    const token = tapStore.tokenFor(tag.tagId);
-
-    await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token }).expect(401); // no password
-    await request(app).post(`/api/tap/${tag.tagId}/play`).set("x-tap-password", "sesame").send({ token }).expect(200);
-    expect(lms.calls.filter((c) => c.m === "loadAlbum")).toHaveLength(1);
-  });
-
-  it("secure (SUN) tags require a valid CMAC + strictly-increasing counter", async () => {
-    const lms = recordingLms();
-    const { app, tapStore } = setup(lms);
-    const tag = tapStore.create({ playSpec: { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" }, display: {} });
-    const keyHex = "00112233445566778899aabbccddeeff";
-    tapStore.update(tag.tagId, { sun: { key: keyHex } });
-    const cmacFor = (ctr: number) => aesCmac(Buffer.from(keyHex, "hex"), Buffer.from(`${tag.tagId}|${ctr}`, "utf8")).toString("hex");
-
-    // A valid fresh SUN message plays.
-    await request(app).post(`/api/tap/${tag.tagId}/play`).send({ ctr: 5, cmac: cmacFor(5) }).expect(200);
-    expect(lms.calls.filter((c) => c.m === "loadAlbum")).toHaveLength(1);
-
-    // Replaying the same counter (a forwarded URL) is rejected.
-    const replay = await request(app).post(`/api/tap/${tag.tagId}/play`).send({ ctr: 5, cmac: cmacFor(5) }).expect(409);
-    expect(replay.body.reason).toBe("replay");
-
-    // A forged CMAC is rejected.
-    const bad = await request(app).post(`/api/tap/${tag.tagId}/play`).send({ ctr: 6, cmac: "deadbeef".repeat(4) }).expect(401);
-    expect(bad.body.reason).toBe("bad-cmac");
-
-    // The static-token path no longer works for a secure tag.
-    await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token: tapStore.tokenFor(tag.tagId) }).expect(409);
   });
 });

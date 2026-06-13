@@ -8,7 +8,7 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket, WebSocketServer } from "ws";
-import { handleCastUpgrade, hasCastSession, serveCast, handleCanonPlay } from "./castRelay.js";
+import { handleCastUpgrade, hasSession as hasCastSession, serveCast, handleCanonPlay } from "./boomRelay.js";
 
 const lms = new LmsClient();
 await prewarmLibraryCaches(lms).catch(() => null);

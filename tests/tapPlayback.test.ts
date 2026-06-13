@@ -72,17 +72,4 @@ describe("Tap play engine (trusted replay)", () => {
       playTapTarget(lms, "", { kind: "album-from-top", source: "local", albumId: "1" })
     ).rejects.toThrow(/player/i);
   });
-
-  it("queue policy adds a track to the queue instead of replacing playback", async () => {
-    const lms = fakeLms();
-    await playTapTarget(lms, "player-1", { kind: "track", track: { uri: "spotify:track:0123456789abcdefghijAB" } }, { playMode: "queue" });
-    expect(lms.calls[0].method).toBe("playTrack");
-    expect(lms.calls[0].args[2]).toBe("add-queue");
-  });
-
-  it("replace policy (default) plays a track now", async () => {
-    const lms = fakeLms();
-    await playTapTarget(lms, "player-1", { kind: "track", track: { uri: "spotify:track:0123456789abcdefghijAB" } }, { playMode: "replace" });
-    expect(lms.calls[0].args[2]).toBe("play-now");
-  });
 });

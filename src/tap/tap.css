@@ -133,6 +133,16 @@ h1, h2, h3, p { margin: 0; }
 .tap-state__title { font-size: var(--step-2); font-weight: 700; }
 .tap-state__body { color: var(--muted); font-size: var(--step-1); line-height: 1.45; max-width: 40ch; }
 
+/* ---- inline sign-in form (hl-auth, on the Tap console itself) ---- */
+.tap-signin { gap: var(--s3); }
+.tap-signin__field { width: 100%; display: grid; gap: 6px; text-align: left; min-width: 0; }
+.tap-signin__label { font-size: var(--step-0); font-weight: 600; color: var(--muted); }
+.tap-signin .tap-field { width: 100%; }
+.tap-signin__error { width: 100%; text-align: left; color: var(--rose); font-size: var(--step-0); line-height: 1.4; overflow-wrap: anywhere; }
+.tap-signin__submit { width: 100%; margin-top: var(--s1); }
+.tap-signin__alt { font-size: var(--step-0); color: var(--muted); text-decoration: none; border-bottom: 1px solid transparent; }
+.tap-signin__alt:hover { color: var(--rose); border-bottom-color: var(--line); }
+
 /* ---- admin console (/tap/link) ---- */
 .tap-shell { min-height: 100dvh; display: grid; grid-template-columns: minmax(0, 1fr); }
 @media (min-width: 60rem) { .tap-shell { grid-template-columns: 260px minmax(0, 1fr); } }

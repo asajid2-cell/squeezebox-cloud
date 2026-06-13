@@ -64,6 +64,32 @@ export async function getSession(): Promise<TapSession> {
   return (await asJson(res)) as TapSession;
 }
 
+export type ApiLoginResult = {
+  ok: boolean;
+  user?: { username: string; isMaster?: boolean; isOwner?: boolean; isAdmin?: boolean };
+  error?: string;
+};
+
+// Sign in against hl-auth WITHOUT leaving the Tap console. POSTs credentials to
+// the same-origin hl-auth JSON login endpoint, which sets the shared host
+// session cookie; the caller then re-reads getSession(). The endpoint is
+// origin-gated server-side, so this only works same-origin (which is the point).
+// Derives the API url from the session's loginUrl (e.g. /auth/login -> /auth/api/login).
+export async function apiLogin(username: string, password: string, loginUrl = "/auth/login"): Promise<ApiLoginResult> {
+  const url = loginUrl.replace(/\/login(\?.*)?$/, "") + "/api/login";
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      credentials: "same-origin",
+      body: JSON.stringify({ username, password })
+    });
+    return (await asJson(res)) as ApiLoginResult;
+  } catch {
+    return { ok: false, error: "Couldn't reach the sign-in service. Try again." };
+  }
+}
+
 export type SearchItem = {
   id?: string;
   title?: string;

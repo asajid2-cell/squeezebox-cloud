@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import {
   getSession,
+  apiLogin,
   listTags,
   createTag,
   updateTag,
@@ -56,23 +57,72 @@ function Art({ src, alt, size = 56 }: { src?: string | null; alt: string; size?:
   );
 }
 
-// ---------- sign-in card (our UI; auth is hl-auth SSO) ----------
-function SignInCard({ session }: { session: TapSession | null }) {
-  const goLogin = () => {
-    const base = (session?.loginUrl || "/auth/login");
-    const next = encodeURIComponent(window.location.pathname + window.location.search);
-    window.location.href = `${base}${base.includes("?") ? "&" : "?"}next=${next}`;
+// ---------- sign-in card (our UI; auth is hl-auth SSO, signed in inline) ----------
+function SignInCard({ session, onSignedIn }: { session: TapSession | null; onSignedIn: () => void }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (busy || !username.trim() || !password) return;
+    setBusy(true);
+    setError("");
+    const r = await apiLogin(username.trim(), password, session?.loginUrl || "/auth/login");
+    if (r.ok) {
+      setPassword("");
+      onSignedIn();            // re-read the session → the console takes over
+    } else {
+      setError(r.error || "Sign-in failed. Check your username and password.");
+      setBusy(false);
+    }
   };
+
+  // Full Harmonizer sign-in page — for invite claims, password reset, and account
+  // actions that don't belong inline. Carries ?next back to this console.
+  const fullLoginHref = (() => {
+    const base = session?.loginUrl || "/auth/login";
+    const next = encodeURIComponent(window.location.pathname + window.location.search);
+    return `${base}${base.includes("?") ? "&" : "?"}next=${next}`;
+  })();
+
   return (
     <div className="tap-state">
-      <div className="tap-state__card">
+      <form className="tap-state__card tap-signin" onSubmit={submit} aria-label="Sign in">
         <Wordmark />
         <h1 className="tap-state__title">Tap console</h1>
         <p className="tap-state__body">Sign in with your Harmonizer account to bind tags, write them, and manage your collection.</p>
-        <button className="tap-btn tap-btn--primary" onClick={goLogin} style={{ width: "100%" }} autoFocus>
-          Sign in with Harmonizer
+
+        <label className="tap-signin__field">
+          <span className="tap-signin__label">Username</span>
+          <div className="tap-field">
+            <input
+              name="username" autoComplete="username" autoCapitalize="none" autoCorrect="off"
+              spellCheck={false} autoFocus value={username}
+              onChange={(e) => setUsername(e.target.value)} aria-label="Username"
+            />
+          </div>
+        </label>
+
+        <label className="tap-signin__field">
+          <span className="tap-signin__label">Password</span>
+          <div className="tap-field">
+            <input
+              name="password" type="password" autoComplete="current-password"
+              value={password} onChange={(e) => setPassword(e.target.value)} aria-label="Password"
+            />
+          </div>
+        </label>
+
+        {error ? <p className="tap-signin__error" role="alert">{error}</p> : null}
+
+        <button className="tap-btn tap-btn--primary tap-signin__submit" type="submit" disabled={busy}>
+          {busy ? <><span className="tap-spinner" aria-hidden="true" /> Signing in…</> : "Sign in"}
         </button>
-      </div>
+
+        <a className="tap-signin__alt" href={fullLoginHref}>Invite, password reset, or trouble signing in →</a>
+      </form>
     </div>
   );
 }
@@ -604,15 +654,17 @@ export function TapConsole() {
   const [view, setView] = useState<"tags" | "write" | "analytics" | "print" | "settings">("tags");
   const [refreshKey, setRefreshKey] = useState(0);
 
-  useEffect(() => {
+  const refreshSession = useCallback(() => {
     getSession().then(setSession, () => setSession({ authed: false, user: null }));
   }, []);
+
+  useEffect(() => { refreshSession(); }, [refreshSession]);
 
   if (session === "loading") {
     return <div className="tap-state"><span className="tap-spinner" aria-label="Loading" /></div>;
   }
   if (!session.authed) {
-    return <SignInCard session={session} />;
+    return <SignInCard session={session} onSignedIn={refreshSession} />;
   }
 
   const signOut = () => {

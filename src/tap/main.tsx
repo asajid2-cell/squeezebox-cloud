@@ -4,6 +4,26 @@ import "./tap.css";
 import { TapNow } from "./TapNow";
 import { TapWrite } from "./TapWrite";
 
+// The SPA is served under a mount prefix (the Vite base, e.g. "/cloud-squeeze")
+// via nginx, which strips the prefix before the app sees it. A root-absolute
+// "/api/..." call would bypass the prefix and miss the app entirely (404 at the
+// site root). Prefix same-origin "/api/..." requests with the mount base so every
+// API call lands on the app regardless of where it's mounted. No-op when the base
+// is "/" (app served at root). Does NOT touch "/auth/..." (hl-auth lives at root)
+// or absolute URLs. One place => covers the tapper, the console, and future calls.
+(() => {
+  const base = import.meta.env.BASE_URL.replace(/\/+$/, "");
+  if (!base) return;
+  const orig = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    if (typeof input === "string" && input.startsWith("/api/")) input = base + input;
+    else if (input instanceof URL && input.origin === location.origin && input.pathname.startsWith("/api/")) {
+      input = new URL(base + input.pathname + input.search + input.hash, location.origin);
+    }
+    return orig(input as RequestInfo | URL, init);
+  };
+})();
+
 // The console (search/bind/QR/manage) is lazy-loaded so the public tapper page
 // never downloads it — the tapper bundle stays tiny.
 const TapConsole = React.lazy(() => import("./TapConsole").then((m) => ({ default: m.TapConsole })));
