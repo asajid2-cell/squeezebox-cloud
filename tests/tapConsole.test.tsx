@@ -10,7 +10,8 @@ vi.mock("../src/tap/api", () => ({
   deleteTag: vi.fn(),
   searchLibrary: vi.fn(),
   spotifySearch: vi.fn(),
-  albumTracks: vi.fn()
+  albumTracks: vi.fn(),
+  getAnalytics: vi.fn()
 }));
 vi.mock("../src/tap/nfc", () => ({
   writeTapTag: vi.fn(async () => ({ ok: true })),
@@ -130,6 +131,23 @@ describe("Tap console — bind & write", () => {
     await userEvent.click(screen.getByRole("button", { name: /Kyoto/ }));
 
     expect(mocked.createTag).toHaveBeenCalledWith("tok", expect.objectContaining({ intent: "album-from-track", albumUri: "spotify:album:xyz789", startIndex: 2 }));
+  });
+
+  it("renders the Analytics view with totals, chart, and most-tapped", async () => {
+    mocked.getAnalytics.mockResolvedValue({
+      totalTaps: 42,
+      totalTags: 5,
+      windowTaps: 18,
+      series: [{ date: "2026-06-01", count: 3 }, { date: "2026-06-02", count: 7 }],
+      mostTapped: [{ tagId: "a1", display: { title: "Punisher", artist: "PB" }, tapCount: 12, kind: "album-from-top" }]
+    });
+    render(<TapConsole />);
+    await userEvent.click(screen.getByRole("link", { name: /analytics/i }));
+    await waitFor(() => expect(screen.getByText("42")).toBeInTheDocument());
+    expect(screen.getByText(/total taps/i)).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /taps over time/i })).toBeInTheDocument();
+    expect(screen.getByText("Punisher")).toBeInTheDocument();
+    expect(screen.getByText(/Tapped 12×/)).toBeInTheDocument();
   });
 
   it("shows the empty 'no matches' state", async () => {

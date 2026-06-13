@@ -99,6 +99,19 @@ export async function listTags(token: string): Promise<TapTag[]> {
   return (body.tags || []) as TapTag[];
 }
 
+export type TapAnalytics = {
+  totalTaps: number;
+  totalTags: number;
+  windowTaps: number;
+  series: { date: string; count: number }[];
+  mostTapped: { tagId: string; display?: TapDisplay; tapCount: number; kind?: string; lastTappedAt?: string | null }[];
+};
+
+export async function getAnalytics(token: string): Promise<TapAnalytics> {
+  const res = await fetch("/api/tap/analytics", { headers: authHeaders(token) });
+  return (await asJson(res)) as TapAnalytics;
+}
+
 export async function createTag(token: string, payload: Record<string, unknown>) {
   const res = await fetch("/api/tap", { method: "POST", headers: authHeaders(token), body: JSON.stringify(payload) });
   return { status: res.status, body: await asJson(res) };

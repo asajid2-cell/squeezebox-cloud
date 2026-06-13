@@ -9,8 +9,10 @@ import {
   searchLibrary,
   spotifySearch,
   albumTracks,
+  getAnalytics,
   type TapTag,
-  type SearchItem
+  type SearchItem,
+  type TapAnalytics
 } from "./api";
 import { writeTapTag, isNfcWriteSupported } from "./nfc";
 
@@ -375,27 +377,110 @@ function TagsView({ token, refreshKey }: { token: string; refreshKey: number }) 
   );
 }
 
+// ---------- analytics ----------
+function BarChart({ series }: { series: { date: string; count: number }[] }) {
+  const max = Math.max(1, ...series.map((s) => s.count));
+  const n = series.length || 1;
+  const gap = 1.4;
+  const bw = (100 - gap * (n - 1)) / n;
+  return (
+    <svg viewBox="0 0 100 42" preserveAspectRatio="none" role="img" aria-label="Taps over time" className="tap-chart">
+      {series.map((s, i) => {
+        const h = (s.count / max) * 38;
+        return <rect key={s.date} x={i * (bw + gap)} y={42 - Math.max(h, 0.6)} width={bw} height={Math.max(h, 0.6)} rx={0.5} fill="var(--rose)" opacity={s.count ? 1 : 0.22} />;
+      })}
+    </svg>
+  );
+}
+
+function AnalyticsView({ token }: { token: string }) {
+  const [data, setData] = useState<TapAnalytics | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    getAnalytics(token).then((d) => { if (alive) setData(d); }, () => { if (alive) setFailed(true); });
+    return () => { alive = false; };
+  }, [token]);
+
+  return (
+    <section className="tap-main" aria-label="Analytics">
+      <header className="tap-head">
+        <span className="tap-head__eyebrow">Analytics</span>
+        <h1 className="tap-head__title">How your tags get tapped</h1>
+        <p className="tap-head__sub">Taps over the last two weeks, and which albums get reached for most.</p>
+      </header>
+
+      {failed ? <div className="tap-alert tap-alert--err">Couldn't load analytics.</div> : null}
+      {!data && !failed ? <div className="tap-card__meta"><span className="tap-spinner" aria-hidden="true" /> Loading…</div> : null}
+
+      {data ? (
+        <>
+          <div className="tap-stats">
+            <div className="tap-stat"><span className="tap-stat__n">{data.totalTaps}</span><span className="tap-stat__l">total taps</span></div>
+            <div className="tap-stat"><span className="tap-stat__n">{data.windowTaps}</span><span className="tap-stat__l">last 14 days</span></div>
+            <div className="tap-stat"><span className="tap-stat__n">{data.totalTags}</span><span className="tap-stat__l">tags</span></div>
+          </div>
+
+          <div className="tap-card" style={{ maxWidth: "52rem" }}>
+            <div className="tap-card__row"><span className="tap-card__title">Taps over time</span></div>
+            <BarChart series={data.series} />
+            <div className="tap-chart__axis"><span>{data.series[0]?.date}</span><span>{data.series[data.series.length - 1]?.date}</span></div>
+          </div>
+
+          <div>
+            <h2 className="tap-head__eyebrow" style={{ marginBottom: 12 }}>Most tapped</h2>
+            {data.mostTapped.length === 0 ? (
+              <div className="tap-empty"><strong>No taps yet.</strong><span>Tap a tag and it'll show up here.</span></div>
+            ) : (
+              <div className="tap-grid">
+                {data.mostTapped.map((t, i) => (
+                  <div className="tap-card" key={t.tagId}>
+                    <div className="tap-card__row">
+                      <span className="tap-rank" aria-hidden="true">{i + 1}</span>
+                      <Art src={t.display?.art} alt={t.display?.title || "tag"} />
+                      <div className="tap-card__text">
+                        <span className="tap-card__title">{t.display?.title || "Untitled tag"}</span>
+                        <span className="tap-card__sub">{t.display?.artist}</span>
+                      </div>
+                    </div>
+                    <div className="tap-card__meta"><span>Tapped {t.tapCount}×</span></div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      ) : null}
+    </section>
+  );
+}
+
 // ---------- shell ----------
 export function TapConsole() {
   const [token, setToken] = useState<string | null>(() => (typeof localStorage !== "undefined" ? localStorage.getItem(TOKEN_KEY) : null));
-  const [view, setView] = useState<"tags" | "write">("tags");
+  const [view, setView] = useState<"tags" | "write" | "analytics">("tags");
   const [refreshKey, setRefreshKey] = useState(0);
 
   if (!token) return <LoginGate onAuthed={setToken} />;
 
   const signOut = () => { localStorage.removeItem(TOKEN_KEY); setToken(null); };
+  const navItem = (key: "tags" | "write" | "analytics", label: string) => (
+    <a className="tap-nav__item" href={`#${key}`} aria-current={view === key ? "page" : undefined} onClick={(e) => { e.preventDefault(); setView(key); }}>{label}</a>
+  );
 
   return (
     <div className="tap-shell">
       <nav className="tap-nav" aria-label="Tap console">
         <div className="tap-nav__brand"><Wordmark /></div>
-        <a className="tap-nav__item" href="#tags" aria-current={view === "tags" ? "page" : undefined} onClick={(e) => { e.preventDefault(); setView("tags"); }}>Tags</a>
-        <a className="tap-nav__item" href="#write" aria-current={view === "write" ? "page" : undefined} onClick={(e) => { e.preventDefault(); setView("write"); }}>Write a tag</a>
-        <a className="tap-nav__item" aria-disabled="true" href="#analytics">Analytics<span className="tap-nav__soon">soon</span></a>
+        {navItem("tags", "Tags")}
+        {navItem("write", "Write a tag")}
+        {navItem("analytics", "Analytics")}
         <a className="tap-nav__item" aria-disabled="true" href="#stations">Reader stations<span className="tap-nav__soon">soon</span></a>
         <button className="tap-btn tap-btn--ghost" style={{ marginTop: "auto" }} onClick={signOut}>Sign out</button>
       </nav>
-      {view === "tags" ? <TagsView token={token} refreshKey={refreshKey} /> : <WriteView token={token} onCreated={() => setRefreshKey((k) => k + 1)} />}
+      {view === "tags" ? <TagsView token={token} refreshKey={refreshKey} />
+        : view === "analytics" ? <AnalyticsView token={token} />
+        : <WriteView token={token} onCreated={() => setRefreshKey((k) => k + 1)} />}
     </div>
   );
 }

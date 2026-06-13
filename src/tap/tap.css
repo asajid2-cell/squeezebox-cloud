@@ -188,6 +188,14 @@ h1, h2, h3, p { margin: 0; }
 .tap-toggle button { min-height: 38px; border: 0; border-radius: 999px; background: transparent; color: var(--muted); padding: 0 var(--s4); font-weight: 600; cursor: pointer; }
 .tap-toggle button[aria-pressed="true"] { background: var(--rose-soft); color: var(--text); }
 
+.tap-stats { display: grid; gap: var(--s3); grid-template-columns: repeat(auto-fit, minmax(min(9rem, 100%), 1fr)); max-width: 52rem; }
+.tap-stat { display: grid; gap: 2px; padding: var(--s4); border: 1px solid var(--line); border-radius: var(--r-card); background: var(--panel); }
+.tap-stat__n { font-size: var(--step-3); font-weight: 700; line-height: 1; }
+.tap-stat__l { color: var(--muted); font-size: var(--step-0); }
+.tap-chart { width: 100%; height: 140px; display: block; }
+.tap-chart__axis { display: flex; justify-content: space-between; color: var(--faint); font-size: var(--step-0); }
+.tap-rank { flex: none; width: 24px; text-align: center; color: var(--rose); font-weight: 700; }
+
 .tap-alert { padding: var(--s3) var(--s4); border-radius: var(--r-control); border: 1px solid; font-size: var(--step-0); }
 .tap-alert--err { color: #ffd2dc; border-color: rgba(255,71,114,.4); background: rgba(255,71,114,.1); }
 .tap-alert--ok { color: #cdf6e1; border-color: rgba(66,216,132,.35); background: rgba(66,216,132,.1); }
