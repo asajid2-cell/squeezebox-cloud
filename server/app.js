@@ -2088,8 +2088,13 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       const resumeTo = !partyQueue && policy.resume && isAlbum && tag.resumeState ? tag.resumeState : null;
       const behavior = { ...policy, playMode: partyQueue ? "queue" : policy.playMode, resumeTo };
 
+      // A tap is a DIRECT, forceful act on the speaker. Disengage the app's
+      // smart-radio first so it stops managing (and overriding) the LMS playlist
+      // — otherwise tap-queue/discover "defer to the squeezebox" and do nothing.
+      stopGeneratedPlayback();
+
       if (tag.playSpec?.kind === "discover") {
-        await playDiscoverTag(lms, playerId, tag.playSpec, { taste });
+        await playDiscoverTag(lms, playerId, tag.playSpec, { taste, queue: behavior.playMode === "queue" });
       } else {
         await playTapTarget(lms, playerId, tag.playSpec, behavior);
       }
@@ -3195,20 +3200,29 @@ async function activateGeneratedQueue(lms, playerId, { smart = false, shuffle: s
   return queued;
 }
 
-// Resolve + play a "discover" tag: activate a FRESH taste-seeded smart-radio
-// queue, so every tap yields new on-taste music that keeps refilling itself.
-// Reuses the same generated-queue engine the Smart Shuffle button drives.
-async function playDiscoverTag(lms, playerId, playSpec, { taste = defaultListenerTasteStore } = {}) {
+// Resolve + play a "discover" tag: pull a FRESH taste-seeded set from the
+// recommender and force it straight onto the speaker — first track plays now,
+// the rest are appended so the surprise keeps going. It deliberately does NOT
+// engage the app's smart-radio (activateGeneratedQueue), because that turns on
+// app-managed playback that then "defers" and overrides later taps. A tap is a
+// direct, forceful act on the LMS, every time.
+async function playDiscoverTag(lms, playerId, playSpec, { taste = defaultListenerTasteStore, queue = false } = {}) {
   if (!spotifyBrowsingAvailable()) {
     throw new Error("Spotify browsing is unavailable for discovery right now");
   }
   const seed = String(playSpec?.seed || "").trim();
-  const queued = await activateGeneratedQueue(lms, playerId, { smart: true, mode: "spotify", count: 5, seed, taste });
-  if (!queued || queued.length === 0) {
+  const candidates = await spotifyRecommenderCandidates(lms, playerId, seed, 6, taste);
+  const playable = (Array.isArray(candidates) ? candidates : []).filter(isPlayableSpotifyTrack);
+  if (playable.length === 0) {
     throw new Error("No discovery tracks were found");
   }
-  await refreshLms(lms, { taste });
-  return { kind: "discover", queued: queued.length };
+  // First pick: replace (force play now) unless party-queue is on (append).
+  await lms.playTrack(playerId, playable[0], queue ? "add-queue" : "play-now");
+  // Append a few more so it plays on past the first track.
+  for (const track of playable.slice(1, 5)) {
+    await lms.playTrack(playerId, track, "add-queue").catch(() => {});
+  }
+  return { kind: "discover", queued: playable.length };
 }
 
 async function buildGeneratedQueue(lms, playerId, seed, mode, count, requestedBy, { allowLocalWideFallback = true, taste = defaultListenerTasteStore } = {}) {
