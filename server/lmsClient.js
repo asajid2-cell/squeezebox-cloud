@@ -768,6 +768,9 @@ export class LmsClient {
       if (firstPageCached) return firstPageCached.slice(start, start + count);
     }
     const stale = this.getCached(cacheKey, { allowExpired: true }) || this.getCached(widerKeys[0], { allowExpired: true })?.slice(0, count) || [];
+    // Albums are intentionally NOT live-probed: a Spotty saved-albums browse triggers
+    // a heavy import, so we only ever serve cached albums (see lmsClient tests). Do not
+    // remove this guard — the empty cold-cache Albums tab is a deliberate tradeoff.
     if (type === "albums") return stale.slice(0, count);
     const widerInflight = widerKeys.map((key) => this.inflight.get(key)).find(Boolean);
     if (widerInflight) {
