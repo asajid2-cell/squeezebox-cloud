@@ -47,7 +47,7 @@ const MAX_EVENTS = 5000; // bounded tap-history log for analytics
 
 // Tag ids registered as fixed sub-routes before /api/tap/:id — an imported tag
 // must never be allowed to claim one (or use slashes / absurd length).
-const RESERVED_TAG_IDS = new Set(["analytics", "settings", "export", "import", "session", "whoami"]);
+const RESERVED_TAG_IDS = new Set(["analytics", "settings", "export", "import", "session", "whoami", "now"]);
 function isImportableTagId(id) {
   return typeof id === "string" && /^[A-Za-z0-9_-]{6,64}$/.test(id) && !RESERVED_TAG_IDS.has(id);
 }

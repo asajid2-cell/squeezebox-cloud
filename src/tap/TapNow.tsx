@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import { playTap, pausePlayer, nextTrack, tokenFromHash, artSrc, type TapDisplay, type TapPlayResult } from "./api";
+import React, { useEffect, useRef, useState } from "react";
+import { playTap, pausePlayer, nextTrack, tokenFromHash, artSrc, nowPlayingNow, type TapDisplay, type TapPlayResult, type NowPlaying } from "./api";
 
 type TapState =
   | { phase: "loading" }
@@ -76,6 +76,36 @@ export function TapNow({
   const [state, setState] = useState<TapState>(demo ?? { phase: "loading" });
   const [paused, setPaused] = useState(false);
   const [pwd, setPwd] = useState("");
+  const pollRef = useRef<number | null>(null);
+
+  // One tap, one song: after we play, we replaceState the URL to `?np=1` (and drop
+  // the #k= token), so a refresh or tab-reopen lands here and shows now-playing
+  // instead of replaying. A genuine NFC re-tap opens the tag's `#k=` URL fresh
+  // (no np flag), so it still plays. The flag — not sessionStorage — is the
+  // signal, precisely so re-tapping the physical tag always works.
+  const isRevisit = (() => {
+    try { return new URLSearchParams(window.location.search).get("np") === "1"; } catch { return false; }
+  })();
+
+  // Drive the "playing" screen from the LIVE now-playing so it reflects the actual
+  // song (essential for Surprise tags, and tracks queue advances) and keep it
+  // current with a gentle poll. Never replays.
+  const showNowPlaying = (seed?: TapDisplay, where = "your Squeezebox", tapCount?: number, debounced = false) => {
+    const render = (np: NowPlaying | null) => setState({
+      phase: "playing",
+      debounced,
+      display: {
+        title: np?.title || seed?.title || "Now playing",
+        artist: np?.artist || seed?.artist || "",
+        art: np?.art ?? seed?.art ?? null
+      },
+      where,
+      tapCount
+    });
+    nowPlayingNow().then(render, () => render(null));
+    if (pollRef.current) window.clearInterval(pollRef.current);
+    pollRef.current = window.setInterval(() => { nowPlayingNow().then((np) => { if (np) render(np); }, () => {}); }, 5000);
+  };
 
   // Forward the static token (#k= fragment) AND, for NTAG 424 SUN tags, the
   // fresh ?ctr=&cmac= from the URL query, plus an optional password.
@@ -83,13 +113,25 @@ export function TapNow({
     const t = token ?? tokenFromHash();
     const params = new URLSearchParams(window.location.search);
     return play(tagId, t, { ctr: params.get("ctr"), cmac: params.get("cmac"), password })
-      .then(({ status, body }) => setState(mapResult(status, body, { passwordTried: Boolean(password) })))
+      .then(({ status, body }) => {
+        const mapped = mapResult(status, body, { passwordTried: Boolean(password) });
+        if (mapped.phase === "playing") {
+          // Mark this open as consumed so a refresh won't replay.
+          try { window.history.replaceState(null, "", `${window.location.pathname}?np=1`); } catch { /* ignore */ }
+          showNowPlaying(mapped.display, mapped.where, mapped.tapCount, mapped.debounced);
+        } else {
+          setState(mapped);
+        }
+      })
       .catch(() => setState({ phase: "error", reason: "network", ...ERRORS.network }));
   };
 
   useEffect(() => {
     if (demo) return;
-    doPlay();
+    // A revisit (refresh/reopen of the post-play URL) shows what's on — never replays.
+    if (isRevisit) showNowPlaying();
+    else doPlay();
+    return () => { if (pollRef.current) window.clearInterval(pollRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tagId, token, demo]);
 

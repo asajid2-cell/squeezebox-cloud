@@ -174,12 +174,12 @@ export type NowPlaying = {
   connected?: boolean;
 };
 
-// Read the live now-playing from the main app state so the console can offer a
-// one-tap "bind what's playing" action.
+// Read the live now-playing from the lightweight public endpoint — used by the
+// tapper's post-play "what's on" screen and the console's "bind what's playing".
 export async function nowPlayingNow(): Promise<NowPlaying | null> {
-  const res = await fetch("/api/state", { credentials: "same-origin" });
+  const res = await fetch("/api/tap/now");
   const body = await asJson(res);
-  const np = body?.nowPlaying || body?.player?.nowPlaying || null;
+  const np = body?.nowPlaying || null;
   if (!np || !(np.title || np.uri || np.id)) return null;
   return {
     title: np.title,
@@ -189,7 +189,7 @@ export async function nowPlayingNow(): Promise<NowPlaying | null> {
     uri: np.uri,
     id: np.id,
     source: np.source,
-    connected: body?.player?.connected ?? body?.connected
+    connected: body?.connected
   };
 }
 

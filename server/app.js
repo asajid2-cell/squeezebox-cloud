@@ -1921,6 +1921,21 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     res.json({ ...state, loginUrl: AUTH_LOGIN_URL, logoutUrl: `${(process.env.AUTH_PUBLIC_BASE || "/auth").replace(/\/$/, "")}/logout` });
   });
 
+  // Public, lightweight now-playing for the tapper's post-play "what's on" screen
+  // and the console's "bind what's playing" — just the current track, no auth, no
+  // heavy /api/state payload. Registered before /api/tap/:id so "now" isn't an id.
+  app.get("/api/tap/now", (_req, res) => {
+    const np = appState.nowPlaying || {};
+    res.json({
+      nowPlaying: {
+        title: np.title, artist: np.artist, album: np.album, art: np.art ?? null,
+        id: np.id, uri: np.uri, source: np.source, duration: np.duration, elapsed: np.elapsed
+      },
+      connected: Boolean(appState.player?.connected),
+      name: appState.player?.name || ""
+    });
+  });
+
   // Registered BEFORE /api/tap/:id so "analytics"/"settings" aren't matched as ids.
   app.get("/api/tap/analytics", requireTapAccess, (_req, res) => {
     res.json(tapStore.analytics());
@@ -2106,6 +2121,20 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       tapPlayState.set(tagId, { lastPlayedAt: Date.now() });
       const updated = tapStore.recordTap(tagId);
       logEvent("tap.play.ok", { tagId, kind: tag.playSpec?.kind });
+
+      // Keep the Surprise pool warm in the background (only if a discover tag
+      // exists) so the first Surprise tap of a session isn't the slow ~13s build.
+      try {
+        const tastePool = discoverPoolFor("");
+        if (tag.playSpec?.kind !== "discover"
+          && tastePool.tracks.length < 5 && !tastePool.building
+          && (Date.now() - tastePool.at) > DISCOVER_POOL_TTL_MS
+          && spotifyBrowsingAvailable()
+          && tapStore.list().some((t) => t.playSpec?.kind === "discover")) {
+          refillDiscoverPool(lms, playerId, "", taste);
+        }
+      } catch { /* pre-warm is best-effort */ }
+
       res.json({ ok: true, played: true, tag: publicTapTag(updated), nowPlaying: appState.nowPlaying });
     } catch (error) {
       // Log the internal detail server-side only — never echo LMS/socket/path
@@ -3200,29 +3229,64 @@ async function activateGeneratedQueue(lms, playerId, { smart = false, shuffle: s
   return queued;
 }
 
-// Resolve + play a "discover" tag: pull a FRESH taste-seeded set from the
-// recommender and force it straight onto the speaker — first track plays now,
-// the rest are appended so the surprise keeps going. It deliberately does NOT
-// engage the app's smart-radio (activateGeneratedQueue), because that turns on
-// app-managed playback that then "defers" and overrides later taps. A tap is a
-// direct, forceful act on the LMS, every time.
+// The recommender (Spotty browse graph) takes ~10s+, so a cold discover tap used
+// to hang. We keep a WARM pool per seed: serve a fresh slice instantly, then
+// refill in the background so the next tap is also instant.
+const discoverPools = new Map(); // seed -> { tracks: [], at: ms, building: bool }
+const DISCOVER_POOL_TTL_MS = 15 * 60 * 1000;
+const DISCOVER_POOL_TARGET = 15;
+
+function discoverPoolFor(seed) {
+  const key = seed || "__taste__";
+  let pool = discoverPools.get(key);
+  if (!pool) { pool = { tracks: [], at: 0, building: false }; discoverPools.set(key, pool); }
+  return pool;
+}
+
+// Rebuild a seed's pool from the recommender (slow). Fire-and-forget friendly:
+// guarded so only one build runs at a time; keeps the old pool on failure.
+async function refillDiscoverPool(lms, playerId, seed, taste) {
+  const pool = discoverPoolFor(seed);
+  if (pool.building) return;
+  pool.building = true;
+  try {
+    const candidates = await spotifyRecommenderCandidates(lms, playerId, seed, DISCOVER_POOL_TARGET, taste);
+    const playable = (Array.isArray(candidates) ? candidates : []).filter(isPlayableSpotifyTrack);
+    if (playable.length) { pool.tracks = playable; pool.at = Date.now(); }
+  } catch { /* keep the existing pool */ }
+  finally { pool.building = false; }
+}
+
+// Resolve + play a "discover" tag: force a FRESH taste-seeded set straight onto
+// the speaker — first track plays now, the rest are appended so the surprise
+// keeps going. Serves from a warm pool for instant taps. It deliberately does
+// NOT engage the app's smart-radio (that "defers" and overrides later taps).
 async function playDiscoverTag(lms, playerId, playSpec, { taste = defaultListenerTasteStore, queue = false } = {}) {
   if (!spotifyBrowsingAvailable()) {
     throw new Error("Spotify browsing is unavailable for discovery right now");
   }
   const seed = String(playSpec?.seed || "").trim();
-  const candidates = await spotifyRecommenderCandidates(lms, playerId, seed, 6, taste);
-  const playable = (Array.isArray(candidates) ? candidates : []).filter(isPlayableSpotifyTrack);
-  if (playable.length === 0) {
+  const pool = discoverPoolFor(seed);
+  const warm = pool.tracks.length >= 2 && (Date.now() - pool.at) < DISCOVER_POOL_TTL_MS;
+  if (!warm) {
+    // Cold/stale: build now (the only slow tap; subsequent taps serve from pool).
+    await refillDiscoverPool(lms, playerId, seed, taste);
+  }
+  if (pool.tracks.length === 0) {
     throw new Error("No discovery tracks were found");
   }
+  // Pick a fresh shuffled slice and consume it so the next tap differs.
+  const picks = shuffle([...pool.tracks]).slice(0, 5);
+  const pickedKeys = new Set(picks.map(trackKey));
+  pool.tracks = pool.tracks.filter((t) => !pickedKeys.has(trackKey(t)));
   // First pick: replace (force play now) unless party-queue is on (append).
-  await lms.playTrack(playerId, playable[0], queue ? "add-queue" : "play-now");
-  // Append a few more so it plays on past the first track.
-  for (const track of playable.slice(1, 5)) {
+  await lms.playTrack(playerId, picks[0], queue ? "add-queue" : "play-now");
+  for (const track of picks.slice(1)) {
     await lms.playTrack(playerId, track, "add-queue").catch(() => {});
   }
-  return { kind: "discover", queued: playable.length };
+  // Refill in the background (don't await) so the next tap stays instant.
+  if (pool.tracks.length < 5) refillDiscoverPool(lms, playerId, seed, taste);
+  return { kind: "discover", queued: picks.length };
 }
 
 async function buildGeneratedQueue(lms, playerId, seed, mode, count, requestedBy, { allowLocalWideFallback = true, taste = defaultListenerTasteStore } = {}) {

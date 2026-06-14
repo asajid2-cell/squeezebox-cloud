@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { TapNow } from "../src/tap/TapNow";
 
@@ -6,6 +6,13 @@ type PlayFn = typeof import("../src/tap/api").playTap;
 const fakePlay = (status: number, body: unknown): PlayFn => (async () => ({ status, body })) as unknown as PlayFn;
 
 describe("Tap landing (TapNow)", () => {
+  // A successful tap replaceState's the URL to ?np=1 (so a refresh won't replay).
+  // That persists in the shared jsdom document, so reset it before each test or a
+  // later test would be treated as a "revisit" and skip the play.
+  beforeEach(() => {
+    window.history.replaceState(null, "", "/");
+  });
+
   it("shows the now-playing card on a successful tap", async () => {
     const play = fakePlay(200, {
       ok: true,
@@ -56,5 +63,15 @@ describe("Tap landing (TapNow)", () => {
     const play = fakePlay(200, { ok: true, played: true, tag: { display: { title: "No Art Album", artist: "X", art: null } }, nowPlaying: { name: "the Boom" } });
     render(<TapNow tagId="abc" token="t" play={play} />);
     await waitFor(() => expect(screen.getByText("No Art Album")).toBeInTheDocument());
+  });
+
+  it("does NOT replay on a revisit (?np=1) — one tap, one song", async () => {
+    window.history.replaceState(null, "", "/?np=1");
+    let calls = 0;
+    const play = (async () => { calls += 1; return { status: 200, body: { ok: true, played: true, tag: { display: { title: "X" } } } }; }) as unknown as PlayFn;
+    render(<TapNow tagId="abc" token="t" play={play} />);
+    // Lands on the now-playing screen (live), without ever calling play.
+    await waitFor(() => expect(screen.getByRole("button", { name: /pause/i })).toBeInTheDocument());
+    expect(calls).toBe(0);
   });
 });
