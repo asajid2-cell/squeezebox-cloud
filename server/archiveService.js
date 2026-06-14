@@ -321,20 +321,19 @@ function reencodeFlac(src, dst) {
 // ---------------------------------------------------------------------------
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
-const RESEND_FROM = process.env.RESEND_FROM || "Squeezebox Archive <onboarding@resend.dev>";
+const RESEND_FROM = process.env.RESEND_FROM || "Squeezebox Archive <archive@harmonizerlabs.cc>";
 const EMAIL_BITRATE = process.env.ARCHIVE_EMAIL_BITRATE || "320k";
 const EMAIL_MAX_BYTES = (Number(process.env.ARCHIVE_EMAIL_MAX_MB) || 35) * 1024 * 1024;
-const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
 
-/** Pull the first email out of a playlist title (the rest is the display name). */
+// EASW convention: a playlist titled "EASW<email>" (e.g. "EASWme@email.com")
+// emails each newly-archived track to <email>. The "EASW" marker is stripped and
+// the remainder must be exactly the address — ONLY these playlists are emailed.
+const EASW_RE = /^easw[\s:_-]*([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})\s*$/i;
+
+/** The destination email for an EASW playlist title, or "" if it isn't one. */
 export function emailFromTitle(title) {
-  const m = String(title || "").match(EMAIL_RE);
-  return m ? m[0] : "";
-}
-
-/** A clean display name for a watched playlist: title minus any email. */
-function cleanPlaylistName(title) {
-  return String(title || "").replace(EMAIL_RE, "").replace(/[\s\-–—|:]+$/g, "").replace(/\s+/g, " ").trim() || String(title || "").trim();
+  const m = String(title || "").trim().match(EASW_RE);
+  return m ? m[1] : "";
 }
 
 /** Transcode the archived FLAC to a smaller MP3 for emailing. */
@@ -618,8 +617,15 @@ function saveQueue() {
 // everything else is "Manual". Dedup is handled by enqueueTrack.
 // ---------------------------------------------------------------------------
 
-const WATCH_PREFIX = (process.env.ARCHIVE_WATCH_PREFIX || "archive").toLowerCase();
+// Playlists to auto-archive: names starting with any of these (case-insensitive).
+// "archive" → archive-only; "easw" → the EASW<email> convention (archive + email).
+const WATCH_PREFIXES = (process.env.ARCHIVE_WATCH_PREFIX || "archive,easw").toLowerCase().split(",").map((s) => s.trim()).filter(Boolean);
 const SCAN_INTERVAL_MS = Number(process.env.ARCHIVE_SCAN_INTERVAL_MS) || 5 * 60 * 1000;
+
+function isWatchedTitle(title) {
+  const t = String(title || "").trim().toLowerCase();
+  return WATCH_PREFIXES.some((p) => t.startsWith(p));
+}
 const SNAPSHOT_FILE = path.join(ARCHIVE_DIR, "watch-snapshot.json");
 
 // In-memory snapshot of each watched playlist's current track keys, so the
@@ -675,13 +681,13 @@ export async function scanWatchedPlaylists(lms, playerId) {
     const pid = await resolveArchivePlayer(lms, playerId);
     if (!pid) return { scanning: false, queued: 0, playlists: 0, reason: "no player" };
     const all = await lms.spotifyLibrary(pid, "playlists", 200).catch(() => []);
-    const watched = (Array.isArray(all) ? all : []).filter((p) => String(p.title || "").trim().toLowerCase().startsWith(WATCH_PREFIX));
+    const watched = (Array.isArray(all) ? all : []).filter((p) => isWatchedTitle(p.title));
     const next = [];
     for (const pl of watched) {
-      // An email in the playlist TITLE means "mail me each new song" — and is
-      // stripped from the display name so the group reads cleanly.
+      // An EASW<email> playlist mails each new song to <email>; its group is
+      // labelled by that address. Plain archive* playlists keep their name.
       const emailTo = emailFromTitle(pl.title);
-      const name = cleanPlaylistName(pl.title);
+      const name = emailTo || String(pl.title || "").trim();
       const tracks = await lms.spotifyChildren(pid, { uri: pl.uri, browseId: pl.browseId, kind: "playlist", title: pl.title }, 400).catch(() => []);
       const keys = [];
       for (const t of tracks) {

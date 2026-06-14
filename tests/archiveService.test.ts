@@ -105,11 +105,16 @@ describe("archive grouping (watched playlists)", () => {
 
 import { emailFromTitle } from "../server/archiveService.js";
 
-describe("email-from-playlist-title parsing", () => {
-  it("pulls an email out of a playlist title, else empty", () => {
-    expect(emailFromTitle("Archive me@email.com")).toBe("me@email.com");
-    expect(emailFromTitle("archive-rap dj.x+tag@sub.domain.co")).toBe("dj.x+tag@sub.domain.co");
+describe("EASW email-convention parsing", () => {
+  it("returns the address only for an EASW<email> title", () => {
+    expect(emailFromTitle("EASWme@email.com")).toBe("me@email.com");
+    expect(emailFromTitle("EASW dj.x+tag@sub.domain.co")).toBe("dj.x+tag@sub.domain.co");
+    expect(emailFromTitle("easwheltershop@harmonizerlabs.cc")).toBe("heltershop@harmonizerlabs.cc");
+  });
+  it("does NOT email plain archive* playlists or non-EASW titles", () => {
+    expect(emailFromTitle("Archive me@email.com")).toBe("");
     expect(emailFromTitle("Archive")).toBe("");
+    expect(emailFromTitle("EASW not-an-email")).toBe("");
     expect(emailFromTitle("")).toBe("");
   });
 });
