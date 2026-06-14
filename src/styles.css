@@ -581,6 +581,15 @@ input[type="range"] {
 }
 .archive-badge.downloading { color: var(--rose); border-color: var(--rose); }
 .archive-failed-note { margin-top: 14px; color: var(--muted); font-size: 12px; }
+.archive-head-actions { display: flex; gap: 8px; align-items: center; }
+.archive-watch-note {
+  margin: -8px 0 16px;
+  color: var(--rose, #e8638a);
+  font-size: 12px;
+  letter-spacing: 0.01em;
+}
+.archive-group { margin-top: 4px; }
+.archive-group + .archive-group { margin-top: 18px; }
 .art-fallback-icon { color: var(--muted); opacity: 0.7; }
 .archive-action {
   display: flex;

@@ -43,6 +43,7 @@ import {
   curateLibraryItem,
   deletePlaylist,
   fetchArchive,
+  scanArchive,
   archiveDownloadUrl,
   archiveTrack,
   fetchArchiveStatus,
@@ -80,7 +81,7 @@ import {
   updateQueueItem,
   uploadTrack,
 } from "./lib/api";
-import type { ArchiveFile, ArchiveJob } from "./lib/api";
+import type { ArchiveFile, ArchiveJob, ArchiveGroup, ArchiveScan } from "./lib/api";
 import {
   PlaybackModeToggle,
   LocalNowPlayingPanel,
@@ -329,7 +330,7 @@ function AppShell() {
             setActionError("");
           }
         } else if (sourceFilter === "archived") {
-          const files = await fetchArchive().catch(() => []);
+          const { files } = await fetchArchive().catch(() => ({ files: [] as ArchiveFile[] }));
           const q = query.trim().toLowerCase();
           const mapped: Track[] = files
             .filter((f) => !q || `${f.title} ${f.artist}`.toLowerCase().includes(q))
@@ -673,16 +674,44 @@ const ARCHIVE_STATUS_LABEL: Record<ArchiveJob["status"], string> = {
   failed: "Failed"
 };
 
+function ArchiveFileRow({ file }: { file: ArchiveFile }) {
+  return (
+    <li className="archive-row">
+      <div className="archive-thumb"><Music2 size={18} /></div>
+      <div className="archive-meta">
+        <strong>{file.title || file.filename}</strong>
+        <span>{file.artist}</span>
+      </div>
+      <div className="archive-aux">
+        <span className="archive-size">{formatBytes(file.size)}</span>
+        <a
+          className="icon-button"
+          href={archiveDownloadUrl(file.filename)}
+          download={file.filename}
+          aria-label={`Download ${file.title || file.filename}`}
+        >
+          <Download size={18} />
+        </a>
+      </div>
+    </li>
+  );
+}
+
 function ArchivePanel() {
-  const [files, setFiles] = useState<ArchiveFile[]>([]);
+  const [groups, setGroups] = useState<ArchiveGroup[]>([]);
+  const [totalFiles, setTotalFiles] = useState(0);
   const [jobs, setJobs] = useState<ArchiveJob[]>([]);
+  const [scan, setScan] = useState<ArchiveScan | null>(null);
   const [loading, setLoading] = useState(true);
+  const [scanning, setScanning] = useState(false);
   const [error, setError] = useState("");
 
   const reload = useCallback(() => {
     Promise.all([fetchArchive(), fetchArchiveStatus().catch(() => null)])
       .then(([list, status]) => {
-        setFiles(list);
+        setGroups(list.groups);
+        setTotalFiles(list.files.length);
+        setScan(list.scan);
         setJobs(status?.jobs || []);
         setError("");
       })
@@ -697,16 +726,30 @@ function ArchivePanel() {
     return () => window.clearInterval(timer);
   }, [reload]);
 
+  const runScan = useCallback(async () => {
+    setScanning(true);
+    try { await scanArchive(); await reload(); } catch { /* surfaced on next reload */ }
+    finally { setScanning(false); }
+  }, [reload]);
+
   const pending = jobs.filter((j) => j.status === "queued" || j.status === "downloading");
   const failed = jobs.filter((j) => j.status === "failed");
+  const watchCount = scan?.watching.length || 0;
+  const shownGroups = groups.filter((g) => g.count > 0);
 
   return (
     <section className="panel archive-panel" aria-label="Archive">
       <div className="panel-head-row">
         <h2>Archive</h2>
-        <button className="ghost-button" onClick={reload} aria-label="Refresh archive">Refresh</button>
+        <div className="archive-head-actions">
+          <button className="ghost-button" onClick={runScan} disabled={scanning} aria-label="Scan watched playlists now">{scanning ? "Scanning…" : "Scan now"}</button>
+          <button className="ghost-button" onClick={reload} aria-label="Refresh archive">Refresh</button>
+        </div>
       </div>
-      <p className="panel-subtitle">Lossless FLAC copies, downloaded in the background. Queue songs from search or the player — no need to play them.</p>
+      <p className="panel-subtitle">Lossless FLAC copies, downloaded in the background. Queue songs from search or the player — or just add them to a Spotify playlist named <strong>archive</strong> and they get pulled in automatically.</p>
+      {watchCount > 0 && (
+        <p className="archive-watch-note">Auto-archiving {watchCount} playlist{watchCount > 1 ? "s" : ""}{scan?.lastScanAt ? ` · last checked ${archiveRelativeTime(scan.lastScanAt)}` : ""}.</p>
+      )}
       {error && <div className="action-error" role="alert">{error}</div>}
 
       {pending.length > 0 && (
@@ -726,34 +769,19 @@ function ArchivePanel() {
         </div>
       )}
 
-      <h3 className="archive-section-title">Saved{files.length ? ` · ${files.length}` : ""}</h3>
-      {loading && files.length === 0 ? (
+      {loading && totalFiles === 0 ? (
         <p className="empty-copy">Loading…</p>
-      ) : files.length === 0 ? (
-        <p className="empty-copy">Nothing saved yet. Click the archive icon on any song to queue it.</p>
+      ) : totalFiles === 0 ? (
+        <p className="empty-copy">Nothing saved yet. Click the archive icon on any song to queue it, or add songs to a Spotify playlist named “archive”.</p>
       ) : (
-        <ul className="archive-list">
-          {files.map((file) => (
-            <li key={file.filename} className="archive-row">
-              <div className="archive-thumb"><Music2 size={18} /></div>
-              <div className="archive-meta">
-                <strong>{file.title || file.filename}</strong>
-                <span>{file.artist}</span>
-              </div>
-              <div className="archive-aux">
-                <span className="archive-size">{formatBytes(file.size)}</span>
-                <a
-                  className="icon-button"
-                  href={archiveDownloadUrl(file.filename)}
-                  download={file.filename}
-                  aria-label={`Download ${file.title || file.filename}`}
-                >
-                  <Download size={18} />
-                </a>
-              </div>
-            </li>
-          ))}
-        </ul>
+        shownGroups.map((group) => (
+          <div key={group.name} className="archive-group">
+            <h3 className="archive-section-title">{group.manual ? "Manual" : group.name} · {group.count}</h3>
+            <ul className="archive-list">
+              {group.files.map((file) => <ArchiveFileRow key={file.filename} file={file} />)}
+            </ul>
+          </div>
+        ))
       )}
 
       {failed.length > 0 && (
@@ -761,6 +789,19 @@ function ArchivePanel() {
       )}
     </section>
   );
+}
+
+// Short, dependency-free "x ago" for the last-scan note.
+function archiveRelativeTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "";
+  const secs = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (secs < 60) return "just now";
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs} hr${hrs > 1 ? "s" : ""} ago`;
+  return `${Math.round(hrs / 24)} day${Math.round(hrs / 24) > 1 ? "s" : ""} ago`;
 }
 
 function PlaybackOptions({ state, disabled, onRefresh, onAction }: { state: AppState; disabled: boolean; onRefresh: () => void; onAction: ActionRunner }) {

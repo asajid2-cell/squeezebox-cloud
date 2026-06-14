@@ -452,10 +452,40 @@ export interface ArchiveFile {
   addedAt: string | null;
 }
 
-export async function fetchArchive(): Promise<ArchiveFile[]> {
+export interface ArchiveGroup {
+  name: string;
+  manual: boolean;
+  count: number;
+  files: ArchiveFile[];
+}
+
+export interface ArchiveScan {
+  watching: { name: string; trackCount: number; updatedAt?: string }[];
+  lastScanAt: string | null;
+  scanning: boolean;
+  intervalMs: number;
+}
+
+export interface ArchiveList {
+  files: ArchiveFile[];
+  groups: ArchiveGroup[];
+  scan: ArchiveScan;
+}
+
+export async function fetchArchive(): Promise<ArchiveList> {
   const response = await fetch(`${apiBase}/archive`);
-  const data = await responseJson<{ files: ArchiveFile[] }>(response, "Could not load archive");
-  return data.files || [];
+  const data = await responseJson<Partial<ArchiveList>>(response, "Could not load archive");
+  return {
+    files: data.files || [],
+    groups: data.groups || [],
+    scan: data.scan || { watching: [], lastScanAt: null, scanning: false, intervalMs: 0 }
+  };
+}
+
+/** Trigger an immediate scan of the watched "archive*" playlists. */
+export async function scanArchive(): Promise<{ ok: boolean; queued?: number; playlists?: number; scan?: ArchiveScan }> {
+  const response = await fetch(`${apiBase}/archive/scan`, { method: "POST" });
+  return responseJson(response, "Could not scan playlists");
 }
 
 export function archiveDownloadUrl(filename: string): string {
