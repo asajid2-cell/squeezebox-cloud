@@ -70,7 +70,7 @@ export async function startArchiveService() {
 // ---------------------------------------------------------------------------
 
 /** Enqueue an explicit track. {uri, artist, title} */
-export function enqueueTrack({ uri, artist, title, emailTo } = {}) {
+export function enqueueTrack({ uri, artist, title, album, emailTo } = {}) {
   const normalized = normalizeUri(uri);
   if (!normalized) throw new Error("No archivable Spotify track was provided.");
 
@@ -85,6 +85,7 @@ export function enqueueTrack({ uri, artist, title, emailTo } = {}) {
     uri: normalized,
     artist: (artist || "Unknown Artist").trim(),
     title: (title || "Unknown Title").trim(),
+    album: (album || "").trim() || undefined,
     status: "queued",
     queuedAt: new Date().toISOString(),
     error: null
@@ -104,7 +105,7 @@ export async function enqueueNowPlaying(lms, playerId) {
   const track = await lms.nowPlaying(pid).catch(() => null);
   if (!track || track.id === "idle") throw new Error("Nothing is playing to archive.");
   const uri = track.uri || track.id;
-  return enqueueTrack({ uri, artist: track.artist, title: track.title });
+  return enqueueTrack({ uri, artist: track.artist, title: track.title, album: track.album });
 }
 
 export function getQueueStatus() {
@@ -292,17 +293,26 @@ async function downloadOne(job) {
   await fetchAndEncode(job.uri, raw, ["-c:a", "flac", "-f", "flac"], "ArchiveWorker");
   // The streaming encode (pipe input) leaves total_samples unset, so LMS and
   // browsers can't read the real duration / seek over HTTP. Re-encode from the
-  // now-complete file to stamp the correct sample count, then swap in.
-  await reencodeFlac(raw, part);
+  // now-complete file to stamp the correct sample count + embed tags, then swap in.
+  await reencodeFlac(raw, part, { title: job.title, artist: job.artist, album: job.album });
   await fs.unlink(raw).catch(() => {});
   await fs.rename(part, dest);
   return dest;
 }
 
-/** Re-encode a complete FLAC so its STREAMINFO carries the real sample count. */
-function reencodeFlac(src, dst) {
+/**
+ * Re-encode a complete FLAC so its STREAMINFO carries the real sample count, and
+ * embed Vorbis tags (title/artist/album) while we're at it — the raw spotty pipe
+ * leaves the file untagged, so without this the metadata only lives in the filename.
+ */
+function reencodeFlac(src, dst, meta = {}) {
+  const metaArgs = [];
+  for (const [key, value] of Object.entries(meta)) {
+    const v = String(value || "").trim();
+    if (v) metaArgs.push("-metadata", `${key}=${v}`);
+  }
   return new Promise((resolve, reject) => {
-    const ff = spawn("ffmpeg", ["-hide_banner", "-loglevel", "error", "-i", src, "-c:a", "flac", "-f", "flac", "-y", dst]);
+    const ff = spawn("ffmpeg", ["-hide_banner", "-loglevel", "error", "-i", src, "-map_metadata", "-1", "-c:a", "flac", ...metaArgs, "-f", "flac", "-y", dst]);
     let err = "";
     ff.stderr.on("data", (d) => { err += d.toString().slice(0, 200); });
     ff.on("error", reject);
@@ -714,7 +724,7 @@ export async function scanWatchedPlaylists(lms, playerId) {
         const uri = t.uri || t.id;
         if (!uri || !/track[:/]/i.test(String(uri))) continue;
         keys.push(trackStem(t.artist, t.title));
-        try { if (enqueueTrack({ uri, artist: t.artist, title: t.title, emailTo }).queued) queued += 1; }
+        try { if (enqueueTrack({ uri, artist: t.artist, title: t.title, album: t.album, emailTo }).queued) queued += 1; }
         catch { /* unarchivable track — skip */ }
       }
       next.push({ name, uri: pl.uri, browseId: pl.browseId, trackCount: keys.length, updatedAt: new Date().toISOString(), keys, email: emailTo ? true : undefined });

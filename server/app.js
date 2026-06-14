@@ -1826,8 +1826,8 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
   // Queue an explicit track (e.g. from search results / a playlist).
   app.post("/api/archive/track", (req, res) => {
     try {
-      const { uri, artist, title } = req.body || {};
-      res.json(enqueueTrack({ uri, artist, title }));
+      const { uri, artist, title, album } = req.body || {};
+      res.json(enqueueTrack({ uri, artist, title, album }));
     } catch (error) {
       res.status(400).json({ error: error.message });
     }
@@ -1839,7 +1839,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     let queued = 0, skipped = 0;
     for (const t of tracks) {
       try {
-        const r = enqueueTrack({ uri: t.uri, artist: t.artist, title: t.title });
+        const r = enqueueTrack({ uri: t.uri, artist: t.artist, title: t.title, album: t.album });
         r.queued ? queued++ : skipped++;
       } catch { skipped++; }
     }
