@@ -960,6 +960,8 @@ function VolumeControl({ volume, onChange }: { volume: number; onChange: (volume
 function QueuePanel({ queue, onRefresh, onAction }: { queue: AppState["queue"]; onRefresh: () => void; onAction: ActionRunner }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState({ title: "", artist: "" });
+  const [showAll, setShowAll] = useState(false);
+  const visibleQueue = showAll ? queue : queue.slice(0, 12);
 
   function beginEdit(item: AppState["queue"][number]) {
     setEditingId(item.id);
@@ -983,9 +985,14 @@ function QueuePanel({ queue, onRefresh, onAction }: { queue: AppState["queue"]; 
       </div>
       <div className="queue-list">
         {queue.length === 0 && <EmptyState title="Queue is empty" detail="Requests will appear here after someone adds a real local or Spotify track." />}
-        {queue.slice(0, 12).map((item, index) => (
+        {visibleQueue.map((item, index) => (
           <QueueRow key={item.id} item={item} index={index} queueLength={queue.length} editingId={editingId} draft={draft} setDraft={setDraft} beginEdit={beginEdit} saveEdit={saveEdit} cancelEdit={() => setEditingId(null)} onRefresh={onRefresh} onAction={onAction} />
         ))}
+        {queue.length > 12 && (
+          <button className="ghost-add queue-show-all" aria-expanded={showAll} onClick={() => setShowAll((value) => !value)}>
+            {showAll ? "Show less" : `Show all ${queue.length}`}
+          </button>
+        )}
       </div>
       <p className="quiet-note">{queue.length} songs - ~{queue.at(-1)?.etaMinutes || 0} min total</p>
     </section>

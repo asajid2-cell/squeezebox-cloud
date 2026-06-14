@@ -671,6 +671,7 @@ input[type="range"] {
   min-height: 382px;
   padding: 24px 20px 12px;
 }
+.queue-show-all { width: 100%; justify-content: center; margin-top: 8px; }
 .section-head {
   display: grid;
   grid-template-columns: 1fr 96px 66px;
