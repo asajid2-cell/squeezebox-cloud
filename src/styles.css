@@ -78,6 +78,7 @@ h2 {
 h3 { margin-bottom: 8px; font-size: 20px; line-height: 1.16; }
 p, small { color: var(--muted); }
 small { display: block; font-size: 13px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 
 .boot {
   min-height: 100dvh;

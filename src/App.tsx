@@ -149,7 +149,14 @@ function Dialog({
     first?.focus();
 
     function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") onCloseRef.current();
+      if (event.key === "Escape") { onCloseRef.current(); return; }
+      if (event.key === "Tab") {
+        const f = dialogRef.current?.querySelectorAll<HTMLElement>("input, button:not(:disabled), [href], textarea, select, [tabindex]:not([tabindex='-1'])");
+        if (!f || f.length === 0) return;
+        const first = f[0], last = f[f.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      }
     }
 
     document.addEventListener("keydown", onKey);
@@ -364,6 +371,7 @@ function AppShell() {
           {navItems.map((item) => (
             <button
               className={activeScreen === item.label ? "active" : ""}
+              aria-current={activeScreen === item.label ? "page" : undefined}
               key={item.label}
               onClick={() => setActiveScreen(item.label)}
             >
@@ -385,7 +393,7 @@ function AppShell() {
       </aside>
       <main className="main">
         <header className="hero-row">
-          {isAdminRoute ? <h1>Admin Console</h1> : <div />}
+          {isAdminRoute ? <h1>Admin Console</h1> : <h1 className="sr-only">Squeezebox Cloud</h1>}
           <div className="top-actions">
             <a className="top-link" href={isAdminRoute ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}admin`}>
               <ShieldCheck size={18} />
@@ -774,7 +782,7 @@ function PlaybackOptions({ state, disabled, onRefresh, onAction }: { state: AppS
   return (
     <div className="playback-options" aria-label="Playback options">
       <button
-        className={playback.shuffle || playback.smartQueue ? "active-option" : ""}
+        aria-pressed={playback.shuffle || playback.smartQueue} className={playback.shuffle || playback.smartQueue ? "active-option" : ""}
         disabled={disabled}
         title="Cycles between shuffle, smart shuffle, and off"
         onClick={cycleShuffle}
@@ -782,13 +790,13 @@ function PlaybackOptions({ state, disabled, onRefresh, onAction }: { state: AppS
         <Shuffle size={17} />
         {shuffleLabel}
       </button>
-      <button className={playback.repeat !== "off" ? "active-option" : ""} disabled={disabled} title="Repeat off, all, or one" onClick={setRepeat}>
+      <button aria-pressed={playback.repeat !== "off"} className={playback.repeat !== "off" ? "active-option" : ""} disabled={disabled} title="Repeat off, all, or one" onClick={setRepeat}>
         {repeatIcon}
         {playback.repeat === "off" ? "Repeat" : playback.repeat === "one" ? "Repeat 1" : "Repeat all"}
       </button>
       <div className="shuffle-source" aria-label="Smart shuffle source">
         {(["mixed", "spotify", "local"] as const).map((source) => (
-          <button key={source} className={playback.smartShuffleSource === source ? "active-option" : ""} disabled={disabled} onClick={() => setSource(source)}>
+          <button key={source} aria-pressed={playback.smartShuffleSource === source} className={playback.smartShuffleSource === source ? "active-option" : ""} disabled={disabled} onClick={() => setSource(source)}>
             {source}
           </button>
         ))}
@@ -1107,19 +1115,19 @@ function SearchPanel({
     <section className="panel search-panel" aria-label="Library">
       <h2>Library</h2>
       <div className="source-tabs">
-        <button disabled={!spotifyAvailable} className={sourceFilter === "spotify" ? "primary-small" : ""} onClick={() => setSourceFilter("spotify")}>
+        <button disabled={!spotifyAvailable} aria-pressed={sourceFilter === "spotify"} className={sourceFilter === "spotify" ? "primary-small" : ""} onClick={() => setSourceFilter("spotify")}>
           Spotify{spotifyAvailable ? "" : " not linked"}
         </button>
-        <button className={sourceFilter === "local" ? "primary-small" : ""} onClick={() => setSourceFilter("local")}>
+        <button aria-pressed={sourceFilter === "local"} className={sourceFilter === "local" ? "primary-small" : ""} onClick={() => setSourceFilter("local")}>
           VPS library
         </button>
-        <button className={sourceFilter === "uploaded" ? "primary-small" : ""} onClick={() => setSourceFilter("uploaded")}>
+        <button aria-pressed={sourceFilter === "uploaded"} className={sourceFilter === "uploaded" ? "primary-small" : ""} onClick={() => setSourceFilter("uploaded")}>
           Uploaded
         </button>
-        <button className={sourceFilter === "archived" ? "primary-small" : ""} onClick={() => setSourceFilter("archived")}>
+        <button aria-pressed={sourceFilter === "archived"} className={sourceFilter === "archived" ? "primary-small" : ""} onClick={() => setSourceFilter("archived")}>
           Archived
         </button>
-        <button className={sourceFilter === "playlists" ? "primary-small" : ""} onClick={() => setSourceFilter("playlists")}>
+        <button aria-pressed={sourceFilter === "playlists"} className={sourceFilter === "playlists" ? "primary-small" : ""} onClick={() => setSourceFilter("playlists")}>
           Playlists
         </button>
       </div>
@@ -1379,7 +1387,7 @@ function RowMenu({ children, label }: { children: ReactNode; label?: string }) {
         <MoreHorizontal size={16} />
       </button>
       {open && (
-        <div className="row-menu__pop" role="menu" onClick={(e) => { if ((e.target as HTMLElement).closest(".row-menu__item")) setOpen(false); }}>
+        <div className="row-menu__pop" onClick={(e) => { if ((e.target as HTMLElement).closest(".row-menu__item")) setOpen(false); }}>
           {children}
         </div>
       )}
@@ -1532,7 +1540,7 @@ function AddToPlaylistButton({ track }: { track: Track }) {
         <ListPlus size={14} /> Save
       </button>
       {open && (
-        <div className="playlist-popover" role="menu">
+        <div className="playlist-popover">
           <div className="playlist-popover-head">
             <strong>Add to playlist</strong>
             {status && <small>{status}</small>}
@@ -2350,19 +2358,6 @@ function AdminConsole({ state, onSave, onLogout }: { state: AppState; onSave: ()
           <SlidersHorizontal size={18} />
           Save settings
         </button>
-      </section>
-      <section className="panel admin-panel wide">
-        <h2>Screen audit</h2>
-        <div className="audit-grid">
-          {["Public Now Playing", "Queue", "Search", "Track Info", "Album/Lyrics", "Connect Speaker", "Admin Providers", "Admin Moderation"].map(
-            (screen) => (
-              <div key={screen}>
-                <CheckCircle2 size={18} />
-                <span>{screen}</span>
-              </div>
-            )
-          )}
-        </div>
       </section>
     </div>
   );
