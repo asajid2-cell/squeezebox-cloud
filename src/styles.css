@@ -1523,6 +1523,7 @@ input[type="range"] {
   button, .top-link, .ghost-add, .row-play, .icon-button, .upload-button,
   .source-tabs button, .suggestion-row button, .playback-options button,
   .shuffle-source button, .mode-toggle button, .link-button,
-  .row-menu__pop button, .dialog__actions button { min-height: 44px; }
+  .row-menu__pop button, .dialog__actions button,
+  input:not([type="checkbox"]):not([type="range"]), select, textarea { min-height: 44px; }
   .icon-button, .archive-thumb { min-width: 44px; }
 }
