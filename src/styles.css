@@ -91,10 +91,8 @@ small { display: block; font-size: 13px; }
 .desktop-shell {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 310px minmax(0, 1fr);
-  background:
-    radial-gradient(circle at 70% 0%, rgba(255,255,255,.035), transparent 34%),
-    var(--bg);
+  grid-template-columns: 300px minmax(0, 1fr);
+  background: var(--bg);
 }
 
 .sidebar {
@@ -106,7 +104,7 @@ small { display: block; font-size: 13px; }
   display: flex;
   flex-direction: column;
   gap: 16px;
-  background: linear-gradient(180deg, var(--bg-soft), var(--bg));
+  background: var(--bg);
   border-right: 1px solid var(--line);
 }
 .brand {
@@ -133,10 +131,10 @@ small { display: block; font-size: 13px; }
   align-items: center;
   gap: 10px;
   margin-top: 2px;
-  padding: 0 12px;
-  background: #090a0f;
-  border: 1px solid var(--line-soft);
-  border-radius: 10px;
+  padding: 0 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-control);
   color: var(--muted);
 }
 kbd { color: var(--faint); font-size: 13px; font-family: inherit; }
