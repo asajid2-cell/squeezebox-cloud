@@ -1,4 +1,4 @@
-import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   CheckCircle2,
   ChevronRight,
@@ -114,6 +114,70 @@ function usePlaylists() {
     };
   }, [reload]);
   return { playlists, reload };
+}
+
+function Dialog({
+  title,
+  children,
+  confirmLabel,
+  onConfirm,
+  onClose,
+  confirmDisabled,
+  busy,
+  busyLabel = "Saving..."
+}: {
+  title: string;
+  children: ReactNode;
+  confirmLabel: string;
+  onConfirm: (event: FormEvent) => void | Promise<void>;
+  onClose: () => void;
+  confirmDisabled?: boolean;
+  busy?: boolean;
+  busyLabel?: string;
+}) {
+  const titleId = useId();
+  const dialogRef = useRef<HTMLFormElement>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const first = dialogRef.current?.querySelector<HTMLElement>("input, button:not(:disabled), [href], textarea, select, [tabindex]:not([tabindex='-1'])");
+    first?.focus();
+
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onCloseRef.current();
+    }
+
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      previous?.focus();
+    };
+  }, []);
+
+  return (
+    <div className="dialog-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <form
+        ref={dialogRef}
+        className="dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onSubmit={(event) => { void onConfirm(event); }}
+      >
+        <h3 id={titleId} className="dialog__title">{title}</h3>
+        <div className="dialog__body">{children}</div>
+        <div className="dialog__actions">
+          <button type="button" className="ghost-add" onClick={onClose} disabled={busy}>Cancel</button>
+          <button type="submit" className="primary-small" disabled={busy || confirmDisabled}>{busy ? busyLabel : confirmLabel}</button>
+        </div>
+      </form>
+    </div>
+  );
 }
 
 const starterLibraryLimit = 60;
@@ -950,29 +1014,34 @@ function QueueRow({
       <span>{item.requestedBy}</span>
       <span>~{item.etaMinutes} min</span>
       <div className="queue-actions">
-        <button aria-label={`Move ${item.title} up`} title="Move earlier in queue" data-tooltip="Move earlier" className="icon-button" disabled={index === 0} onClick={() => onAction(async () => { await moveQueueItem(item.id, "up"); await onRefresh(); })}>
-          <ChevronUp size={16} />
+        <button className="primary-small row-play" onClick={() => onAction(async () => { await playTrack("play-now", item); await onRefresh(); })}>
+          <Play size={14} />Play
         </button>
-        <button aria-label={`Move ${item.title} down`} title="Move later in queue" data-tooltip="Move later" className="icon-button" disabled={index === queueLength - 1} onClick={() => onAction(async () => { await moveQueueItem(item.id, "down"); await onRefresh(); })}>
-          <ChevronDown size={16} />
-        </button>
-        {isEditing ? (
-          <button aria-label={`Save ${item.title}`} title="Save queue edits" data-tooltip="Save edits" className="icon-button" onClick={() => saveEdit(item.id)}>
-            <Check size={16} />
+        <RowMenu label={`More queue actions for ${item.title}`}>
+          <button className="row-menu__item" disabled={index === 0} onClick={() => onAction(async () => { await moveQueueItem(item.id, "up"); await onRefresh(); })}>
+            <ChevronUp size={15} /> Move earlier
           </button>
-        ) : editable ? (
-          <button aria-label={`Edit ${item.title}`} title="Edit title and artist" data-tooltip="Edit details" className="icon-button" onClick={() => beginEdit(item)}>
-            <SlidersHorizontal size={16} />
+          <button className="row-menu__item" disabled={index === queueLength - 1} onClick={() => onAction(async () => { await moveQueueItem(item.id, "down"); await onRefresh(); })}>
+            <ChevronDown size={15} /> Move later
           </button>
-        ) : null}
-        {isEditing && (
-          <button aria-label={`Cancel editing ${item.title}`} title="Cancel editing" data-tooltip="Cancel" className="icon-button" onClick={cancelEdit}>
-            <XCircle size={16} />
+          {isEditing ? (
+            <button className="row-menu__item" onClick={() => saveEdit(item.id)}>
+              <Check size={15} /> Save edits
+            </button>
+          ) : editable ? (
+            <button className="row-menu__item" onClick={() => beginEdit(item)}>
+              <SlidersHorizontal size={15} /> Edit details
+            </button>
+          ) : null}
+          {isEditing && (
+            <button className="row-menu__item" onClick={cancelEdit}>
+              <XCircle size={15} /> Cancel editing
+            </button>
+          )}
+          <button className="row-menu__item danger" onClick={() => onAction(async () => { await removeQueueItem(item.id); await onRefresh(); })}>
+            <XCircle size={15} /> Remove
           </button>
-        )}
-        <button aria-label={`Remove ${item.title}`} title="Remove from queue" data-tooltip="Remove" className="icon-button danger" onClick={() => onAction(async () => { await removeQueueItem(item.id); await onRefresh(); })}>
-          <XCircle size={16} />
-        </button>
+        </RowMenu>
       </div>
     </div>
   );
@@ -1772,26 +1841,31 @@ function AppPlaylistsView({ requestsOpen, onRefresh, onAction }: { requestsOpen:
   return (
     <div className="app-playlists">
       <div className="playlist-create-row">
-        {creating ? (
-          <form className="playlist-create-form" onSubmit={create}>
+        <button className="primary-small" onClick={() => setCreating(true)}>
+          <Plus size={16} /> New playlist
+        </button>
+      </div>
+      {creating && (
+        <Dialog
+          title="New playlist"
+          confirmLabel="Create"
+          confirmDisabled={!newName.trim()}
+          onConfirm={create}
+          onClose={() => { setCreating(false); setNewName(""); setError(""); }}
+        >
+          <label>
+            <span>Playlist name</span>
             <input
-              autoFocus
+              className="dialog-field"
               placeholder="Playlist name"
               maxLength={80}
               value={newName}
               onChange={(event) => setNewName(event.currentTarget.value)}
             />
-            <button type="submit" className="primary-small">Create</button>
-            <button type="button" className="ghost-add" onClick={() => { setCreating(false); setNewName(""); setError(""); }}>
-              Cancel
-            </button>
-          </form>
-        ) : (
-          <button className="primary-small" onClick={() => setCreating(true)}>
-            <Plus size={16} /> New playlist
-          </button>
-        )}
-      </div>
+          </label>
+          {error && <small className="form-error">{error}</small>}
+        </Dialog>
+      )}
       {error && <small className="form-error">{error}</small>}
       {playlists.length === 0 && (
         <EmptyState title="No playlists yet" detail="Create a playlist, then add songs from search or Spotify with the Save button." />
@@ -1835,6 +1909,8 @@ function AppPlaylistDetail({
   onDeleted: () => void;
 }) {
   const [renaming, setRenaming] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -1879,13 +1955,17 @@ function AppPlaylistDetail({
     }
   }
 
-  async function doDelete() {
-    if (!window.confirm(`Delete playlist "${current.name}"?`)) return;
+  async function doDelete(event: FormEvent) {
+    event.preventDefault();
+    setDeleting(true);
+    setError("");
     try {
       await deletePlaylist(current.id);
       onDeleted();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not delete");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -1909,37 +1989,59 @@ function AppPlaylistDetail({
     <div className="app-playlist-detail">
       <div className="playlist-title-row">
         <div>
-          {renaming ? (
-            <form className="playlist-create-form" onSubmit={doRename}>
-              <input autoFocus value={name} maxLength={80} onChange={(event) => setName(event.currentTarget.value)} />
-              <button type="submit" className="primary-small" disabled={busy}>Save</button>
-              <button type="button" className="ghost-add" onClick={() => { setRenaming(false); setName(current.name); }}>
-                Cancel
-              </button>
-            </form>
-          ) : (
-            <>
-              <h3>{current.name}</h3>
-              <small>{current.tracks.length} tracks{current.description ? ` - ${current.description}` : ""}</small>
-            </>
-          )}
+          <h3>{current.name}</h3>
+          <small>{current.tracks.length} tracks{current.description ? ` - ${current.description}` : ""}</small>
         </div>
         <button className="ghost-add" onClick={onBack}>Back</button>
       </div>
       <div className="playlist-detail-actions">
         <button className="ghost-add" disabled={!requestsOpen || isEmpty} onClick={() => queueAll("play-next")}>Play next</button>
         <button className="ghost-add" disabled={!requestsOpen || isEmpty} onClick={() => queueAll("add-queue")}>Queue all</button>
-        {isAdmin && !renaming && (
+        {isAdmin && (
           <button className="ghost-add" onClick={() => setRenaming(true)}>
             <Pencil size={14} /> Rename
           </button>
         )}
         {isAdmin && (
-          <button className="ghost-add danger" onClick={doDelete}>
+          <button className="ghost-add danger" onClick={() => setDeleteOpen(true)}>
             <Trash2 size={14} /> Delete
           </button>
         )}
       </div>
+      {renaming && (
+        <Dialog
+          title="Rename playlist"
+          confirmLabel="Save"
+          busy={busy}
+          confirmDisabled={!name.trim()}
+          onConfirm={doRename}
+          onClose={() => { setRenaming(false); setName(current.name); setError(""); }}
+        >
+          <label>
+            <span>Playlist name</span>
+            <input
+              className="dialog-field"
+              value={name}
+              maxLength={80}
+              onChange={(event) => setName(event.currentTarget.value)}
+            />
+          </label>
+          {error && <small className="form-error">{error}</small>}
+        </Dialog>
+      )}
+      {deleteOpen && (
+        <Dialog
+          title="Delete playlist"
+          confirmLabel="Delete"
+          busy={deleting}
+          busyLabel="Deleting..."
+          onConfirm={doDelete}
+          onClose={() => { setDeleteOpen(false); setError(""); }}
+        >
+          <p>Delete "{current.name}"? This removes the playlist, but not the songs in your library.</p>
+          {error && <small className="form-error">{error}</small>}
+        </Dialog>
+      )}
       {error && <small className="form-error">{error}</small>}
       {isEmpty && <EmptyState title="Empty playlist" detail="Add songs from search or Spotify using the Save button." />}
       <div className="result-list">
@@ -1953,27 +2055,26 @@ function AppPlaylistDetail({
             <span>{track.duration ? formatTime(track.duration) : "--:--"}</span>
             <div className="track-actions">
               <button className="primary-small row-play" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("play-now", track); await onRefresh(); })}><Play size={14} />Play</button>
-              <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("add-queue", track); await onRefresh(); })} data-tooltip="Add to queue"><ListMusic size={14} /><span className="action-label">Queue</span></button>
-              {isAdmin && (
-                <button className="icon-button" title="Move up" disabled={index === 0} onClick={() => move(track, "up")}>
-                  <ChevronUp size={14} />
+              <RowMenu label={`More actions for ${track.title}`}>
+                <button className="row-menu__item" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("add-queue", track); await onRefresh(); })}>
+                  <ListMusic size={15} /> Add to queue
                 </button>
-              )}
-              {isAdmin && (
-                <button
-                  className="icon-button"
-                  title="Move down"
-                  disabled={index === current.tracks.length - 1}
-                  onClick={() => move(track, "down")}
-                >
-                  <ChevronDown size={14} />
-                </button>
-              )}
-              {isAdmin && (
-                <button className="icon-button danger" title="Remove" onClick={() => remove(track)}>
-                  <XCircle size={14} />
-                </button>
-              )}
+                {isAdmin && (
+                  <button className="row-menu__item" disabled={index === 0} onClick={() => move(track, "up")}>
+                    <ChevronUp size={15} /> Move up
+                  </button>
+                )}
+                {isAdmin && (
+                  <button className="row-menu__item" disabled={index === current.tracks.length - 1} onClick={() => move(track, "down")}>
+                    <ChevronDown size={15} /> Move down
+                  </button>
+                )}
+                {isAdmin && (
+                  <button className="row-menu__item danger" onClick={() => remove(track)}>
+                    <XCircle size={15} /> Remove
+                  </button>
+                )}
+              </RowMenu>
             </div>
           </div>
         ))}
