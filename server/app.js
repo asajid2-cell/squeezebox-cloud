@@ -810,6 +810,10 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       // caller-supplied objects — otherwise a valid URI can carry spoofed
       // title/artist/art into LMS + the queue, and compact posts lose real artwork.
       const canonicalPlayable = canonicalizeSpotifyTracks(playable);
+      if (!(await trackInputsExistOnDisk(canonicalPlayable))) {
+        res.status(400).json({ error: "Local tracks must come from the Cloud Squeeze library or uploads" });
+        return;
+      }
       const start = Math.min(Math.max(0, parsed.data.startIndex || 0), canonicalPlayable.length - 1);
       const startTrack = canonicalPlayable[start];
       const wantShuffle = Boolean(appState.playback.shuffle);

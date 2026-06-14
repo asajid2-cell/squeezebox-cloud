@@ -2014,8 +2014,14 @@ function AppPlaylistDetail({
       return;
     }
     await onAction(async () => {
-      await playTracks(action, current.tracks.slice(0, 200));
+      const playableTracks = current.tracks.slice(0, 200);
+      const result = await playTracks(action, playableTracks);
       await onRefresh();
+      if (result?.rejected > 0) {
+        const skipped = result.rejected;
+        const total = Number(result.accepted || 0) + skipped || playableTracks.length;
+        throw new Error(`Queued ${result.accepted} of ${total} tracks; ${skipped} skipped because of the queue limit or duplicates.`);
+      }
     });
   }
 
