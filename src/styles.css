@@ -1,39 +1,49 @@
 :root {
-  /* surfaces — lifted near-black, cooler greys (no pure #000) */
-  --bg: #07080b;
-  --bg-soft: #0a0c11;
-  --panel: #0d1016;
-  --panel-soft: #141821;
-  --panel-2: #1b212c;
+  /* CANONICAL design tokens — adopted from the Tap design system (src/tap/tap.css):
+     near-black surfaces + a single rose accent used sparingly, 12/16 radii, Inter. */
+  --bg: #000000;
+  --bg-soft: #050507;
+  --panel: #0b0c11;
+  --panel-soft: #11121a;
+  --panel-2: #11121a;
   --panel-warm: #1d0910;
   --panel-warm-2: #2a0d16;
-  --line: #2a303a;
-  --line-soft: #1d232d;
+  --line: #20212a;
+  --line-soft: #181922;
   /* text roles */
-  --text: #f5f7fa;
-  --muted: #a8b0bb;
-  --faint: #707a86;
+  --text: #f8f8fb;
+  --muted: #a7a8b2;
+  --faint: #767886;
   /* brand + state colors */
   --rose: #ff5f83;
   --rose-strong: #ff4772;
   --rose-soft: rgba(255, 95, 131, 0.14);
-  --green: #36d399;        /* live / on */
+  --rose-ink: #1a0309;     /* dark text on a rose fill (tap primary) */
+  --green: #42d884;
+  --amber: #f4b740;
   --spotify: #1ed760;
-  --queue: #f2b84b;
   --info: #4aa3ff;
   --danger: #ff6b6b;
-  /* spacing scale */
+  /* spacing — tap --s* scale */
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px; --s8: 64px;
   --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
   --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px;
-  /* radius scale */
-  --radius-row: 6px; --radius-control: 8px; --radius-panel: 12px;
-  /* type scale */
+  /* radii — tap (12 control, 16 card) */
+  --r-control: 12px; --r-card: 16px;
+  --radius-row: 10px; --radius-control: 12px; --radius-panel: 16px;
+  /* type — tap fluid scale + fixed aliases */
+  --step-0: clamp(0.82rem, 0.78rem + 0.2vw, 0.92rem);
+  --step-1: clamp(0.95rem, 0.9rem + 0.3vw, 1.06rem);
+  --step-2: clamp(1.18rem, 1.05rem + 0.7vw, 1.5rem);
+  --step-3: clamp(1.6rem, 1.3rem + 1.6vw, 2.4rem);
+  --step-4: clamp(2.1rem, 1.6rem + 2.7vw, 3.4rem);
   --text-xs: 12px; --text-sm: 13px; --text-md: 14px; --text-lg: 16px;
   --text-xl: 20px; --text-2xl: 24px; --text-3xl: 32px;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--text);
   background: var(--bg);
   color-scheme: dark;
+  -webkit-font-smoothing: antialiased;
 }
 
 * { box-sizing: border-box; }
@@ -43,11 +53,12 @@ button, input, a { font: inherit; }
 a { color: inherit; text-decoration: none; }
 button {
   border: 1px solid var(--line);
-  border-radius: 10px;
-  min-height: 42px;
+  border-radius: var(--r-control);
+  min-height: 44px;
   padding: 0 16px;
   color: var(--text);
   background: #07080d;
+  font-weight: 600;
   cursor: pointer;
 }
 button:hover, .top-link:hover { border-color: rgba(255, 95, 131, 0.45); }
@@ -58,10 +69,10 @@ h1, h2, h3, p { margin-top: 0; }
 h1 { margin-bottom: 2px; font-size: 33px; line-height: 1.05; letter-spacing: 0; }
 h2 {
   margin-bottom: 18px;
-  color: #ff8aa2;
-  font-size: 14px;
-  font-weight: 800;
-  letter-spacing: .035em;
+  color: var(--rose);
+  font-size: var(--step-0);
+  font-weight: 700;
+  letter-spacing: .04em;
   text-transform: uppercase;
 }
 h3 { margin-bottom: 8px; font-size: 20px; line-height: 1.16; }
@@ -145,11 +156,11 @@ nav button {
   text-align: left;
 }
 /* active nav: restrained rose tint + a thin rose edge bar + rose icon (not a loud fill) */
+/* active nav lights up with a soft rose wash (tap's .tap-nav__item active) */
 nav button.active {
   border-color: transparent;
-  background: linear-gradient(90deg, rgba(255, 95, 131, .16), transparent 72%);
-  box-shadow: inset -2px 0 0 0 var(--rose);
-  color: #fff;
+  background: var(--rose-soft);
+  color: var(--text);
   font-weight: 700;
 }
 nav button.active svg { color: var(--rose); }
@@ -394,14 +405,15 @@ nav button.active svg { color: var(--rose); }
   font-size: 13px;
   font-weight: 800;
 }
+/* primary CTA — tap's solid rose fill + dark ink (used sparingly, for THE action) */
 .primary, .primary-small {
-  border-color: transparent;
-  background: linear-gradient(180deg, #ff7d9b, #ff4f79);
-  color: #240810;                 /* dark ink on bright rose — ~8:1, was white ~3:1 */
-  font-weight: 800;
-  box-shadow: 0 10px 32px rgba(255, 71, 114, .18);
+  border-color: var(--rose);
+  background: var(--rose);
+  color: var(--rose-ink);
+  font-weight: 700;
+  box-shadow: none;
 }
-.primary:hover, .primary-small:hover { filter: brightness(1.06); }
+.primary:hover, .primary-small:hover { background: var(--rose-strong); border-color: var(--rose-strong); }
 
 .content-grid {
   display: grid;
@@ -912,6 +924,43 @@ input[type="range"] {
 .row-menu__pop .ghost-add.danger-text:hover,
 .row-menu__pop .ghost-add.danger-text { color: #ffb4b4; }
 .row-menu__pop .add-to-playlist { width: 100%; }
+
+/* modal dialog (playlist create / rename / delete) */
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(4, 5, 8, .66);
+  backdrop-filter: blur(3px);
+}
+.dialog {
+  width: min(100%, 420px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-6);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+  background: var(--panel-soft);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, .6);
+}
+.dialog__title { margin: 0; font-size: var(--text-xl); color: var(--text); text-transform: none; letter-spacing: 0; }
+.dialog__body { color: var(--muted); font-size: var(--text-md); line-height: 1.5; }
+.dialog__actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-1); }
+.dialog-field {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--bg-soft);
+  color: var(--text);
+}
+.dialog-field:focus-visible { outline: 2px solid var(--rose); outline-offset: 1px; }
+.dialog__actions .danger, .dialog__actions .ghost-add.danger { border-color: rgba(255,107,107,.5); color: var(--danger); }
 .ghost-add.icon-text {
   align-items: center;
   display: inline-flex;
@@ -1112,8 +1161,8 @@ input[type="range"] {
 }
 .source-tabs button:hover { color: var(--text); }
 .source-tabs button.primary-small {
-  background: transparent;
-  border-color: var(--rose);
+  background: var(--rose-soft);
+  border-color: transparent;
   color: var(--text);
   box-shadow: none;
 }
