@@ -367,18 +367,38 @@ async function emailArchivedTrack(job, flacPath) {
       console.warn(`[archive] email skipped (${Math.round(buf.length / 1e6)}MB > cap): ${job.title}`);
       return;
     }
-    const filename = `${sanitize(job.artist)} - ${sanitize(job.title)}.mp3`;
+    const stem = `${sanitize(job.artist)} - ${sanitize(job.title)}`;
+    const filename = `${stem}.mp3`;
+    const base = (process.env.ARCHIVE_PUBLIC_BASE || "https://harmonizerlabs.cc/cloud-squeeze").replace(/\/$/, "");
+    const flacUrl = `${base}/api/archive/file/${encodeURIComponent(`${stem}.flac`)}`;
+    const subject = `${job.title} — ${job.artist} (archived)`;
+    // A real plain-text part + legit structure + a link to your own domain are
+    // the deliverability levers we control; the rest is domain reputation (warms
+    // up as you mark "not spam" and keep sending).
+    const text =
+      `"${job.title}" by ${job.artist} was just archived from your Spotify playlist and saved to your Squeezebox library.\n\n` +
+      `A ${EMAIL_BITRATE} MP3 is attached. The lossless FLAC: ${flacUrl}\n\n` +
+      `You're receiving this because you tagged that playlist with your email (EASW…). Reply to this message to stop.`;
+    const html =
+      `<div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;max-width:540px;color:#1a1a1a">` +
+      `<h2 style="margin:0 0 2px;font-size:18px">${escapeHtml(job.title)}</h2>` +
+      `<p style="margin:0 0 14px;color:#666">${escapeHtml(job.artist)}</p>` +
+      `<p style="margin:0 0 14px;line-height:1.5">Just archived from your Spotify playlist and saved to your Squeezebox library. A ${EMAIL_BITRATE} MP3 is attached — the lossless FLAC is here:</p>` +
+      `<p style="margin:0 0 18px"><a href="${flacUrl}" style="background:#1a1a1a;color:#fff;padding:9px 16px;border-radius:8px;text-decoration:none;font-size:14px">Download FLAC</a></p>` +
+      `<p style="margin:0;color:#999;font-size:12px;line-height:1.5">You're receiving this because you tagged that playlist with your email. Reply to stop.</p>` +
+      `</div>`;
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         from: RESEND_FROM,
         to: [to],
-        subject: `Archived: ${job.title} — ${job.artist}`,
-        html: `<p>Fresh from your <strong>archive</strong> playlist:</p>
-               <p><strong>${escapeHtml(job.title)}</strong><br>${escapeHtml(job.artist)}</p>
-               <p>Attached as a ${EMAIL_BITRATE} MP3 — the lossless FLAC is in your Squeezebox archive.</p>`,
-        attachments: [{ filename, content: buf.toString("base64") }]
+        reply_to: to,
+        subject,
+        html,
+        text,
+        attachments: [{ filename, content: buf.toString("base64") }],
+        headers: { "List-Unsubscribe": `<mailto:archive@harmonizerlabs.cc?subject=unsubscribe%20${encodeURIComponent(to)}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" }
       })
     });
     if (res.ok) console.log(`[archive] emailed "${job.title}" to ${to}`);
