@@ -1072,6 +1072,10 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       res.status(404).json({ error: "Playlist not found" });
       return;
     }
+    // Spotify tracks are validated against an in-memory cache that expires (TTL /
+    // restart). Re-remember this persisted playlist's tracks when it's opened so
+    // playing/queueing from a saved playlist keeps passing the "known track" check.
+    rememberKnownSpotifyTracks(playlist.tracks);
     res.json({ playlist });
   });
 
