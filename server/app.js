@@ -1131,7 +1131,9 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
 
   app.delete("/api/playlists/:id/tracks/:trackKey", requireAdmin, (req, res) => {
     runPlaylistAction(res, () => {
-      const key = decodeURIComponent(req.params.trackKey || "").toLowerCase();
+      // Express already decoded the param; decoding again throws on a literal '%'
+      // (e.g. a track titled "100%"). Just normalize to the lowercased match key.
+      const key = String(req.params.trackKey || "").toLowerCase();
       const playlist = playlists.removeTrack(req.params.id, key);
       res.json({ playlist });
     });
@@ -2008,7 +2010,9 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
   });
 
   app.delete("/api/tap/playlists/:id/tracks/:key", requireTapAccess, (req, res) => {
-    try { res.json({ playlist: playlists.removeTrack(req.params.id, decodeURIComponent(req.params.key)) }); }
+    // Express already decoded the param; re-decoding throws on a literal '%'. Lowercase
+    // to match trackKey()'s normalized comparison.
+    try { res.json({ playlist: playlists.removeTrack(req.params.id, String(req.params.key || "").toLowerCase()) }); }
     catch (error) { playlistFail(res, error); }
   });
 
