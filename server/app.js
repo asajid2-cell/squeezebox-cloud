@@ -761,6 +761,9 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
         const previousTrack = appState.nowPlaying;
         rememberPlaybackMetadata(track);
         await lms.playTrack(playerId, track, "play-now");
+        // If this track was sitting in the visible "Up next" queue (e.g. the user hit
+        // Play on a queue row), consume it so it isn't played again on auto-advance.
+        removeQueuedPlaybackMatch(track);
         stopGeneratedPlayback();
         setMode("play");
         rememberPreviousTrack(previousTrack);
