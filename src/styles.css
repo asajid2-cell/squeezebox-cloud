@@ -144,13 +144,15 @@ nav button {
   background: transparent;
   text-align: left;
 }
+/* active nav: restrained rose tint + a thin rose edge bar + rose icon (not a loud fill) */
 nav button.active {
   border-color: transparent;
-  background:
-    linear-gradient(90deg, rgba(255, 95, 131, .92), rgba(255, 95, 131, .18) 78%, transparent);
+  background: linear-gradient(90deg, rgba(255, 95, 131, .16), transparent 72%);
+  box-shadow: inset -2px 0 0 0 var(--rose);
   color: #fff;
-  font-weight: 800;
+  font-weight: 700;
 }
+nav button.active svg { color: var(--rose); }
 .recent-picks {
   order: 4;
   margin-top: 4px;
@@ -854,15 +856,23 @@ input[type="range"] {
 }
 .ghost-add:hover { border-color: rgba(255, 95, 131, .45); color: var(--text); }
 /* primary action in a row — the one filled, prominent control. */
+/* primary row action — restrained OUTLINED button with a filled rose play-triangle
+   (the triangle is the accent; the button itself is quiet — no loud solid fill). */
 .row-play {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   min-height: 34px;
-  padding: 0 14px;
+  padding: 0 15px;
+  border: 1px solid var(--line);
   border-radius: var(--radius-control);
-  font-weight: 700;
+  background: transparent;
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: none;
 }
+.row-play:hover { border-color: var(--rose); background: var(--rose-soft); color: var(--text); filter: none; }
+.row-play svg { fill: var(--rose); stroke: var(--rose); }
 /* row overflow menu — collapses secondary actions behind a single "More" button */
 .row-menu { position: relative; display: inline-flex; }
 .row-menu__pop {
@@ -1092,7 +1102,21 @@ input[type="range"] {
   border-color: rgba(255, 95, 131, .5);
   color: var(--rose);
 }
-.source-tabs button { min-height: 34px; }
+/* tabs: quiet dark pill by default; ACTIVE = rose outline + white text (not a filled block) */
+.source-tabs button {
+  min-height: 34px;
+  border-radius: 999px;
+  border-color: var(--line);
+  background: var(--bg-soft);
+  color: var(--muted);
+}
+.source-tabs button:hover { color: var(--text); }
+.source-tabs button.primary-small {
+  background: transparent;
+  border-color: var(--rose);
+  color: var(--text);
+  box-shadow: none;
+}
 .source-tabs button:disabled {
   border-color: var(--line-soft);
   color: var(--faint);
