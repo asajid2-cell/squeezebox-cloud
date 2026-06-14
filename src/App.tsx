@@ -1383,7 +1383,7 @@ function RowMenu({ children, label }: { children: ReactNode; label?: string }) {
   }, [open]);
   return (
     <div className="row-menu" ref={ref}>
-      <button className="icon-button" aria-label={label || "More actions"} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+      <button className="icon-button" aria-label={label || "More actions"} aria-haspopup="true" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
         <MoreHorizontal size={16} />
       </button>
       {open && (
@@ -1489,14 +1489,20 @@ function AddToPlaylistButton({ track }: { track: Track }) {
   const [newName, setNewName] = useState("");
   const [status, setStatus] = useState("");
   const ref = useRef<HTMLDivElement>(null);
+  const popId = useId();
 
   useEffect(() => {
     if (!open) return;
     function onDocClick(event: MouseEvent) {
       if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
     }
+    function onKey(event: KeyboardEvent) { if (event.key === "Escape") setOpen(false); }
     document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKey);
+    };
   }, [open]);
 
   function closeSoon() {
@@ -1536,11 +1542,11 @@ function AddToPlaylistButton({ track }: { track: Track }) {
 
   return (
     <div className="add-to-playlist" ref={ref}>
-      <button className="ghost-add" title="Add to playlist" onClick={() => setOpen((value) => !value)}>
+      <button className="ghost-add" title="Add to playlist" aria-haspopup="true" aria-expanded={open} aria-controls={open ? popId : undefined} onClick={() => setOpen((value) => !value)}>
         <ListPlus size={14} /> Save
       </button>
       {open && (
-        <div className="playlist-popover">
+        <div className="playlist-popover" id={popId}>
           <div className="playlist-popover-head">
             <strong>Add to playlist</strong>
             {status && <small>{status}</small>}
@@ -1700,13 +1706,13 @@ function PlaylistsPanel({ requestsOpen, onRefresh, onAction }: { requestsOpen: b
         </div>
       )}
       <div className="source-tabs">
-        <button className={source === "mine" ? "primary-small" : ""} onClick={() => { setSource("mine"); setSelectedLocal(null); setSelectedSpotify(null); setDetailTracks([]); }}>
+        <button className={source === "mine" ? "primary-small" : ""} aria-pressed={source === "mine"} onClick={() => { setSource("mine"); setSelectedLocal(null); setSelectedSpotify(null); setDetailTracks([]); }}>
           My Playlists
         </button>
-        <button className={source === "local" ? "primary-small" : ""} onClick={() => { setSource("local"); setSelectedSpotify(null); setDetailTracks([]); }}>
+        <button className={source === "local" ? "primary-small" : ""} aria-pressed={source === "local"} onClick={() => { setSource("local"); setSelectedSpotify(null); setDetailTracks([]); }}>
           Local
         </button>
-        <button className={source === "spotify" ? "primary-small" : ""} onClick={() => { setSource("spotify"); setSelectedLocal(null); setDetailTracks([]); }}>
+        <button className={source === "spotify" ? "primary-small" : ""} aria-pressed={source === "spotify"} onClick={() => { setSource("spotify"); setSelectedLocal(null); setDetailTracks([]); }}>
           Spotify
         </button>
       </div>
@@ -1714,7 +1720,7 @@ function PlaylistsPanel({ requestsOpen, onRefresh, onAction }: { requestsOpen: b
       {source === "spotify" && !selectedTitle && (
         <div className="suggestion-row" aria-label="Spotify playlist filters">
           {(["playlists", "albums", "artists", "tracks", "home"] as const).map((type) => (
-            <button key={type} className={spotifyType === type ? "is-selected" : ""} onClick={() => setSpotifyType(type)}>
+            <button key={type} className={spotifyType === type ? "is-selected" : ""} aria-pressed={spotifyType === type} onClick={() => setSpotifyType(type)}>
               {type}
             </button>
           ))}

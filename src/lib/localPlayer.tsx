@@ -333,10 +333,10 @@ export function PlaybackModeToggle() {
   const { mode, setMode } = usePlaybackMode();
   return (
     <div className="mode-toggle" role="group" aria-label="Playback target">
-      <button className={mode === "squeezebox" ? "active" : ""} onClick={() => setMode("squeezebox")}>
+      <button className={mode === "squeezebox" ? "active" : ""} aria-pressed={mode === "squeezebox"} onClick={() => setMode("squeezebox")}>
         Squeezebox
       </button>
-      <button className={mode === "local" ? "active" : ""} onClick={() => setMode("local")}>
+      <button className={mode === "local" ? "active" : ""} aria-pressed={mode === "local"} onClick={() => setMode("local")}>
         This device
       </button>
     </div>
@@ -411,10 +411,10 @@ export function LocalNowPlayingPanel() {
             <button aria-label="Next" disabled={!has} onClick={p.next}><SkipForward size={20} /></button>
           </div>
           <div className="playback-options">
-            <button className={p.shuffle ? "active-option" : ""} onClick={p.toggleShuffle}>
+            <button className={p.shuffle ? "active-option" : ""} aria-pressed={p.shuffle} onClick={p.toggleShuffle}>
               <Shuffle size={17} /> {p.shuffle ? "Shuffle on" : "Shuffle"}
             </button>
-            <button className={p.repeat !== "off" ? "active-option" : ""} onClick={p.cycleRepeat}>
+            <button className={p.repeat !== "off" ? "active-option" : ""} aria-pressed={p.repeat !== "off"} onClick={p.cycleRepeat}>
               {p.repeat === "one" ? <Repeat1 size={17} /> : <Repeat size={17} />} {repeatLabel}
             </button>
           </div>
