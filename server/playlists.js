@@ -216,7 +216,10 @@ function normalizePlaylist(playlist) {
 
 function sanitizeTrack(track) {
   if (!track || typeof track !== "object") return null;
-  const playable = Boolean(track.path || track.lmsTrackId || (track.uri && String(track.uri).includes(":track:")));
+  // Archived FLACs are playable by their "archive:<file>" id (no path/uri), and the
+  // UI offers Save for them, so accept them here too — otherwise saving 403s.
+  const archivePlayable = String(track.id || "").startsWith("archive:");
+  const playable = archivePlayable || Boolean(track.path || track.lmsTrackId || (track.uri && String(track.uri).includes(":track:")));
   const kind = String(track.kind || "").toLowerCase();
   // Only individual, playable tracks belong in a playlist (not albums/artists/playlist refs).
   if (!playable) return null;
