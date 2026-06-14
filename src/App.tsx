@@ -2542,5 +2542,10 @@ function formatTime(seconds: number) {
 }
 
 function publicRequestsOpen(state: AppState) {
-  return state.admin.publicRequests !== false && !state.schedule.current?.requestsPaused;
+  // Mirror the server (server/app.js publicRequestsOpen): a paused schedule window
+  // only closes requests while scheduling is actually enabled.
+  return (
+    state.admin.publicRequests !== false &&
+    !(state.admin.scheduleEnabled && state.schedule.current?.requestsPaused)
+  );
 }
