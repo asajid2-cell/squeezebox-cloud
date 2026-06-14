@@ -2053,6 +2053,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       if (body.enabled !== undefined) patch.enabled = body.enabled;
       if (body.policy !== undefined) patch.policy = body.policy;
       if (body.sun !== undefined) patch.sun = body.sun;
+      if (body.savePlaylistId !== undefined) patch.savePlaylistId = body.savePlaylistId;
       const tag = tapStore.update(req.params.id, patch);
       logEvent("tap.repoint", { tagId: tag.tagId, kind: tag.playSpec?.kind });
       res.json({ tag, token: tapStore.tokenFor(tag.tagId) });
@@ -2180,7 +2181,17 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       stopGeneratedPlayback();
 
       if (tag.playSpec?.kind === "discover") {
-        await playDiscoverTag(lms, playerId, tag.playSpec, { taste, queue: behavior.playMode === "queue", playlists, savePlaylistId: tag.savePlaylistId });
+        // Lazily give an older Surprise tag (bound before auto-save existed) its
+        // dedicated playlist on first tap, so it starts collecting discoveries too.
+        let savePlaylistId = tag.savePlaylistId;
+        if (!savePlaylistId && playlists) {
+          try {
+            const base = tag.display?.title || tag.label || "Surprise";
+            savePlaylistId = playlists.create({ name: `${base} — discoveries`, description: "Auto-saved from a Surprise tag.", createdBy: "tap" }).id;
+            tapStore.update(tagId, { savePlaylistId });
+          } catch { /* playlist cap — play without saving */ }
+        }
+        await playDiscoverTag(lms, playerId, tag.playSpec, { taste, queue: behavior.playMode === "queue", playlists, savePlaylistId });
       } else if (tag.playSpec?.kind === "library") {
         await playLibraryTag(lms, playerId, tag.playSpec, { playlists, queue: behavior.playMode === "queue" });
       } else {
