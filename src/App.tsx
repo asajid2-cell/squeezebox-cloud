@@ -1430,7 +1430,7 @@ function RowMenu({ children, label }: { children: ReactNode; label?: string }) {
   );
 }
 
-function SearchResultRow({ track, requestsOpen, onRefresh, onAction, siblingTracks }: { track: Track; requestsOpen: boolean; onRefresh: () => void; onAction: ActionRunner; siblingTracks?: Track[] }) {
+function SearchResultRow({ track, requestsOpen, onRefresh, onAction, siblingTracks, getQueueTracks }: { track: Track; requestsOpen: boolean; onRefresh: () => void; onAction: ActionRunner; siblingTracks?: Track[]; getQueueTracks?: () => Promise<Track[] | undefined> }) {
   const { mode } = usePlaybackMode();
   const local = useLocalPlayerContext();
   const isLocal = mode === "local";
@@ -1447,9 +1447,17 @@ function SearchResultRow({ track, requestsOpen, onRefresh, onAction, siblingTrac
 
   function run(kind: "play-now" | "play-next" | "add-queue") {
     if (kind === "play-now" && playlist) {
-      const at = Math.max(0, playlist.findIndex((t) => t.id === track.id));
-      if (isLocal) local.playTracks(playlist, at);
-      else onAction(async () => { await playPlaylistFrom(playlist, at); await onRefresh(); });
+      // Scope playback to the WHOLE collection, not just the loaded page — detail
+      // views paginate (50 at a time), so resolve the full queueable list first.
+      const sameTrack = (t: Track) => (t.uri && track.uri ? t.uri === track.uri : t.id === track.id);
+      const playFull = async () => {
+        const full = (getQueueTracks ? await getQueueTracks() : undefined) || playlist;
+        const at = Math.max(0, full.findIndex(sameTrack));
+        if (isLocal) local.playTracks(full, at);
+        else { await playPlaylistFrom(full, at); await onRefresh(); }
+      };
+      if (isLocal) playFull();
+      else onAction(playFull);
       return;
     }
     if (isLocal) {
@@ -2226,7 +2234,7 @@ function PlaylistTracks({
       {!loading && tracks.length === 0 && <EmptyState title="No songs found" detail="This playlist did not expose tracks yet." />}
       <div className="result-list">
         {tracks.map((track) => (
-          <SearchResultRow key={track.id} track={track} requestsOpen={requestsOpen} onRefresh={onRefresh} onAction={onAction} siblingTracks={tracks} />
+          <SearchResultRow key={track.id} track={track} requestsOpen={requestsOpen} onRefresh={onRefresh} onAction={onAction} siblingTracks={tracks} getQueueTracks={getQueueTracks} />
         ))}
       </div>
       {hasMore && (
