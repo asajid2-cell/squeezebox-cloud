@@ -1501,19 +1501,12 @@ input[type="range"] {
 @media (max-width: 1365px) {
   body { overflow: auto; }
   .desktop-shell { grid-template-columns: 260px minmax(0, 1fr); }
-  .content-grid {
-    grid-template-columns: 1fr 1fr;
-    grid-template-areas:
-      "now queue"
-      "search search"
-      "rail rail";
-  }
   .right-rail { grid-template-columns: 1fr 1fr; }
 }
 
 /* below ~1024px the 2-col content grid starves each column so the now-playing
    controls overflow and the queue panel covers them — stack to one column. */
-@media (max-width: 1024px) {
+@media (max-width: 1400px) {
   .content-grid {
     grid-template-columns: 1fr;
     grid-template-areas:
