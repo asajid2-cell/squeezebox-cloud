@@ -1995,7 +1995,8 @@ function AppPlaylistDetail({
 
   function playRow(track: Track, index: number) {
     if (isLocal) { local.playTracks(current.tracks, index); return; }
-    onAction(async () => { await playTrack("play-now", track); await onRefresh(); });
+    // Scope the Squeezebox queue to the whole playlist starting here (not a lone track).
+    onAction(async () => { await playPlaylistFrom(current.tracks, index); await onRefresh(); });
   }
 
   function queueRow(track: Track) {
