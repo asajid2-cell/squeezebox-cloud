@@ -80,7 +80,7 @@ p, small { color: var(--muted); }
 small { display: block; font-size: 13px; }
 
 .boot {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   place-items: center;
   background: #000;
@@ -89,14 +89,14 @@ small { display: block; font-size: 13px; }
 }
 
 .desktop-shell {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr);
   background: var(--bg);
 }
 
 .sidebar {
-  height: 100vh;
+  height: 100dvh;
   position: sticky;
   top: 0;
   overflow-y: auto;
@@ -359,7 +359,7 @@ nav button.active svg { color: var(--rose); }
 
 .main {
   min-width: 0;
-  height: 100vh;
+  height: 100dvh;
   padding: 42px 44px 30px;
   overflow: auto;
 }
@@ -500,22 +500,17 @@ nav button.active svg { color: var(--rose); }
   color: var(--text);
   font-size: 13px;
 }
-.source-chip::before {
-  content: "";
-  width: 10px;
-  height: 10px;
-  margin-right: 6px;
-  border-radius: 50%;
-  background: #1ed760;
-}
+/* no status dot here — the now-playing live indicator owns that signal (avoids a
+   duplicate, always-green dot regardless of the real source/connection state). */
 .progress-block { display: grid; gap: 8px; }
 .bar {
   position: relative;
   height: 5px;
   overflow: hidden;
   border-radius: 999px;
-  background: #252632;
+  background: var(--line);
 }
+.bar:focus-within { outline: 2px solid var(--rose); outline-offset: 3px; }
 .bar span {
   display: block;
   height: 100%;
@@ -540,7 +535,7 @@ nav button.active svg { color: var(--rose); }
 }
 .transport {
   display: grid;
-  grid-template-columns: repeat(3, minmax(46px, 1fr));
+  grid-template-columns: repeat(4, minmax(44px, 1fr));
   gap: 12px;
   margin-top: 15px;
 }
@@ -663,7 +658,6 @@ input[type="range"] {
   vertical-align: middle;
 }
 .local-progress { margin: 14px 0 6px; }
-.local-progress input[type="range"] { width: 100%; accent-color: var(--rose); }
 .local-progress input[type="range"] { width: 100%; accent-color: var(--rose); }
 .local-times { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .local-volume { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: var(--muted); }
@@ -1240,10 +1234,11 @@ input[type="range"] {
   min-height: 38px;
   padding: 0 18px;
   border: 1px solid var(--rose);
-  border-radius: 8px;
+  border-radius: var(--r-control);
   color: var(--rose);
   cursor: pointer;
 }
+.upload-button:focus-within { outline: 2px solid var(--rose); outline-offset: 2px; }
 .upload-button input {
   position: absolute;
   inset: 0;
@@ -1442,7 +1437,7 @@ input[type="range"] {
   margin-bottom: 12px;
   border-radius: 50%;
   background: var(--rose);
-  color: #fff;
+  color: var(--rose-ink);
   font-weight: 900;
 }
 .port-row {
@@ -1503,7 +1498,7 @@ input[type="range"] {
 }
 .audit-grid svg { color: var(--rose); }
 
-@media (max-width: 1240px) {
+@media (max-width: 1365px) {
   body { overflow: auto; }
   .desktop-shell { grid-template-columns: 260px minmax(0, 1fr); }
   .content-grid {
@@ -1702,3 +1697,13 @@ input[type="range"] {
 .playlist-create-row .primary-small { display: inline-flex; align-items: center; gap: 6px; }
 .ghost-add.danger { color: #ff7676; }
 .muted { color: var(--muted); }
+
+/* Touch devices: every actionable control gets a 44px target (a11y floor). Scoped to
+   coarse pointers so narrow desktop windows don't bloat compact controls. */
+@media (pointer: coarse) {
+  button, .top-link, .ghost-add, .row-play, .icon-button, .upload-button,
+  .source-tabs button, .suggestion-row button, .playback-options button,
+  .shuffle-source button, .mode-toggle button, .link-button,
+  .row-menu__pop button, .dialog__actions button { min-height: 44px; }
+  .icon-button, .archive-thumb { min-width: 44px; }
+}
