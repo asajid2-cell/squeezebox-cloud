@@ -592,7 +592,7 @@ function NowPlayingPanel({
             </div>
             <PlaybackOptions state={state} disabled={controlsDisabled} onRefresh={onRefresh} onAction={onAction} />
             <VolumeControl volume={state.player.volume} onChange={(volume) => onAction(async () => { await setPlayerVolume(volume); await onRefresh(); })} />
-            <ArchiveButton hasTrack={hasTrack} />
+            <ArchiveButton track={hasTrack ? state.nowPlaying : null} />
             {!hasTrack && <p className="empty-copy">No live track yet. Connect the Squeezebox or add a local-library song.</p>}
           </div>
         </div>
@@ -600,9 +600,12 @@ function NowPlayingPanel({
   );
 }
 
-function ArchiveButton({ hasTrack }: { hasTrack: boolean }) {
+function ArchiveButton({ track }: { track: AppState["nowPlaying"] | null }) {
   const [status, setStatus] = useState<"idle" | "saving" | "done" | "error">("idle");
   const [message, setMessage] = useState("");
+  // Archiving only accepts Spotify tracks; for local/uploaded/LMS playback the
+  // request would deterministically fail, so don't offer the action then.
+  if (!track || !String(track.uri || track.id || "").includes("spotify:")) return null;
 
   async function onArchive() {
     setStatus("saving");
@@ -620,7 +623,7 @@ function ArchiveButton({ hasTrack }: { hasTrack: boolean }) {
 
   return (
     <div className="archive-action">
-      <button className="archive-button" disabled={!hasTrack || status === "saving"} onClick={onArchive}>
+      <button className="archive-button" disabled={status === "saving"} onClick={onArchive}>
         <HardDriveDownload size={18} />
         {status === "saving" ? "Queueing…" : "Archive this song"}
       </button>
