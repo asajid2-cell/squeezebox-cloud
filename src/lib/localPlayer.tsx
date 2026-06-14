@@ -215,10 +215,15 @@ function useLocalPlayerEngine(): LocalPlayerApi {
   }, []);
 
   const playTracks = useCallback((tracks: Track[], startAt = 0) => {
+    // Resolve the chosen track BEFORE filtering, then find it again in the
+    // streamable subset — otherwise dropping earlier unplayable tracks shifts
+    // the index and we'd start on the wrong song.
+    const chosen = tracks[Math.min(Math.max(0, startAt), tracks.length - 1)];
     const playable = tracks.filter((t) => localStreamUrl(t));
     if (!playable.length) return;
     setQueueBoth(playable);
-    playAt(Math.min(Math.max(0, startAt), playable.length - 1));
+    const idx = chosen ? playable.findIndex((t) => t.id === chosen.id) : -1;
+    playAt(idx >= 0 ? idx : 0);
   }, [playAt, setQueueBoth]);
 
   const playNow = useCallback((track: Track) => {

@@ -31,7 +31,7 @@ async function fetchWithTimeout(input: string, init: RequestInit = {}, timeoutMs
 const fallbackState: AppState = {
   player: { id: "fallback", name: "Squeezebox Cloud Room", connected: false, online: false, mode: "stopped", volume: 68 },
   nowPlaying: {
-    id: "spotify:midnight-city",
+    id: "idle",
     title: "No track playing",
     artist: "Connect a player or request a song",
     album: "",

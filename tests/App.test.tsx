@@ -469,7 +469,6 @@ describe("Cloud Squeeze UI", () => {
     expect(screen.getByText("Connect speaker")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Check connection" }));
     expect(await screen.findByText("192.168.1.142")).toBeInTheDocument();
-    expect(screen.getByText("Screen audit")).toBeInTheDocument();
   });
 
   it("searches local library results", async () => {

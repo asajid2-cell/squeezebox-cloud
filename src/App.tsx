@@ -1018,7 +1018,10 @@ function QueueRow({
   onAction: ActionRunner;
 }) {
   const isEditing = editingId === item.id;
-  const editable = !item.uri && item.requestedBy !== "shuffle" && item.requestedBy !== "smart shuffle";
+  // External tracks carry their identity in uri OR in id (spotify:/archive:), and
+  // Spotify rows aren't locally editable — only auto-queued shuffle rows are excluded too.
+  const isExternal = Boolean(item.uri) || /^(spotify|archive):/.test(item.id) || item.source === "Spotify";
+  const editable = !isExternal && item.requestedBy !== "shuffle" && item.requestedBy !== "smart shuffle";
 
   return (
     <div className={`queue-row ${isEditing ? "is-editing" : ""}`}>
