@@ -590,7 +590,7 @@ function NowPlayingPanel({
                 <SkipForward size={20} />
               </button>
             </div>
-            <PlaybackOptions state={state} disabled={controlsDisabled} onRefresh={onRefresh} onAction={onAction} />
+            <PlaybackOptions state={state} disabled={controlsDisabled || !publicRequestsOpen(state)} onRefresh={onRefresh} onAction={onAction} />
             <VolumeControl volume={state.player.volume} onChange={(volume) => onAction(async () => { await setPlayerVolume(volume); await onRefresh(); })} />
             <ArchiveButton track={hasTrack ? state.nowPlaying : null} />
             {!hasTrack && <p className="empty-copy">No live track yet. Connect the Squeezebox or add a local-library song.</p>}
