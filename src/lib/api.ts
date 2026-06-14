@@ -388,7 +388,12 @@ export async function loginAdmin(password: string) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ password })
   });
-  if (!response.ok) throw new Error("Invalid admin password");
+  if (!response.ok) {
+    // Surface the server's actual reason (e.g. 429 "Too many admin login attempts")
+    // instead of always claiming a bad password.
+    const data = await response.json().catch(() => null);
+    throw new Error(data?.error || "Invalid admin password");
+  }
   const data = await response.json();
   window.localStorage.setItem("cloud-squeeze-admin-token", data.token);
   return data.token as string;
