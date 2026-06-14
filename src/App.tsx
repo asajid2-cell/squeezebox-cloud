@@ -486,7 +486,7 @@ function PublicScreen({
   if (activeScreen === "Queue") {
     return (
       <div className="content-grid focus-grid">
-        {mode === "local" ? <LocalQueuePanel /> : <QueuePanel queue={state.queue} onRefresh={onRefresh} onAction={onAction} />}
+        {mode === "local" ? <LocalQueuePanel /> : <QueuePanel queue={state.queue} requestsOpen={publicRequestsOpen(state)} onRefresh={onRefresh} onAction={onAction} />}
         <RightRail state={state} />
       </div>
     );
@@ -535,7 +535,7 @@ function PublicScreen({
     <div className="content-grid">
       <NowPlayingPanel state={state} hasTrack={hasTrack} controlsDisabled={controlsDisabled} onRefresh={onRefresh} onAction={onAction} onPlayerAction={onPlayerAction} />
 
-      <QueuePanel queue={state.queue} onRefresh={onRefresh} onAction={onAction} />
+      <QueuePanel queue={state.queue} requestsOpen={publicRequestsOpen(state)} onRefresh={onRefresh} onAction={onAction} />
 
       <RightRail state={state} />
     </div>
@@ -960,7 +960,7 @@ function VolumeControl({ volume, onChange }: { volume: number; onChange: (volume
   );
 }
 
-function QueuePanel({ queue, onRefresh, onAction }: { queue: AppState["queue"]; onRefresh: () => void; onAction: ActionRunner }) {
+function QueuePanel({ queue, requestsOpen, onRefresh, onAction }: { queue: AppState["queue"]; requestsOpen: boolean; onRefresh: () => void; onAction: ActionRunner }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState({ title: "", artist: "" });
   const [showAll, setShowAll] = useState(false);
@@ -989,7 +989,7 @@ function QueuePanel({ queue, onRefresh, onAction }: { queue: AppState["queue"]; 
       <div className="queue-list">
         {queue.length === 0 && <EmptyState title="Queue is empty" detail="Requests will appear here after someone adds a real local or Spotify track." />}
         {visibleQueue.map((item, index) => (
-          <QueueRow key={item.id} item={item} index={index} queueLength={queue.length} editingId={editingId} draft={draft} setDraft={setDraft} beginEdit={beginEdit} saveEdit={saveEdit} cancelEdit={() => setEditingId(null)} onRefresh={onRefresh} onAction={onAction} />
+          <QueueRow key={item.id} item={item} index={index} queueLength={queue.length} requestsOpen={requestsOpen} editingId={editingId} draft={draft} setDraft={setDraft} beginEdit={beginEdit} saveEdit={saveEdit} cancelEdit={() => setEditingId(null)} onRefresh={onRefresh} onAction={onAction} />
         ))}
         {queue.length > 12 && (
           <button className="ghost-add queue-show-all" aria-expanded={showAll} onClick={() => setShowAll((value) => !value)}>
@@ -1006,6 +1006,7 @@ function QueueRow({
   item,
   index,
   queueLength,
+  requestsOpen,
   editingId,
   draft,
   setDraft,
@@ -1018,6 +1019,7 @@ function QueueRow({
   item: AppState["queue"][number];
   index: number;
   queueLength: number;
+  requestsOpen: boolean;
   editingId: string | null;
   draft: { title: string; artist: string };
   setDraft: (draft: { title: string; artist: string }) => void;
@@ -1053,22 +1055,22 @@ function QueueRow({
       <span>{item.requestedBy}</span>
       <span>~{item.etaMinutes} min</span>
       <div className="queue-actions">
-        <button className="primary-small row-play" onClick={() => onAction(async () => { await playTrack("play-now", item); await onRefresh(); })}>
+        <button className="primary-small row-play" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("play-now", item); await onRefresh(); })}>
           <Play size={14} />Play
         </button>
         <RowMenu label={`More queue actions for ${item.title}`}>
-          <button className="row-menu__item" disabled={index === 0} onClick={() => onAction(async () => { await moveQueueItem(item.id, "up"); await onRefresh(); })}>
+          <button className="row-menu__item" disabled={index === 0 || !requestsOpen} onClick={() => onAction(async () => { await moveQueueItem(item.id, "up"); await onRefresh(); })}>
             <ChevronUp size={15} /> Move earlier
           </button>
-          <button className="row-menu__item" disabled={index === queueLength - 1} onClick={() => onAction(async () => { await moveQueueItem(item.id, "down"); await onRefresh(); })}>
+          <button className="row-menu__item" disabled={index === queueLength - 1 || !requestsOpen} onClick={() => onAction(async () => { await moveQueueItem(item.id, "down"); await onRefresh(); })}>
             <ChevronDown size={15} /> Move later
           </button>
           {isEditing ? (
-            <button className="row-menu__item" onClick={() => saveEdit(item.id)}>
+            <button className="row-menu__item" disabled={!requestsOpen} onClick={() => saveEdit(item.id)}>
               <Check size={15} /> Save edits
             </button>
           ) : editable ? (
-            <button className="row-menu__item" onClick={() => beginEdit(item)}>
+            <button className="row-menu__item" disabled={!requestsOpen} onClick={() => beginEdit(item)}>
               <SlidersHorizontal size={15} /> Edit details
             </button>
           ) : null}
@@ -1077,7 +1079,7 @@ function QueueRow({
               <XCircle size={15} /> Cancel editing
             </button>
           )}
-          <button className="row-menu__item danger" onClick={() => onAction(async () => { await removeQueueItem(item.id); await onRefresh(); })}>
+          <button className="row-menu__item danger" disabled={!requestsOpen} onClick={() => onAction(async () => { await removeQueueItem(item.id); await onRefresh(); })}>
             <XCircle size={15} /> Remove
           </button>
         </RowMenu>
@@ -1177,11 +1179,11 @@ function SearchPanel({
             <small>{state.services.localLibrary.uploadedCount || 0} uploaded tracks. Audio files only: MP3, FLAC, M4A, WAV, OGG, AAC.</small>
           </div>
           <label className="upload-button">
-            {uploading ? "Uploading" : "Upload"}
+            {uploading ? "Uploading" : !requestsOpen ? "Paused" : "Upload"}
             <input
               type="file"
               accept=".mp3,.flac,.m4a,.wav,.ogg,.aac,audio/mpeg,audio/flac,audio/mp4,audio/wav,audio/ogg,audio/aac"
-              disabled={uploading}
+              disabled={uploading || !requestsOpen}
               onChange={async (event) => {
                 const file = event.currentTarget.files?.[0];
                 event.currentTarget.value = "";
