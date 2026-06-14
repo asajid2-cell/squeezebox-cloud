@@ -677,7 +677,7 @@ const ARCHIVE_STATUS_LABEL: Record<ArchiveJob["status"], string> = {
 function ArchiveFileRow({ file }: { file: ArchiveFile }) {
   return (
     <li className="archive-row">
-      <div className="archive-thumb"><Music2 size={18} /></div>
+      <div className="archive-thumb">{usableArt(file.art) ? <img src={usableArt(file.art)} alt="" /> : <Music2 size={18} />}</div>
       <div className="archive-meta">
         <strong>{file.title || file.filename}</strong>
         <span>{file.artist}</span>

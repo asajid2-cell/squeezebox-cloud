@@ -70,7 +70,7 @@ export async function startArchiveService() {
 // ---------------------------------------------------------------------------
 
 /** Enqueue an explicit track. {uri, artist, title} */
-export function enqueueTrack({ uri, artist, title, album, emailTo } = {}) {
+export function enqueueTrack({ uri, artist, title, album, art, emailTo } = {}) {
   const normalized = normalizeUri(uri);
   if (!normalized) throw new Error("No archivable Spotify track was provided.");
 
@@ -86,6 +86,7 @@ export function enqueueTrack({ uri, artist, title, album, emailTo } = {}) {
     artist: (artist || "Unknown Artist").trim(),
     title: (title || "Unknown Title").trim(),
     album: (album || "").trim() || undefined,
+    art: String(art || "").trim() || undefined,
     status: "queued",
     queuedAt: new Date().toISOString(),
     error: null
@@ -105,7 +106,7 @@ export async function enqueueNowPlaying(lms, playerId) {
   const track = await lms.nowPlaying(pid).catch(() => null);
   if (!track || track.id === "idle") throw new Error("Nothing is playing to archive.");
   const uri = track.uri || track.id;
-  return enqueueTrack({ uri, artist: track.artist, title: track.title, album: track.album });
+  return enqueueTrack({ uri, artist: track.artist, title: track.title, album: track.album, art: track.art });
 }
 
 export function getQueueStatus() {
@@ -150,7 +151,9 @@ async function kickWorker() {
         job.finishedAt = new Date().toISOString();
         bumpDailyCount();
         console.log(`[archive] saved: ${job.artist} - ${job.title}`);
-        // Fire-and-forget the email so a mail hiccup never stalls the queue.
+        // Save the cover thumbnail + (if tagged) fire-and-forget the email so
+        // neither a slow fetch nor a mail hiccup stalls the queue.
+        saveCover(`${sanitize(job.artist)} - ${sanitize(job.title)}`, job.art).catch(() => {});
         if (job.emailTo) emailArchivedTrack(job, flacPath).catch(() => {});
       } catch (err) {
         job.status = "failed";
@@ -321,6 +324,70 @@ function reencodeFlac(src, dst, meta = {}) {
       else { fs.unlink(dst).catch(() => {}); reject(new Error(err.trim() || `flac re-encode failed (exit ${code})`)); }
     });
   });
+}
+
+// ---------------------------------------------------------------------------
+// Cover art: a saved thumbnail per archived track, served self-hosted so the
+// archive list shows real covers (and doesn't depend on Spotify URLs staying up).
+// ---------------------------------------------------------------------------
+
+const COVERS_DIR = path.join(ARCHIVE_DIR, ".covers");
+const COVER_MAX_BYTES = 6 * 1024 * 1024;
+
+function coverFile(stem) { return path.join(COVERS_DIR, `${sanitize2(stem)}.jpg`); }
+// stems already come from sanitize()d filenames; keep them filesystem-safe anyway.
+function sanitize2(stem) { return String(stem).replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").slice(0, 200); }
+
+export function hasArchiveCover(stem) { return existsSync(coverFile(stem)); }
+export function archiveCoverFile(stem) { return coverFile(stem); }
+
+// A track's art field can be an image-proxy URL (api/image-proxy?url=<enc>) or a
+// direct https URL; pull out something actually fetchable.
+function imageUrlFromArt(art) {
+  const s = String(art || "");
+  const m = s.match(/[?&]url=([^&]+)/);
+  if (m) { try { return decodeURIComponent(m[1]); } catch { return ""; } }
+  return /^https?:\/\//i.test(s) ? s : "";
+}
+
+// Fetch + save a cover thumbnail for a stem (idempotent: skips if present or if
+// there's no fetchable url). Returns true if a cover now exists.
+async function saveCover(stem, art) {
+  if (!stem) return false;
+  if (existsSync(coverFile(stem))) return true;
+  const url = imageUrlFromArt(art);
+  if (!url) return false;
+  try {
+    await fs.mkdir(COVERS_DIR, { recursive: true });
+    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    if (!res.ok) return false;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (!buf.length || buf.length > COVER_MAX_BYTES) return false;
+    const tmp = `${coverFile(stem)}.tmp-${crypto.randomBytes(3).toString("hex")}`;
+    await fs.writeFile(tmp, buf);
+    await fs.rename(tmp, coverFile(stem));
+    return true;
+  } catch { return false; }
+}
+
+// Backfill covers for already-archived files that don't have one yet, by looking
+// the track up on Spotify (artist + title) for its art. Read-only on the FLACs.
+export async function backfillArchiveCovers(lms, playerId) {
+  const pid = (playerId || process.env.ARCHIVE_PLAYER_MAC || "").trim() || (await lms.status().catch(() => null))?.id;
+  if (!pid) return { saved: 0, reason: "no player" };
+  let saved = 0;
+  const files = readdirSync(ARCHIVE_DIR).filter((f) => f.endsWith(".flac") && f !== "_current.flac");
+  for (const file of files) {
+    const stem = file.replace(/\.flac$/i, "");
+    if (existsSync(coverFile(stem))) continue;
+    const idx = stem.indexOf(" - ");
+    const artist = idx >= 0 ? stem.slice(0, idx) : "";
+    const title = idx >= 0 ? stem.slice(idx + 3) : stem;
+    const results = await lms.spotifySearch(pid, `${title} ${artist}`.trim(), 5).catch(() => []);
+    const hit = (Array.isArray(results) ? results : []).find((r) => imageUrlFromArt(r?.art));
+    if (hit && await saveCover(stem, hit.art)) saved += 1;
+  }
+  return { saved, scanned: files.length };
 }
 
 // ---------------------------------------------------------------------------
@@ -723,9 +790,12 @@ export async function scanWatchedPlaylists(lms, playerId) {
       for (const t of tracks) {
         const uri = t.uri || t.id;
         if (!uri || !/track[:/]/i.test(String(uri))) continue;
-        keys.push(trackStem(t.artist, t.title));
-        try { if (enqueueTrack({ uri, artist: t.artist, title: t.title, album: t.album, emailTo }).queued) queued += 1; }
+        const stem = trackStem(t.artist, t.title);
+        keys.push(stem);
+        try { if (enqueueTrack({ uri, artist: t.artist, title: t.title, album: t.album, art: t.art, emailTo }).queued) queued += 1; }
         catch { /* unarchivable track — skip */ }
+        // Backfill the cover for an already-archived track in this playlist.
+        if (isAlreadyArchived(t.artist, t.title)) await saveCover(stem, t.art);
       }
       next.push({ name, uri: pl.uri, browseId: pl.browseId, trackCount: keys.length, updatedAt: new Date().toISOString(), keys, email: emailTo ? true : undefined });
     }

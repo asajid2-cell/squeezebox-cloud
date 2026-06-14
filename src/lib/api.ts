@@ -450,6 +450,7 @@ export interface ArchiveFile {
   title: string;
   size: number | null;
   addedAt: string | null;
+  art?: string | null;
 }
 
 export interface ArchiveGroup {

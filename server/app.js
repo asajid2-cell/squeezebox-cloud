@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { LmsClient } from "./lmsClient.js";
-import { enqueueNowPlaying, enqueueTrack, getQueueStatus, removeJob, ensureStreamFile, scanWatchedPlaylists, groupArchiveFiles, getWatchStatus } from "./archiveService.js";
+import { enqueueNowPlaying, enqueueTrack, getQueueStatus, removeJob, ensureStreamFile, scanWatchedPlaylists, groupArchiveFiles, getWatchStatus, hasArchiveCover, archiveCoverFile, backfillArchiveCovers } from "./archiveService.js";
 import {
   addQueueItem,
   addQueueItemNext,
@@ -1826,8 +1826,8 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
   // Queue an explicit track (e.g. from search results / a playlist).
   app.post("/api/archive/track", (req, res) => {
     try {
-      const { uri, artist, title, album } = req.body || {};
-      res.json(enqueueTrack({ uri, artist, title, album }));
+      const { uri, artist, title, album, art } = req.body || {};
+      res.json(enqueueTrack({ uri, artist, title, album, art }));
     } catch (error) {
       res.status(400).json({ error: error.message });
     }
@@ -1839,7 +1839,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     let queued = 0, skipped = 0;
     for (const t of tracks) {
       try {
-        const r = enqueueTrack({ uri: t.uri, artist: t.artist, title: t.title, album: t.album });
+        const r = enqueueTrack({ uri: t.uri, artist: t.artist, title: t.title, album: t.album, art: t.art });
         r.queued ? queued++ : skipped++;
       } catch { skipped++; }
     }
@@ -1906,12 +1906,14 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
             const filePath = path.join(archiveDir, name);
             const stat = await fs.promises.stat(filePath).catch(() => null);
             const { artist, title } = parseArchiveFilename(name);
+            const stem = name.replace(/\.flac$/i, "");
             return {
               filename: name,
               artist,
               title,
               size: stat ? stat.size : null,
-              addedAt: stat ? stat.mtime.toISOString() : null
+              addedAt: stat ? stat.mtime.toISOString() : null,
+              art: hasArchiveCover(stem) ? `api/archive/cover/${encodeURIComponent(stem)}` : null
             };
           })
       );
@@ -1931,6 +1933,28 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     try {
       const result = await scanWatchedPlaylists(lms);
       res.json({ ok: true, ...result, scan: getWatchStatus() });
+    } catch (error) {
+      res.status(502).json({ ok: false, error: error.message });
+    }
+  });
+
+  // Serve a saved cover thumbnail for an archived track (by filename stem).
+  app.get("/api/archive/cover/:name", async (req, res) => {
+    try {
+      const file = archiveCoverFile(String(req.params.name || ""));
+      await fs.promises.access(file);
+      res.type("image/jpeg");
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      res.sendFile(path.resolve(file));
+    } catch {
+      res.status(404).json({ error: "No cover" });
+    }
+  });
+
+  // Fetch covers (via Spotify lookup) for archived files that don't have one yet.
+  app.post("/api/archive/covers/backfill", async (_req, res) => {
+    try {
+      res.json({ ok: true, ...(await backfillArchiveCovers(lms)) });
     } catch (error) {
       res.status(502).json({ ok: false, error: error.message });
     }
