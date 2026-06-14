@@ -1,6 +1,6 @@
 import { createApp, prewarmLibraryCaches, prewarmSpotifySearchCaches } from "./app.js";
 import { LmsClient } from "./lmsClient.js";
-import { startArchiveService } from "./archiveService.js";
+import { startArchiveService, startArchiveWatcher } from "./archiveService.js";
 import { config } from "./state.js";
 import express from "express";
 import http from "node:http";
@@ -61,6 +61,8 @@ if (process.env.NODE_ENV === "production") {
 server.listen(config.port, () => {
   console.log(`Squeezebox Cloud API listening on http://127.0.0.1:${config.port}`);
   startArchiveService();
+  // Auto-archiver: watch Spotify playlists named "archive*" and pull in new tracks.
+  startArchiveWatcher(lms);
   prewarmSpotifySearchCaches(lms).catch(() => null);
   for (const delayMs of [5000, 20000]) {
     const timer = setTimeout(() => {

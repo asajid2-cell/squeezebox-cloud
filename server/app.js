@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { LmsClient } from "./lmsClient.js";
-import { enqueueNowPlaying, enqueueTrack, getQueueStatus, removeJob, ensureStreamFile } from "./archiveService.js";
+import { enqueueNowPlaying, enqueueTrack, getQueueStatus, removeJob, ensureStreamFile, scanWatchedPlaylists, groupArchiveFiles, getWatchStatus } from "./archiveService.js";
 import {
   addQueueItem,
   addQueueItemNext,
@@ -1917,9 +1917,22 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       );
       // Most-recently-added first.
       files.sort((a, b) => (b.addedAt || "").localeCompare(a.addedAt || ""));
-      res.json({ files });
+      // `files` stays flat for back-compat; `groups` splits them by source
+      // (Manual + each watched "archive*" playlist) for the grouped view.
+      res.json({ files, groups: groupArchiveFiles(files), scan: getWatchStatus() });
     } catch (error) {
       res.status(500).json({ error: error.message, files: [] });
+    }
+  });
+
+  // Trigger an immediate scan of the watched "archive*" playlists (the auto-archiver
+  // also runs this on a timer). Returns how many new tracks were queued.
+  app.post("/api/archive/scan", async (_req, res) => {
+    try {
+      const result = await scanWatchedPlaylists(lms);
+      res.json({ ok: true, ...result, scan: getWatchStatus() });
+    } catch (error) {
+      res.status(502).json({ ok: false, error: error.message });
     }
   });
 

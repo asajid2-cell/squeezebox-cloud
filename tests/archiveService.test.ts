@@ -65,3 +65,40 @@ describe("archive stream cache", () => {
     await expect(fs.stat(existing)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
+
+import { groupArchiveFiles } from "../server/archiveService.js";
+
+describe("archive grouping (watched playlists)", () => {
+  const snapshot = [
+    { name: "Archive", keys: ["Drake - Something To Prove", "Gunna - Sold Out Dates"] },
+    { name: "archive-rap", keys: ["21 Savage - Kamaal"] }
+  ];
+
+  it("buckets each file under the first watched playlist that contains it, else Manual", () => {
+    const files = [
+      { filename: "Drake - Something To Prove.flac", artist: "Drake", title: "Something To Prove" },
+      { filename: "21 Savage - Kamaal.flac", artist: "21 Savage", title: "Kamaal" },
+      { filename: "Some Artist - A Manual Song.flac", artist: "Some Artist", title: "A Manual Song" }
+    ];
+    const groups = groupArchiveFiles(files, snapshot);
+    const byName = Object.fromEntries(groups.map((g) => [g.name, g.files.map((f: { title: string }) => f.title)]));
+    expect(byName["Archive"]).toEqual(["Something To Prove"]);
+    expect(byName["archive-rap"]).toEqual(["Kamaal"]);
+    expect(byName["Manual"]).toEqual(["A Manual Song"]);
+  });
+
+  it("always includes Manual first and marks it", () => {
+    const groups = groupArchiveFiles([], snapshot);
+    expect(groups[0].name).toBe("Manual");
+    expect(groups[0].manual).toBe(true);
+    expect(groups.map((g) => g.name)).toEqual(["Manual", "Archive", "archive-rap"]);
+  });
+
+  it("puts everything in Manual when nothing is watched", () => {
+    const files = [{ filename: "A - B.flac", artist: "A", title: "B" }];
+    const groups = groupArchiveFiles(files, []);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].name).toBe("Manual");
+    expect(groups[0].count).toBe(1);
+  });
+});

@@ -528,3 +528,114 @@ function saveQueue() {
   }, 200);
   saveTimer.unref?.();
 }
+
+// ---------------------------------------------------------------------------
+// Auto-archiver: watch Spotify playlists named "archive*" and archive new tracks
+// as they're added. Each watched playlist becomes a GROUP in the archive view;
+// everything else is "Manual". Dedup is handled by enqueueTrack.
+// ---------------------------------------------------------------------------
+
+const WATCH_PREFIX = (process.env.ARCHIVE_WATCH_PREFIX || "archive").toLowerCase();
+const SCAN_INTERVAL_MS = Number(process.env.ARCHIVE_SCAN_INTERVAL_MS) || 5 * 60 * 1000;
+const SNAPSHOT_FILE = path.join(ARCHIVE_DIR, "watch-snapshot.json");
+
+// In-memory snapshot of each watched playlist's current track keys, so the
+// archive list can be grouped by source WITHOUT re-fetching playlists per load.
+let watchedPlaylists = []; // [{ name, uri, browseId, trackCount, updatedAt, keys: string[] }]
+let lastScanAt = null;
+let scanning = false;
+
+// A track's archive filename stem ("Artist - Title") — must match
+// parseArchiveFilename so grouping lines up exactly with the saved FLAC files.
+function trackStem(artist, title) {
+  return `${sanitize(artist || "Unknown Artist")} - ${sanitize(title || "Unknown Title")}`;
+}
+
+export function getWatchStatus() {
+  return {
+    watching: watchedPlaylists.map((p) => ({ name: p.name, trackCount: p.trackCount, updatedAt: p.updatedAt })),
+    lastScanAt,
+    scanning,
+    intervalMs: SCAN_INTERVAL_MS
+  };
+}
+
+// Group archive files by source playlist. A file belongs to the FIRST watched
+// playlist that contains it; everything else is "Manual" (always shown first).
+export function groupArchiveFiles(files = [], snapshot = watchedPlaylists) {
+  const buckets = new Map([["Manual", []], ...snapshot.map((p) => [p.name, []])]);
+  const sets = snapshot.map((p) => ({ name: p.name, keys: new Set(p.keys) }));
+  for (const file of files) {
+    const stem = String(file.filename || "").replace(/\.flac$/i, "");
+    let group = "Manual";
+    for (const p of sets) { if (p.keys.has(stem)) { group = p.name; break; } }
+    if (!buckets.has(group)) buckets.set(group, []);
+    buckets.get(group).push(file);
+  }
+  return [...buckets.entries()].map(([name, groupFiles]) => ({ name, manual: name === "Manual", count: groupFiles.length, files: groupFiles }));
+}
+
+async function resolveArchivePlayer(lms, playerId) {
+  const pid = (playerId || process.env.ARCHIVE_PLAYER_MAC || "").trim();
+  if (pid) return pid;
+  const status = await lms.status().catch(() => null);
+  return status?.id || "";
+}
+
+// Find every Spotify playlist named "archive*", enqueue any new tracks (dedup is
+// built into enqueueTrack), and refresh the grouping snapshot.
+export async function scanWatchedPlaylists(lms, playerId) {
+  if (scanning) return { scanning: true, queued: 0, playlists: watchedPlaylists.length };
+  scanning = true;
+  let queued = 0;
+  try {
+    const pid = await resolveArchivePlayer(lms, playerId);
+    if (!pid) return { scanning: false, queued: 0, playlists: 0, reason: "no player" };
+    const all = await lms.spotifyLibrary(pid, "playlists", 200).catch(() => []);
+    const watched = (Array.isArray(all) ? all : []).filter((p) => String(p.title || "").trim().toLowerCase().startsWith(WATCH_PREFIX));
+    const next = [];
+    for (const pl of watched) {
+      const tracks = await lms.spotifyChildren(pid, { uri: pl.uri, browseId: pl.browseId, kind: "playlist", title: pl.title }, 400).catch(() => []);
+      const keys = [];
+      for (const t of tracks) {
+        const uri = t.uri || t.id;
+        if (!uri || !/track[:/]/i.test(String(uri))) continue;
+        keys.push(trackStem(t.artist, t.title));
+        try { if (enqueueTrack({ uri, artist: t.artist, title: t.title }).queued) queued += 1; }
+        catch { /* unarchivable track — skip */ }
+      }
+      next.push({ name: String(pl.title || "").trim(), uri: pl.uri, browseId: pl.browseId, trackCount: keys.length, updatedAt: new Date().toISOString(), keys });
+    }
+    watchedPlaylists = next;
+    lastScanAt = new Date().toISOString();
+    await saveWatchSnapshot();
+    console.log(`[archive] scanned ${watched.length} watched playlist(s), queued ${queued} new track(s).`);
+    return { scanning: false, queued, playlists: watched.length, lastScanAt };
+  } finally {
+    scanning = false;
+  }
+}
+
+async function loadWatchSnapshot() {
+  try {
+    const data = JSON.parse(await fs.readFile(SNAPSHOT_FILE, "utf8"));
+    if (Array.isArray(data.watchedPlaylists)) watchedPlaylists = data.watchedPlaylists;
+    lastScanAt = data.lastScanAt || null;
+  } catch { /* no snapshot yet */ }
+}
+
+async function saveWatchSnapshot() {
+  await fs.writeFile(SNAPSHOT_FILE, JSON.stringify({ watchedPlaylists, lastScanAt }, null, 2)).catch(() => {});
+}
+
+// Start the periodic auto-archiver: restore the last snapshot for instant
+// grouping, scan shortly after boot, then on an interval.
+export function startArchiveWatcher(lms) {
+  loadWatchSnapshot();
+  const kick = () => scanWatchedPlaylists(lms).catch((e) => console.warn(`[archive] scan failed: ${e?.message || e}`));
+  const first = setTimeout(kick, 20000); // let the player + Spotty settle after boot
+  first.unref?.();
+  const timer = setInterval(kick, SCAN_INTERVAL_MS);
+  timer.unref?.();
+  return { stop: () => { clearTimeout(first); clearInterval(timer); } };
+}
