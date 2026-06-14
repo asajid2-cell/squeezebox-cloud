@@ -460,7 +460,7 @@ export interface ArchiveGroup {
 }
 
 export interface ArchiveScan {
-  watching: { name: string; trackCount: number; updatedAt?: string }[];
+  watching: { name: string; trackCount: number; updatedAt?: string; email?: boolean }[];
   lastScanAt: string | null;
   scanning: boolean;
   intervalMs: number;

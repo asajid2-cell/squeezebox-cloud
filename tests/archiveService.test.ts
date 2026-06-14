@@ -102,3 +102,14 @@ describe("archive grouping (watched playlists)", () => {
     expect(groups[0].count).toBe(1);
   });
 });
+
+import { emailFromTitle } from "../server/archiveService.js";
+
+describe("email-from-playlist-title parsing", () => {
+  it("pulls an email out of a playlist title, else empty", () => {
+    expect(emailFromTitle("Archive me@email.com")).toBe("me@email.com");
+    expect(emailFromTitle("archive-rap dj.x+tag@sub.domain.co")).toBe("dj.x+tag@sub.domain.co");
+    expect(emailFromTitle("Archive")).toBe("");
+    expect(emailFromTitle("")).toBe("");
+  });
+});

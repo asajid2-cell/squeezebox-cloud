@@ -70,7 +70,7 @@ export async function startArchiveService() {
 // ---------------------------------------------------------------------------
 
 /** Enqueue an explicit track. {uri, artist, title} */
-export function enqueueTrack({ uri, artist, title } = {}) {
+export function enqueueTrack({ uri, artist, title, emailTo } = {}) {
   const normalized = normalizeUri(uri);
   if (!normalized) throw new Error("No archivable Spotify track was provided.");
 
@@ -89,6 +89,9 @@ export function enqueueTrack({ uri, artist, title } = {}) {
     queuedAt: new Date().toISOString(),
     error: null
   };
+  // If this came from a watched playlist whose title carries an email, mail a
+  // compressed copy once it finishes downloading.
+  if (emailTo) job.emailTo = emailTo;
   queue.push(job);
   saveQueue();
   kickWorker();
@@ -141,11 +144,13 @@ async function kickWorker() {
       await saveQueue();
 
       try {
-        await downloadOne(job);
+        const flacPath = await downloadOne(job);
         job.status = "done";
         job.finishedAt = new Date().toISOString();
         bumpDailyCount();
         console.log(`[archive] saved: ${job.artist} - ${job.title}`);
+        // Fire-and-forget the email so a mail hiccup never stalls the queue.
+        if (job.emailTo) emailArchivedTrack(job, flacPath).catch(() => {});
       } catch (err) {
         job.status = "failed";
         job.error = String(err && err.message ? err.message : err).slice(0, 300);
@@ -306,6 +311,84 @@ function reencodeFlac(src, dst) {
       else { fs.unlink(dst).catch(() => {}); reject(new Error(err.trim() || `flac re-encode failed (exit ${code})`)); }
     });
   });
+}
+
+// ---------------------------------------------------------------------------
+// Email-on-archive: if a watched playlist's TITLE carries an email address
+// (e.g. "Archive me@email.com"), mail a compressed MP3 of each newly-archived
+// track there — drop your email in the playlist name and the songs land in your
+// inbox. Sent via Resend (RESEND_API_KEY); silently skipped if not configured.
+// ---------------------------------------------------------------------------
+
+const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
+const RESEND_FROM = process.env.RESEND_FROM || "Squeezebox Archive <onboarding@resend.dev>";
+const EMAIL_BITRATE = process.env.ARCHIVE_EMAIL_BITRATE || "320k";
+const EMAIL_MAX_BYTES = (Number(process.env.ARCHIVE_EMAIL_MAX_MB) || 35) * 1024 * 1024;
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
+
+/** Pull the first email out of a playlist title (the rest is the display name). */
+export function emailFromTitle(title) {
+  const m = String(title || "").match(EMAIL_RE);
+  return m ? m[0] : "";
+}
+
+/** A clean display name for a watched playlist: title minus any email. */
+function cleanPlaylistName(title) {
+  return String(title || "").replace(EMAIL_RE, "").replace(/[\s\-–—|:]+$/g, "").replace(/\s+/g, " ").trim() || String(title || "").trim();
+}
+
+/** Transcode the archived FLAC to a smaller MP3 for emailing. */
+function transcodeForEmail(flacPath, mp3Path) {
+  return new Promise((resolve, reject) => {
+    const ff = spawn("ffmpeg", ["-hide_banner", "-loglevel", "error", "-i", flacPath, "-c:a", "libmp3lame", "-b:a", EMAIL_BITRATE, "-y", mp3Path]);
+    let err = "";
+    ff.stderr.on("data", (d) => { err += d.toString().slice(0, 200); });
+    ff.on("error", reject);
+    ff.on("close", (code) => {
+      if (code === 0 && existsSync(mp3Path)) resolve(mp3Path);
+      else { fs.unlink(mp3Path).catch(() => {}); reject(new Error(err.trim() || `mp3 transcode failed (exit ${code})`)); }
+    });
+  });
+}
+
+function escapeHtml(s) {
+  return String(s || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+/** Email a freshly-archived track (compressed) to the playlist-title address. */
+async function emailArchivedTrack(job, flacPath) {
+  const to = job?.emailTo;
+  if (!to) return;
+  if (!RESEND_API_KEY) { console.warn(`[archive] email skipped (set RESEND_API_KEY): ${job.artist} - ${job.title}`); return; }
+  const mp3Path = path.join(ARCHIVE_DIR, `.email-${job.id}.mp3`);
+  try {
+    await transcodeForEmail(flacPath, mp3Path);
+    const buf = await fs.readFile(mp3Path);
+    if (buf.length > EMAIL_MAX_BYTES) {
+      console.warn(`[archive] email skipped (${Math.round(buf.length / 1e6)}MB > cap): ${job.title}`);
+      return;
+    }
+    const filename = `${sanitize(job.artist)} - ${sanitize(job.title)}.mp3`;
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from: RESEND_FROM,
+        to: [to],
+        subject: `Archived: ${job.title} — ${job.artist}`,
+        html: `<p>Fresh from your <strong>archive</strong> playlist:</p>
+               <p><strong>${escapeHtml(job.title)}</strong><br>${escapeHtml(job.artist)}</p>
+               <p>Attached as a ${EMAIL_BITRATE} MP3 — the lossless FLAC is in your Squeezebox archive.</p>`,
+        attachments: [{ filename, content: buf.toString("base64") }]
+      })
+    });
+    if (res.ok) console.log(`[archive] emailed "${job.title}" to ${to}`);
+    else console.warn(`[archive] email failed (${res.status}): ${(await res.text().catch(() => "")).slice(0, 200)}`);
+  } catch (e) {
+    console.warn(`[archive] email error for "${job.title}": ${e?.message || e}`);
+  } finally {
+    await fs.unlink(mp3Path).catch(() => {});
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -553,7 +636,7 @@ function trackStem(artist, title) {
 
 export function getWatchStatus() {
   return {
-    watching: watchedPlaylists.map((p) => ({ name: p.name, trackCount: p.trackCount, updatedAt: p.updatedAt })),
+    watching: watchedPlaylists.map((p) => ({ name: p.name, trackCount: p.trackCount, updatedAt: p.updatedAt, email: Boolean(p.email) })),
     lastScanAt,
     scanning,
     intervalMs: SCAN_INTERVAL_MS
@@ -595,16 +678,20 @@ export async function scanWatchedPlaylists(lms, playerId) {
     const watched = (Array.isArray(all) ? all : []).filter((p) => String(p.title || "").trim().toLowerCase().startsWith(WATCH_PREFIX));
     const next = [];
     for (const pl of watched) {
+      // An email in the playlist TITLE means "mail me each new song" — and is
+      // stripped from the display name so the group reads cleanly.
+      const emailTo = emailFromTitle(pl.title);
+      const name = cleanPlaylistName(pl.title);
       const tracks = await lms.spotifyChildren(pid, { uri: pl.uri, browseId: pl.browseId, kind: "playlist", title: pl.title }, 400).catch(() => []);
       const keys = [];
       for (const t of tracks) {
         const uri = t.uri || t.id;
         if (!uri || !/track[:/]/i.test(String(uri))) continue;
         keys.push(trackStem(t.artist, t.title));
-        try { if (enqueueTrack({ uri, artist: t.artist, title: t.title }).queued) queued += 1; }
+        try { if (enqueueTrack({ uri, artist: t.artist, title: t.title, emailTo }).queued) queued += 1; }
         catch { /* unarchivable track — skip */ }
       }
-      next.push({ name: String(pl.title || "").trim(), uri: pl.uri, browseId: pl.browseId, trackCount: keys.length, updatedAt: new Date().toISOString(), keys });
+      next.push({ name, uri: pl.uri, browseId: pl.browseId, trackCount: keys.length, updatedAt: new Date().toISOString(), keys, email: emailTo ? true : undefined });
     }
     watchedPlaylists = next;
     lastScanAt = new Date().toISOString();

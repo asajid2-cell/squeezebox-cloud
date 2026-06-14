@@ -735,6 +735,7 @@ function ArchivePanel() {
   const pending = jobs.filter((j) => j.status === "queued" || j.status === "downloading");
   const failed = jobs.filter((j) => j.status === "failed");
   const watchCount = scan?.watching.length || 0;
+  const emailCount = scan?.watching.filter((w) => w.email).length || 0;
   const shownGroups = groups.filter((g) => g.count > 0);
 
   return (
@@ -748,7 +749,7 @@ function ArchivePanel() {
       </div>
       <p className="panel-subtitle">Lossless FLAC copies, downloaded in the background. Queue songs from search or the player — or just add them to a Spotify playlist named <strong>archive</strong> and they get pulled in automatically.</p>
       {watchCount > 0 && (
-        <p className="archive-watch-note">Auto-archiving {watchCount} playlist{watchCount > 1 ? "s" : ""}{scan?.lastScanAt ? ` · last checked ${archiveRelativeTime(scan.lastScanAt)}` : ""}.</p>
+        <p className="archive-watch-note">Auto-archiving {watchCount} playlist{watchCount > 1 ? "s" : ""}{emailCount > 0 ? ` · emailing new songs from ${emailCount}` : ""}{scan?.lastScanAt ? ` · last checked ${archiveRelativeTime(scan.lastScanAt)}` : ""}.</p>
       )}
       {error && <div className="action-error" role="alert">{error}</div>}
 
