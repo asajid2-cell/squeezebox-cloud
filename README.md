@@ -1,83 +1,89 @@
-# Squeezebox Cloud
+# Squeezebox Cloud — run a Squeezebox from any phone
 
-A deployed web **control plane** for a VPS-hosted Squeezebox / [Lyrion Music
-Server](https://lyrion.org/) (LMS) setup. Guests get a clean public "now playing
-+ request a song" page; the owner gets an admin surface for the queue, library,
-playlists, and integrations — all driven by a live React UI over a WebSocket-synced
-Express backend.
+**A live web control surface for a VPS-hosted Squeezebox / [Lyrion Music Server](https://lyrion.org/)
+(LMS): guests browse the library and queue songs from their phones, the owner runs
+the queue and playback — and any NFC sticker can be bound to an album so a single tap
+plays it on the speaker.**
 
 **▶ Live:** [harmonizerlabs.cc/cloud-squeeze](https://harmonizerlabs.cc/cloud-squeeze/)
 
-![Squeezebox Cloud — now playing, request queue, library, and track info](docs/hero.png)
+![Tap console — a wall of NFC stickers, each bound to a song, with play / queue / re-bind / edit controls](docs/media/tap-console.png)
 
-## Why
+*The **Tap console**: every sticker is a re-pointable link to a song — the sticker never changes, only what it means.*
 
-LMS is powerful but its built-in web UI is dated and assumes a single trusted
-operator on the LAN. Squeezebox Cloud puts a modern, phone-friendly front end on
-top of it: friends can browse the library and queue requests from their own
-devices, while the owner keeps moderation and playback control — served publicly
-from a VPS, not just the local network.
+| Per-sticker tap analytics | WebSocket-synced jukebox |
+|---|---|
+| ![Tap analytics — total taps, a 14-day trend, and a most-tapped ranking](docs/media/analytics.png) | The console counts every tap — totals, a 14-day trend, and which stickers get reached for most. The jukebox itself is play/pause/next, shuffle/repeat, a **Mixed / Spotify / Local** source toggle, and a public request queue, all WebSocket-synced across clients. |
 
-## Features
+## Tap to play
 
-- **Now playing & transport** — play/pause/next/prev/volume, proxied to LMS with a
-  graceful in-memory fallback so the UI stays usable in local dev with no server.
-- **Public request queue** — guests queue tracks; the owner approves/controls.
-- **Library search** — scans the configured music source directory (`fast-glob`).
-- **Playlists, curation & recommendations** — playlist management plus a
-  recommender / listener-taste layer (`recommender.js`, `listenerTaste.js`,
-  `curation.js`).
-- **Spotify / Spotty status & search** — detects Spotify availability via LMS
-  config, favorites, and plugin metadata.
-- **Archive flows** and **browser-sync** (session-token pairing across devices).
-- **Live sync** — WebSocket coordination keeps every connected client in step.
+Bind any **NTAG NFC sticker** to an album or song; tapping it opens a tiny page that
+plays it on the Squeezebox — no app install, no login for the tap itself. Stickers are
+**re-pointable**: the printed URL never changes, only what it resolves to, so one
+sticker can mean a different album next week. The console writes tags over Web NFC,
+prints QR label sheets, and counts taps per sticker.
 
-## Architecture
+Security is layered: an HMAC token in the URL *fragment* (never logged) gates the basic
+tag, and the hardened tier verifies **NTAG 424 DNA "SUN"** tags with RFC-4493 AES-CMAC
+and a monotonic counter, so a captured tap can't be replayed.
 
-```text
-React 19 + Vite (TypeScript) UI
-   │  REST + WebSocket
-   ▼
-Express 5 API  (58 routes)
-   ├─ lmsClient.js     → Lyrion/Squeezebox server (with in-memory fallback)
-   ├─ library.js       → music-source scanning & search
-   ├─ playlists.js / curation.js / recommender.js / listenerTaste.js
-   ├─ archiveService.js
-   └─ state.js         → shared state, WebSocket broadcast
-```
+## Why it's hard
 
-Inputs are validated with **Zod**; the LMS client degrades to in-memory state so
-the whole app runs locally without a real music server attached.
+LMS is powerful but its built-in UI is dated and assumes one trusted operator on the
+LAN. Squeezebox Cloud puts a modern, multi-user front end on top and serves it
+*publicly* from a VPS: a React UI over a WebSocket-synced Express backend. **It runs
+end-to-end with no music server attached** — the LMS client falls back to in-memory
+state, so you can clone it and it just works. Requests are per-account (a signed-in
+listener's plays shape *their* shuffle), inputs are Zod-validated, and admin access is
+gated by an external SSO — while the public jukebox and the tap path stay open.
 
 ## Run locally
 
 ```bash
 npm install
-npm run dev            # Vite client + Express server (concurrently)
-# open http://127.0.0.1:5177
+npm run dev          # Vite client + Express server → http://127.0.0.1:5177
+```
+
+---
+
+*Everything below is engineering detail.*
+
+## Where to look in the code
+
+| Area | Path |
+|---|---|
+| React UI (now-playing, queue, library) | `src/` |
+| Tap console (bind / write / QR / analytics) | `src/tap/` |
+| Tap resolver + HMAC / SUN verification | `server/tap*.js` (`tapSun.js` = AES-CMAC) |
+| LMS client (+ in-memory fallback) | `server/lmsClient.js` |
+| Recommender / listener taste | `server/recommender.js`, `server/listenerTaste.js` |
+| Live state + WebSocket broadcast | `server/state.js`, `server/app.js` |
+
+## Architecture
+
+```text
+React 19 + Vite (TypeScript)
+   │  REST + WebSocket
+   ▼
+Express 5 API
+   ├─ lmsClient.js   → Lyrion/Squeezebox server (in-memory fallback)
+   ├─ tap*.js        → NFC tag resolve / HMAC + NTAG-424 SUN verify
+   ├─ library.js     → music-source scan & search
+   ├─ recommender.js / listenerTaste.js / curation.js
+   └─ state.js       → shared state + WebSocket broadcast
 ```
 
 ## Tests
 
 ```bash
-npm test               # Vitest unit/integration (12 test/spec files, supertest)
-npm run test:ui        # Playwright UI tests
-npm run smoke:library  # library scan smoke
-npm run smoke:lms      # LMS integration smoke
-npm run smoke:public   # public-surface smoke
-npm run test:all       # vitest + build + smokes + Playwright
+npm test             # Vitest unit/integration (supertest)
+npm run test:all     # vitest + build + smokes + Playwright
 ```
 
 ## Stack
 
-React 19 · Vite 7 · TypeScript · Express 5 · `ws` (WebSocket) · Zod · Vitest ·
-Playwright · Docker. Deployed behind nginx on a VPS at `/cloud-squeeze/`.
-
-## Status
-
-Actively deployed personal project. The public surface is live; admin actions and
-integrations (LMS, Spotify/Spotty) require the corresponding services configured
-on the host.
+React 19 · Vite · TypeScript · Express 5 · `ws` · Zod · Vitest · Playwright · Docker.
+Deployed behind nginx on a VPS at `/cloud-squeeze/`; admin auth via an external SSO.
 
 ## License
 
