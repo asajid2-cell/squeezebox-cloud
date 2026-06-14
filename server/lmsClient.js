@@ -326,6 +326,23 @@ export class LmsClient {
     };
   }
 
+  async livePosition(playerId) {
+    if (!playerId) return { positionMs: 0, mode: "stop", durationMs: 0 };
+    const encoded = encodeURIComponent(playerId);
+    const [timeRaw, modeRaw, durRaw] = await Promise.all([
+      this.command(`${encoded} time ?`),
+      this.command(`${encoded} mode ?`),
+      this.command(`${encoded} duration ?`)
+    ]);
+    const sec = Number(decodeURIComponent(lastToken(timeRaw)));
+    const dur = Number(decodeURIComponent(lastToken(durRaw)));
+    return {
+      positionMs: Math.max(0, Math.round((Number.isFinite(sec) ? sec : 0) * 1000)),
+      durationMs: Math.max(0, Math.round((Number.isFinite(dur) ? dur : 0) * 1000)),
+      mode: firstSafeDisplayValue([decodeCliToken(modeRaw)], "stop")
+    };
+  }
+
   async resolvePlayableTarget(track) {
     // Archived FLACs live outside the LMS library; play them as an HTTP stream
     // served by our own /api/archive/file endpoint (exempt from the https redirect

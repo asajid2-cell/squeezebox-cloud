@@ -507,6 +507,17 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     res.json(status);
   });
 
+  // Fresh live playback position for cross-device sync (bypasses the cached snapshot).
+  app.get("/api/player/position", async (_req, res) => {
+    try {
+      const playerId = await hotPlayerId(lms);
+      const pos = await lms.livePosition(playerId);
+      res.json({ ...pos, atMs: Date.now() });
+    } catch (error) {
+      res.status(502).json({ error: error.message });
+    }
+  });
+
   app.get("/api/speaker/connect-guide", async (_req, res) => {
     const player = await refreshLms(lms, { taste });
     const lmsWeb = await checkUrl(config.lmsHttpUrl);
