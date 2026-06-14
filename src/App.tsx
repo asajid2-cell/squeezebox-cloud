@@ -44,7 +44,6 @@ import {
   deletePlaylist,
   fetchArchive,
   archiveDownloadUrl,
-  archiveCurrentTrack,
   archiveTrack,
   fetchArchiveStatus,
   fetchCollectionTracks,
@@ -611,7 +610,9 @@ function ArchiveButton({ track }: { track: AppState["nowPlaying"] | null }) {
     setStatus("saving");
     setMessage("");
     try {
-      const result = await archiveCurrentTrack();
+      // Archive the exact track shown in the UI, not whatever the (possibly
+      // unset / different) ARCHIVE_PLAYER_MAC player is currently playing.
+      const result = await archiveTrack(track);
       setStatus("done");
       setMessage(result.queued ? "Added to archive queue" : result.reason || "Already archived");
       window.setTimeout(() => setStatus("idle"), 5000);
