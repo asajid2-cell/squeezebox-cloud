@@ -466,7 +466,10 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
   });
   if (process.env.NODE_ENV !== "test") {
     const shuffleMonitor = setInterval(() => {
-      if (appState.playback.smartQueue || appState.queue.length > 0) refreshLms(lms, { maintainPlayback: true, taste }).catch(() => null);
+      const manage = appState.playback.smartQueue || appState.queue.length > 0;
+      // Also poll while Surprise songs are queued-but-unsaved, so each lands in
+      // the Library the moment it starts playing (without app-managing the queue).
+      if (manage || pendingDiscoverSaves.size > 0) refreshLms(lms, { maintainPlayback: manage, taste }).catch(() => null);
     }, 8000);
     shuffleMonitor.unref?.();
     const startupRefresh = setTimeout(() => {
@@ -3102,6 +3105,9 @@ async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force =
       if (status.connected) {
         const track = estimateContinuousElapsed(applyPendingSeek(await lms.nowPlaying(status.id)), status);
         observeListeningPlayback(taste, status, track, "poll");
+        // A queued Surprise song that just started playing gets saved to its
+        // Library playlist now (idempotent — addTracks dedups).
+        flushDiscoverSaveForTrack(track);
         const key = trackKey(track);
         const trackInfoCandidate = isTrackInfoCandidate(track);
         const shouldRefreshTrackInfo =
@@ -3341,6 +3347,49 @@ async function refillDiscoverPool(lms, playerId, seed, taste) {
   finally { pool.building = false; }
 }
 
+// Songs a Surprise tap QUEUED but that haven't played yet. A song is only added
+// to the auto-save playlist once it actually STARTS playing (the user hears it),
+// never just for being queued. Keyed by Spotify track id; bounded + best-effort.
+const pendingDiscoverSaves = new Map(); // trackId -> { track, playlists, playlistId, at }
+const PENDING_SAVE_TTL_MS = 60 * 60 * 1000;
+const PENDING_SAVE_MAX = 80;
+
+// The stable base62 Spotify id from either a track's uri (spotify:track:X) or its
+// id (spotify://track:X), so a queued pick matches the same track when it plays.
+function discoverTrackKey(track) {
+  const m = String(track?.uri || track?.id || "").match(/track[:/]+([A-Za-z0-9]+)/i);
+  return m ? m[1].toLowerCase() : "";
+}
+
+// Register songs to be saved WHEN they play (queued, not yet heard).
+function queueDiscoverSaves(tracks, playlists, playlistId) {
+  if (!playlists || !playlistId) return;
+  const now = Date.now();
+  for (const track of tracks) {
+    const id = discoverTrackKey(track);
+    if (id) pendingDiscoverSaves.set(id, { track, playlists, playlistId, at: now });
+  }
+  while (pendingDiscoverSaves.size > PENDING_SAVE_MAX) {
+    pendingDiscoverSaves.delete(pendingDiscoverSaves.keys().next().value);
+  }
+}
+
+// Called each poll with the now-playing track: if it's a pending save, it just
+// started playing → add it to its playlist and stop tracking it. Prunes expired.
+function flushDiscoverSaveForTrack(track) {
+  if (pendingDiscoverSaves.size === 0) return;
+  const now = Date.now();
+  for (const [id, entry] of pendingDiscoverSaves) {
+    if (now - entry.at > PENDING_SAVE_TTL_MS) pendingDiscoverSaves.delete(id);
+  }
+  const id = discoverTrackKey(track);
+  if (!id) return;
+  const entry = pendingDiscoverSaves.get(id);
+  if (!entry) return;
+  pendingDiscoverSaves.delete(id);
+  try { entry.playlists.addTracks(entry.playlistId, [entry.track]); } catch { /* playlist gone */ }
+}
+
 // Resolve + play a "discover" tag: force a FRESH taste-seeded set straight onto
 // the speaker — first track plays now, the rest are appended so the surprise
 // keeps going. Serves from a warm pool for instant taps. It deliberately does
@@ -3368,10 +3417,17 @@ async function playDiscoverTag(lms, playerId, playSpec, { taste = defaultListene
   for (const track of picks.slice(1)) {
     await lms.playTrack(playerId, track, "add-queue").catch(() => {});
   }
-  // Auto-save the surfaced songs to this tag's dedicated playlist — tap, hear new
-  // music, find it later in your Library. addTracks dedups, so revisits don't pile up.
+  // Auto-save as songs PLAY, not when queued. In replace mode the first pick is
+  // playing now → save it immediately; the rest are pending until they start. In
+  // party-queue mode nothing plays now, so all picks are pending. They land in the
+  // Library the moment each actually starts (see flushDiscoverSaveForTrack).
   if (playlists && savePlaylistId) {
-    try { playlists.addTracks(savePlaylistId, picks); } catch { /* playlist gone — skip save */ }
+    if (queue) {
+      queueDiscoverSaves(picks, playlists, savePlaylistId);
+    } else {
+      try { playlists.addTracks(savePlaylistId, [picks[0]]); } catch { /* playlist gone */ }
+      queueDiscoverSaves(picks.slice(1), playlists, savePlaylistId);
+    }
   }
   // Refill in the background (don't await) so the next tap stays instant.
   if (pool.tracks.length < 5) refillDiscoverPool(lms, playerId, seed, taste);
