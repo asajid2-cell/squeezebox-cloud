@@ -1939,13 +1939,14 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
   });
 
   // Serve a saved cover thumbnail for an archived track (by filename stem).
+  // Read + send rather than res.sendFile — the covers live in a DOTFILE dir
+  // (.covers), which sendFile 404s by default (same trap as .stream-cache).
   app.get("/api/archive/cover/:name", async (req, res) => {
     try {
-      const file = archiveCoverFile(String(req.params.name || ""));
-      await fs.promises.access(file);
+      const buf = await fs.promises.readFile(archiveCoverFile(String(req.params.name || "")));
       res.type("image/jpeg");
       res.setHeader("Cache-Control", "public, max-age=86400");
-      res.sendFile(path.resolve(file));
+      res.send(buf);
     } catch {
       res.status(404).json({ error: "No cover" });
     }
