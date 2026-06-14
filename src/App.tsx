@@ -1954,6 +1954,9 @@ function AppPlaylistDetail({
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const { mode } = usePlaybackMode();
+  const local = useLocalPlayerContext();
+  const isLocal = mode === "local";
 
   useEffect(() => {
     setName(playlist?.name || "");
@@ -1973,12 +1976,31 @@ function AppPlaylistDetail({
 
   const current = playlist;
   const isEmpty = current.tracks.length === 0;
+  const hasLocalPlayable = current.tracks.some((track) => localStreamUrl(track));
 
   async function queueAll(action: "add-queue" | "play-next") {
+    if (isLocal) {
+      // Browser playback: enqueue the streamable tracks directly. Reverse the
+      // play-next list so it lands in order right after the current track.
+      const playable = current.tracks.slice(0, 200).filter((track) => localStreamUrl(track));
+      if (action === "play-next") [...playable].reverse().forEach((track) => local.playNext(track));
+      else playable.forEach((track) => local.addToQueue(track));
+      return;
+    }
     await onAction(async () => {
       await playTracks(action, current.tracks.slice(0, 200));
       await onRefresh();
     });
+  }
+
+  function playRow(track: Track, index: number) {
+    if (isLocal) { local.playTracks(current.tracks, index); return; }
+    onAction(async () => { await playTrack("play-now", track); await onRefresh(); });
+  }
+
+  function queueRow(track: Track) {
+    if (isLocal) { local.addToQueue(track); return; }
+    onAction(async () => { await playTrack("add-queue", track); await onRefresh(); });
   }
 
   async function doRename(event: FormEvent) {
@@ -2035,8 +2057,8 @@ function AppPlaylistDetail({
         <button className="ghost-add" onClick={onBack}>Back</button>
       </div>
       <div className="playlist-detail-actions">
-        <button className="ghost-add" disabled={!requestsOpen || isEmpty} onClick={() => queueAll("play-next")}>Play next</button>
-        <button className="ghost-add" disabled={!requestsOpen || isEmpty} onClick={() => queueAll("add-queue")}>Queue all</button>
+        <button className="ghost-add" disabled={isLocal ? !hasLocalPlayable : (!requestsOpen || isEmpty)} onClick={() => queueAll("play-next")}>Play next</button>
+        <button className="ghost-add" disabled={isLocal ? !hasLocalPlayable : (!requestsOpen || isEmpty)} onClick={() => queueAll("add-queue")}>Queue all</button>
         {isAdmin && (
           <button className="ghost-add" onClick={() => setRenaming(true)}>
             <Pencil size={14} /> Rename
@@ -2094,9 +2116,9 @@ function AppPlaylistDetail({
             </div>
             <span>{track.duration ? formatTime(track.duration) : "--:--"}</span>
             <div className="track-actions">
-              <button className="primary-small row-play" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("play-now", track); await onRefresh(); })}><Play size={14} />Play</button>
+              <button className="primary-small row-play" disabled={isLocal ? !localStreamUrl(track) : !requestsOpen} onClick={() => playRow(track, index)}><Play size={14} />{isLocal ? "Play here" : "Play"}</button>
               <RowMenu label={`More actions for ${track.title}`}>
-                <button className="row-menu__item" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("add-queue", track); await onRefresh(); })}>
+                <button className="row-menu__item" disabled={isLocal ? !localStreamUrl(track) : !requestsOpen} onClick={() => queueRow(track)}>
                   <ListMusic size={15} /> Add to queue
                 </button>
                 {isAdmin && (
@@ -2144,7 +2166,21 @@ function PlaylistTracks({
   onRefresh: () => void;
   onAction: ActionRunner;
 }) {
+  const { mode } = usePlaybackMode();
+  const local = useLocalPlayerContext();
+  const isLocal = mode === "local";
+  const hasLocalPlayable = tracks.some((track) => localStreamUrl(track));
+
   async function queueAll(action: "add-queue" | "play-next") {
+    if (isLocal) {
+      await onAction(async () => {
+        const queueTracks = await getQueueTracks();
+        const playable = (queueTracks || tracks).filter((item) => localStreamUrl(item)).slice(0, 200);
+        if (action === "play-next") [...playable].reverse().forEach((track) => local.playNext(track));
+        else playable.forEach((track) => local.addToQueue(track));
+      });
+      return;
+    }
     await onAction(async () => {
       const queueTracks = await getQueueTracks();
       const playableTracks = (queueTracks || tracks).filter((item) => !item.kind || item.kind === "track").slice(0, 200);
@@ -2162,8 +2198,8 @@ function PlaylistTracks({
     <div className="playlist-detail" aria-label={`${title} tracks`}>
       <div className="playlist-detail-actions">
         <span>{loading ? "Loading tracks" : `${tracks.length} tracks`}</span>
-        <button className="ghost-add" disabled={!requestsOpen || tracks.length === 0} onClick={() => queueAll("play-next")}>Play next</button>
-        <button className="ghost-add" disabled={!requestsOpen || tracks.length === 0} onClick={() => queueAll("add-queue")}>Queue all</button>
+        <button className="ghost-add" disabled={isLocal ? !hasLocalPlayable : (!requestsOpen || tracks.length === 0)} onClick={() => queueAll("play-next")}>Play next</button>
+        <button className="ghost-add" disabled={isLocal ? !hasLocalPlayable : (!requestsOpen || tracks.length === 0)} onClick={() => queueAll("add-queue")}>Queue all</button>
       </div>
       {loading && <EmptyState title="Opening playlist" detail="Loading songs from the selected collection." />}
       {!loading && tracks.length === 0 && <EmptyState title="No songs found" detail="This playlist did not expose tracks yet." />}
