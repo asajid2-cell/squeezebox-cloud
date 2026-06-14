@@ -213,6 +213,57 @@ export async function importBackup(data: unknown): Promise<{ imported: number; s
   return (await asJson(res)) as { imported: number; skipped: number; total: number };
 }
 
+// ---- Tap Library (app-managed playlists, shared with the main jukebox) ----
+export type TapPlaylistSummary = { id: string; name: string; description?: string; trackCount: number; art?: string | null; sample?: string[]; updatedAt?: string };
+export type TapPlaylist = { id: string; name: string; description?: string; tracks: SearchItem[]; updatedAt?: string };
+
+// Mirror the server's trackKey() so the console can address a track for removal.
+export function playlistTrackKey(t: SearchItem): string {
+  return String(t.uri || t.path || t.lmsTrackId || t.id || t.title || "").toLowerCase();
+}
+
+export async function listPlaylists(): Promise<TapPlaylistSummary[]> {
+  const res = await fetch("/api/tap/playlists", { credentials: "same-origin" });
+  const body = await asJson(res);
+  return (body.playlists || []) as TapPlaylistSummary[];
+}
+
+export async function getPlaylist(id: string): Promise<TapPlaylist | null> {
+  const res = await fetch(`/api/tap/playlists/${encodeURIComponent(id)}`, { credentials: "same-origin" });
+  if (!res.ok) return null;
+  return ((await asJson(res)).playlist || null) as TapPlaylist | null;
+}
+
+export async function createPlaylist(name: string, tracks?: SearchItem[]): Promise<TapPlaylist> {
+  const res = await fetch("/api/tap/playlists", { method: "POST", headers: JSON_HEADERS, credentials: "same-origin", body: JSON.stringify({ name, tracks }) });
+  return ((await asJson(res)).playlist) as TapPlaylist;
+}
+
+export async function renamePlaylist(id: string, name: string): Promise<TapPlaylist> {
+  const res = await fetch(`/api/tap/playlists/${encodeURIComponent(id)}`, { method: "PATCH", headers: JSON_HEADERS, credentials: "same-origin", body: JSON.stringify({ name }) });
+  return ((await asJson(res)).playlist) as TapPlaylist;
+}
+
+export async function deletePlaylist(id: string): Promise<boolean> {
+  const res = await fetch(`/api/tap/playlists/${encodeURIComponent(id)}`, { method: "DELETE", credentials: "same-origin" });
+  return res.ok;
+}
+
+export async function addPlaylistTracks(id: string, tracks: SearchItem[]): Promise<{ added: number; playlist: TapPlaylist }> {
+  const res = await fetch(`/api/tap/playlists/${encodeURIComponent(id)}/tracks`, { method: "POST", headers: JSON_HEADERS, credentials: "same-origin", body: JSON.stringify({ tracks }) });
+  return (await asJson(res)) as { added: number; playlist: TapPlaylist };
+}
+
+export async function removePlaylistTrack(id: string, key: string): Promise<TapPlaylist> {
+  const res = await fetch(`/api/tap/playlists/${encodeURIComponent(id)}/tracks/${encodeURIComponent(key)}`, { method: "DELETE", credentials: "same-origin" });
+  return ((await asJson(res)).playlist) as TapPlaylist;
+}
+
+export async function movePlaylistTrack(id: string, key: string, direction: "up" | "down"): Promise<TapPlaylist> {
+  const res = await fetch(`/api/tap/playlists/${encodeURIComponent(id)}/tracks/move`, { method: "POST", headers: JSON_HEADERS, credentials: "same-origin", body: JSON.stringify({ key, direction }) });
+  return ((await asJson(res)).playlist) as TapPlaylist;
+}
+
 export async function createTag(payload: Record<string, unknown>) {
   const res = await fetch("/api/tap", { method: "POST", headers: JSON_HEADERS, credentials: "same-origin", body: JSON.stringify(payload) });
   return { status: res.status, body: await asJson(res) };

@@ -18,7 +18,18 @@ import {
   importBackup,
   artSrc,
   nowPlayingNow,
+  listPlaylists,
+  getPlaylist,
+  createPlaylist,
+  renamePlaylist,
+  deletePlaylist,
+  addPlaylistTracks,
+  removePlaylistTrack,
+  movePlaylistTrack,
+  playlistTrackKey,
   type TapTag,
+  type TapPlaylist,
+  type TapPlaylistSummary,
   type SearchItem,
   type TapAnalytics,
   type TapSettings,
@@ -147,6 +158,49 @@ function SignInCard({ session, onSignedIn }: { session: TapSession | null; onSig
   );
 }
 
+// The "tag is bound, now write it" step — QR + Web-NFC write + copy. Shared by
+// the Write flow and the Library (binding a playlist to a tag).
+function WrittenTagCard({ display, tagId, token, title = "Burn it onto a tag", backLabel = "Bind another", onBack }: {
+  display: SearchItem; tagId: string; token: string; title?: string; backLabel?: string; onBack: () => void;
+}) {
+  const [writeState, setWriteState] = useState<{ ok?: boolean; msg: string } | null>(null);
+  const url = tapUrlFor(tagId, token);
+  const doWrite = async () => {
+    setWriteState({ msg: "Hold a tag to your phone…" });
+    const res = await writeTapTag(url);
+    setWriteState(res.ok ? { ok: true, msg: "Tag written. Tap it to play." } : { ok: false, msg: res.reason === "unsupported" ? "This device can't write tags — use the QR or copy below from an Android phone." : `Couldn't write: ${res.reason}` });
+  };
+  return (
+    <section className="tap-main" aria-label="Write tag">
+      <header className="tap-head">
+        <span className="tap-head__eyebrow">Write</span>
+        <h1 className="tap-head__title">{title}</h1>
+        <p className="tap-head__sub">Write it once and future taps play <strong>{display.title}</strong>. On an Android phone, tap “Write to NFC tag” below. On a computer, scan the QR to open the writer on your phone.</p>
+      </header>
+      <div className="tap-card" style={{ maxWidth: "36rem" }}>
+        <div className="tap-card__row">
+          <Art src={display.art} alt={display.title || "cover"} />
+          <div className="tap-card__text">
+            <span className="tap-card__title">{display.title}</span>
+            <span className="tap-card__sub">{display.artist}</span>
+          </div>
+        </div>
+        <div className="tap-card__actions">
+          <button className="tap-btn tap-btn--primary" onClick={doWrite} disabled={!isNfcWriteSupported()}>Write to NFC tag</button>
+          <button className="tap-btn" onClick={() => navigator.clipboard?.writeText(url).then(() => setWriteState({ ok: true, msg: "Link copied." }), () => {})}>Copy link</button>
+          <button className="tap-btn tap-btn--ghost" onClick={onBack}>{backLabel}</button>
+        </div>
+        {!isNfcWriteSupported() ? <div className="tap-alert tap-alert--err">NFC writing needs Chrome on Android. Use the QR code or copy the link to write from a phone that supports it.</div> : null}
+        {writeState ? <div className={`tap-alert ${writeState.ok ? "tap-alert--ok" : "tap-alert--err"}`} role="status">{writeState.msg}</div> : null}
+        <div style={{ display: "grid", gap: "8px", justifyItems: "center", padding: "8px 0" }}>
+          <div style={{ background: "#fff", padding: 12, borderRadius: 12 }}><QRCodeSVG value={writeUrlFor(tagId, token, display.title)} size={148} /></div>
+          <small>On your phone? Scan to open the writer and burn the tag there — it won't play.</small>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 // ---------- write flow ----------
 function WriteView({ onCreated, rebind, onDone }: { onCreated: () => void; rebind?: { tagId: string; title?: string } | null; onDone?: () => void }) {
   const [query, setQuery] = useState("");
@@ -165,7 +219,6 @@ function WriteView({ onCreated, rebind, onDone }: { onCreated: () => void; rebin
   // When re-pointing an existing tag, success is just a confirmation — the
   // physical sticker (id + token) is unchanged, so there's nothing to re-write.
   const [rebound, setRebound] = useState<SearchItem | null>(null);
-  const [writeState, setWriteState] = useState<{ ok?: boolean; msg: string } | null>(null);
   const [error, setError] = useState("");
   const searchRun = useRef(0);
 
@@ -243,7 +296,6 @@ function WriteView({ onCreated, rebind, onDone }: { onCreated: () => void; rebin
       const tg = res.body.tag;
       const tok = res.body.token;
       setCreated({ tagId: tg.tagId, token: tok, url: tapUrlFor(tg.tagId, tok), display });
-      setWriteState(null);
       onCreated();
     } else {
       setError(res.body?.error || "Couldn't create the binding.");
@@ -303,13 +355,6 @@ function WriteView({ onCreated, rebind, onDone }: { onCreated: () => void; rebin
     }
   };
 
-  const doWrite = async () => {
-    if (!created) return;
-    setWriteState({ msg: "Hold a tag to your phone…" });
-    const res = await writeTapTag(created.url);
-    setWriteState(res.ok ? { ok: true, msg: "Tag written. Tap it to play." } : { ok: false, msg: res.reason === "unsupported" ? "This device can't write tags — use the QR or copy below from an Android phone." : `Couldn't write: ${res.reason}` });
-  };
-
   if (rebound) {
     return (
       <section className="tap-main" aria-label="Re-pointed">
@@ -335,35 +380,7 @@ function WriteView({ onCreated, rebind, onDone }: { onCreated: () => void; rebin
   }
 
   if (created) {
-    return (
-      <section className="tap-main" aria-label="Write tag">
-        <header className="tap-head">
-          <span className="tap-head__eyebrow">Step 3 · Write</span>
-          <h1 className="tap-head__title">Burn it onto a tag</h1>
-          <p className="tap-head__sub">Write it once and future taps play <strong>{created.display.title}</strong>. On an Android phone, tap “Write to NFC tag” below. On a computer, scan the QR to open the writer on your phone.</p>
-        </header>
-        <div className="tap-card" style={{ maxWidth: "36rem" }}>
-          <div className="tap-card__row">
-            <Art src={created.display.art} alt={created.display.title || "cover"} />
-            <div className="tap-card__text">
-              <span className="tap-card__title">{created.display.title}</span>
-              <span className="tap-card__sub">{created.display.artist}</span>
-            </div>
-          </div>
-          <div className="tap-card__actions">
-            <button className="tap-btn tap-btn--primary" onClick={doWrite} disabled={!isNfcWriteSupported()}>Write to NFC tag</button>
-            <button className="tap-btn" onClick={() => navigator.clipboard?.writeText(created.url).then(() => setWriteState({ ok: true, msg: "Link copied." }), () => {})}>Copy link</button>
-            <button className="tap-btn tap-btn--ghost" onClick={() => setCreated(null)}>Bind another</button>
-          </div>
-          {!isNfcWriteSupported() ? <div className="tap-alert tap-alert--err">NFC writing needs Chrome on Android. Use the QR code or copy the link to write from a phone that supports it.</div> : null}
-          {writeState ? <div className={`tap-alert ${writeState.ok ? "tap-alert--ok" : "tap-alert--err"}`} role="status">{writeState.msg}</div> : null}
-          <div style={{ display: "grid", gap: "8px", justifyItems: "center", padding: "8px 0" }}>
-            <div style={{ background: "#fff", padding: 12, borderRadius: 12 }}><QRCodeSVG value={writeUrlFor(created.tagId, created.token, created.display.title)} size={148} /></div>
-            <small>On your phone? Scan to open the writer and burn the tag there — it won't play.</small>
-          </div>
-        </div>
-      </section>
-    );
+    return <WrittenTagCard display={created.display} tagId={created.tagId} token={created.token} onBack={() => setCreated(null)} />;
   }
 
   return (
@@ -608,6 +625,7 @@ function TagsView({ refreshKey, onRebind }: { refreshKey: number; onRebind: (t: 
                 <span>{t.playSpec?.kind === "album-from-track" ? "Album from a song"
                   : t.playSpec?.kind === "album-from-top" ? "Whole album"
                   : t.playSpec?.kind === "playlist" ? "Playlist"
+                  : t.playSpec?.kind === "library" ? "Library playlist"
                   : t.playSpec?.kind === "discover" ? "Surprise"
                   : "Single song"}</span>
                 <span>Tapped {t.tapCount ?? 0}×</span>
@@ -767,6 +785,174 @@ function PrintLabelsView() {
   );
 }
 
+// ---------- library (app-managed playlists) ----------
+function LibraryView({ onRefreshTags }: { onRefreshTags: () => void }) {
+  const [playlists, setPlaylists] = useState<TapPlaylistSummary[] | null>(null);
+  const [openId, setOpenId] = useState("");
+  const [detail, setDetail] = useState<TapPlaylist | null>(null);
+  const [made, setMade] = useState<{ tagId: string; token: string; display: SearchItem } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [addQuery, setAddQuery] = useState("");
+  const [addResults, setAddResults] = useState<SearchItem[]>([]);
+  const [addSearching, setAddSearching] = useState(false);
+  const [note, setNote] = useState("");
+
+  const loadList = useCallback(async () => setPlaylists(await listPlaylists()), []);
+  useEffect(() => { loadList(); }, [loadList]);
+
+  const open = async (id: string) => { setOpenId(id); setNote(""); setAddResults([]); setAddQuery(""); setDetail(await getPlaylist(id)); };
+  const refresh = async () => { if (openId) setDetail(await getPlaylist(openId)); await loadList(); };
+
+  const create = async () => {
+    const name = newName.trim();
+    if (!name || busy) return;
+    setBusy(true);
+    try { const pl = await createPlaylist(name); setNewName(""); await loadList(); await open(pl.id); }
+    finally { setBusy(false); }
+  };
+
+  const makeTag = async (pl: TapPlaylist) => {
+    setBusy(true);
+    try {
+      const display: SearchItem = { title: pl.name, artist: `${pl.tracks.length} song${pl.tracks.length === 1 ? "" : "s"}`, art: pl.tracks.find((t) => t.art)?.art ?? null, kind: "playlist" };
+      const res = await createTag({ intent: "library", playlistId: pl.id, display, label: pl.name });
+      if (res.status >= 200 && res.status < 300 && res.body?.tag) { setMade({ tagId: res.body.tag.tagId, token: res.body.token, display }); onRefreshTags(); }
+      else setNote(res.body?.error || "Couldn't make a tag.");
+    } finally { setBusy(false); }
+  };
+
+  const runAddSearch = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    const q = addQuery.trim();
+    if (!q) return;
+    setAddSearching(true);
+    try { const { results, groups } = await spotifySearch(q); setAddResults((groups?.tracks || results || []).filter((t) => (t.kind || "track") === "track")); }
+    catch { setAddResults([]); }
+    finally { setAddSearching(false); }
+  };
+
+  const addTrack = async (track: SearchItem) => {
+    if (!detail) return;
+    const r = await addPlaylistTracks(detail.id, [track]);
+    setNote(r.added ? `Added “${track.title}”.` : `“${track.title}” is already in here.`);
+    await refresh();
+  };
+
+  const addPlaying = async () => {
+    if (!detail) return;
+    const np = await nowPlayingNow();
+    const ref = String(np?.uri || np?.id || "");
+    if (!np || !ref) { setNote("Nothing is playing right now."); return; }
+    const track: SearchItem = { title: np.title, artist: np.artist, album: np.album, art: np.art ?? null, source: np.source, kind: "track", uri: /^spotify/i.test(ref) ? ref.replace(/^spotify:\/\//i, "spotify:") : ref };
+    await addTrack(track);
+  };
+
+  if (made) return <WrittenTagCard display={made.display} tagId={made.tagId} token={made.token} title={`A tag for ${made.display.title}`} backLabel="Back to library" onBack={() => { setMade(null); refresh(); }} />;
+
+  // ---- playlist detail ----
+  if (openId && detail) {
+    return (
+      <section className="tap-main" aria-label={`Playlist ${detail.name}`}>
+        <header className="tap-head">
+          <span className="tap-head__eyebrow">Library</span>
+          <h1 className="tap-head__title">{detail.name}</h1>
+          <p className="tap-head__sub">{detail.tracks.length} song{detail.tracks.length === 1 ? "" : "s"} · edit it here and any tag bound to it follows along.</p>
+          <div className="tap-head__actions" style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="tap-btn tap-btn--primary" disabled={busy || detail.tracks.length === 0} onClick={() => makeTag(detail)}>Make a tag for this</button>
+            <button className="tap-btn" onClick={async () => { const name = prompt("Rename playlist", detail.name)?.trim(); if (name) { await renamePlaylist(detail.id, name); await refresh(); } }}>Rename</button>
+            <button className="tap-btn tap-btn--ghost" onClick={async () => { if (confirm(`Delete “${detail.name}”? Tags bound to it will stop working.`)) { await deletePlaylist(detail.id); setOpenId(""); setDetail(null); await loadList(); } }}>Delete</button>
+            <button className="tap-btn tap-btn--ghost" onClick={() => { setOpenId(""); setDetail(null); }}>Back</button>
+          </div>
+        </header>
+
+        {note ? <div className="tap-alert tap-alert--ok" role="status">{note}</div> : null}
+
+        {detail.tracks.length === 0 ? (
+          <div className="tap-empty"><strong>No songs yet.</strong><span>Add what's playing, or search below.</span></div>
+        ) : (
+          <ol style={{ display: "grid", gap: 6, margin: "0 0 8px", padding: 0, listStyle: "none" }}>
+            {detail.tracks.map((t, i) => {
+              const key = playlistTrackKey(t);
+              return (
+                <li key={key || i} className="tap-card" style={{ padding: 10 }}>
+                  <div className="tap-card__row">
+                    <Art src={t.art} alt={t.title || "song"} size={40} />
+                    <div className="tap-card__text"><span className="tap-card__title">{t.title}</span><span className="tap-card__sub">{t.artist}{t.album ? ` · ${t.album}` : ""}</span></div>
+                    <div className="tap-card__actions" style={{ marginLeft: "auto" }}>
+                      <button className="tap-btn tap-btn--icon" aria-label="Move up" disabled={i === 0} onClick={async () => { await movePlaylistTrack(detail.id, key, "up"); await refresh(); }}>↑</button>
+                      <button className="tap-btn tap-btn--icon" aria-label="Move down" disabled={i === detail.tracks.length - 1} onClick={async () => { await movePlaylistTrack(detail.id, key, "down"); await refresh(); }}>↓</button>
+                      <button className="tap-btn tap-btn--icon tap-btn--ghost" aria-label={`Remove ${t.title}`} onClick={async () => { await removePlaylistTrack(detail.id, key); await refresh(); }}>✕</button>
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        )}
+
+        <div className="tap-card" style={{ maxWidth: "44rem" }}>
+          <div className="tap-card__row" style={{ marginBottom: 8 }}>
+            <span className="tap-card__title">Add songs</span>
+            <button className="tap-btn" style={{ marginLeft: "auto" }} onClick={addPlaying}>Add what's playing</button>
+          </div>
+          <form className="tap-search" onSubmit={runAddSearch} role="search">
+            <div className="tap-field"><input value={addQuery} onChange={(e) => setAddQuery(e.target.value)} placeholder="Search songs to add…" aria-label="Search songs to add" /></div>
+            <button className="tap-btn tap-btn--primary" type="submit" disabled={addSearching || !addQuery.trim()}>{addSearching ? "Searching…" : "Search"}</button>
+          </form>
+          {addResults.length > 0 ? (
+            <ol style={{ display: "grid", gap: 4, margin: "8px 0 0", padding: 0, listStyle: "none" }}>
+              {addResults.map((t, i) => (
+                <li key={`${t.uri || t.id || i}`}>
+                  <button className="tap-btn tap-btn--ghost" style={{ width: "100%", justifyContent: "flex-start", gap: 10 }} onClick={() => addTrack(t)}>
+                    <span style={{ overflowWrap: "anywhere", textAlign: "left" }}>{t.title} <span style={{ color: "var(--faint)" }}>— {t.artist}</span></span>
+                    <span style={{ marginLeft: "auto" }}>＋</span>
+                  </button>
+                </li>
+              ))}
+            </ol>
+          ) : null}
+        </div>
+      </section>
+    );
+  }
+
+  // ---- playlist list ----
+  return (
+    <section className="tap-main" aria-label="Library">
+      <header className="tap-head">
+        <span className="tap-head__eyebrow">Library</span>
+        <h1 className="tap-head__title">Your playlists</h1>
+        <p className="tap-head__sub">Build playlists here and bind them to tags. Surprise tags auto-save what they play into a playlist — your growing discovery library.</p>
+      </header>
+
+      <form className="tap-search" onSubmit={(e) => { e.preventDefault(); create(); }}>
+        <div className="tap-field"><input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="New playlist name…" aria-label="New playlist name" /></div>
+        <button className="tap-btn tap-btn--primary" type="submit" disabled={busy || !newName.trim()}>Create</button>
+      </form>
+
+      {playlists === null ? <div className="tap-card__meta"><span className="tap-spinner" aria-hidden="true" /> Loading…</div> : null}
+      {playlists && playlists.length === 0 ? <div className="tap-empty"><strong>No playlists yet.</strong><span>Create one above, or bind a Surprise tag and it'll fill one for you.</span></div> : null}
+
+      {playlists && playlists.length > 0 ? (
+        <div className="tap-grid">
+          {playlists.map((p) => (
+            <button key={p.id} className="tap-card" style={{ textAlign: "left", cursor: "pointer" }} onClick={() => open(p.id)}>
+              <div className="tap-card__row">
+                <Art src={p.art} alt={p.name} />
+                <div className="tap-card__text">
+                  <span className="tap-card__title">{p.name}</span>
+                  <span className="tap-card__sub">{p.trackCount} song{p.trackCount === 1 ? "" : "s"}{p.sample?.length ? ` · ${p.sample.slice(0, 2).join(", ")}` : ""}</span>
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 // ---------- settings ----------
 function SettingsView() {
   const [s, setS] = useState<TapSettings | null>(null);
@@ -887,7 +1073,7 @@ function BackupSection() {
 // ---------- shell ----------
 export function TapConsole() {
   const [session, setSession] = useState<TapSession | "loading">("loading");
-  const [view, setView] = useState<"tags" | "write" | "analytics" | "print" | "settings">("tags");
+  const [view, setView] = useState<"tags" | "write" | "library" | "analytics" | "print" | "settings">("tags");
   const [refreshKey, setRefreshKey] = useState(0);
   // When set, the Write view operates in re-point mode against this tag.
   const [rebindTarget, setRebindTarget] = useState<{ tagId: string; title?: string } | null>(null);
@@ -916,7 +1102,7 @@ export function TapConsole() {
   };
   // Navigating the nav always clears any in-progress re-point so "Write a tag"
   // starts a fresh binding, not a re-point of the last tag.
-  const navItem = (key: "tags" | "write" | "analytics" | "print" | "settings", label: string) => (
+  const navItem = (key: "tags" | "write" | "library" | "analytics" | "print" | "settings", label: string) => (
     <a className="tap-nav__item" href={`#${key}`} aria-current={view === key ? "page" : undefined} onClick={(e) => { e.preventDefault(); setRebindTarget(null); setView(key); }}>{label}</a>
   );
 
@@ -926,6 +1112,7 @@ export function TapConsole() {
         <div className="tap-nav__brand"><Wordmark /></div>
         {navItem("tags", "Tags")}
         {navItem("write", "Write a tag")}
+        {navItem("library", "Library")}
         {navItem("analytics", "Analytics")}
         {navItem("print", "Print labels")}
         {navItem("settings", "Settings")}
@@ -934,6 +1121,7 @@ export function TapConsole() {
         <button className="tap-btn tap-btn--ghost" style={{ marginTop: session.user?.username ? undefined : "auto" }} onClick={signOut}>Sign out</button>
       </nav>
       {view === "tags" ? <TagsView refreshKey={refreshKey} onRebind={(tag) => { setRebindTarget({ tagId: tag.tagId, title: tag.display?.title }); setView("write"); }} />
+        : view === "library" ? <LibraryView onRefreshTags={() => setRefreshKey((k) => k + 1)} />
         : view === "analytics" ? <AnalyticsView />
         : view === "print" ? <PrintLabelsView />
         : view === "settings" ? <SettingsView />

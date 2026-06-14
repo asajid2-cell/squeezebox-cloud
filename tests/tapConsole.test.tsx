@@ -18,8 +18,17 @@ vi.mock("../src/tap/api", () => ({
   exportBackup: vi.fn(),
   importBackup: vi.fn(),
   nowPlayingNow: vi.fn(),
-  // Plain fn (not vi.fn) so resetAllMocks() leaves it intact — it's a pure
-  // URL helper the Art component calls during render, not a behavior under test.
+  listPlaylists: vi.fn(),
+  getPlaylist: vi.fn(),
+  createPlaylist: vi.fn(),
+  renamePlaylist: vi.fn(),
+  deletePlaylist: vi.fn(),
+  addPlaylistTracks: vi.fn(),
+  removePlaylistTrack: vi.fn(),
+  movePlaylistTrack: vi.fn(),
+  // Plain fns (not vi.fn) so resetAllMocks() leaves them intact — pure helpers
+  // called during render, not behaviors under test.
+  playlistTrackKey: (t: { uri?: string; id?: string; title?: string }) => String(t.uri || t.id || t.title || "").toLowerCase(),
   artSrc: (art?: string | null) => (art ? art : undefined)
 }));
 vi.mock("../src/tap/nfc", () => ({
@@ -38,6 +47,7 @@ beforeEach(() => {
   mocked.getSession.mockResolvedValue({ authed: true, user: { username: "owner", isMaster: true }, loginUrl: "/auth/login", logoutUrl: "/auth/logout" });
   mocked.listTags.mockResolvedValue([]);
   mocked.spotifySearchCategories.mockResolvedValue({ artists: [], albums: [], playlists: [] });
+  mocked.listPlaylists.mockResolvedValue([]);
 });
 
 // Wait for the console shell (post-session) before interacting.
@@ -326,5 +336,48 @@ describe("Tap console — bind & write", () => {
     await userEvent.type(screen.getByLabelText("Search music"), "zzz");
     await userEvent.click(screen.getByRole("button", { name: "Search" }));
     await waitFor(() => expect(screen.getByText(/No matches/i)).toBeInTheDocument());
+  });
+});
+
+describe("Tap console — library", () => {
+  it("lists playlists and creates a new one", async () => {
+    mocked.listPlaylists.mockResolvedValue([{ id: "pl1", name: "Faves", trackCount: 3, sample: ["A", "B"] }]);
+    mocked.createPlaylist.mockResolvedValue({ id: "pl2", name: "Road trip", tracks: [] });
+    mocked.getPlaylist.mockResolvedValue({ id: "pl2", name: "Road trip", tracks: [] });
+    await go(/library/i);
+    await waitFor(() => expect(screen.getByText("Faves")).toBeInTheDocument());
+
+    await userEvent.type(screen.getByLabelText(/new playlist name/i), "Road trip");
+    await userEvent.click(screen.getByRole("button", { name: /^create$/i }));
+    expect(mocked.createPlaylist).toHaveBeenCalledWith("Road trip");
+  });
+
+  it("opens a playlist and binds it to a tag (library kind)", async () => {
+    mocked.listPlaylists.mockResolvedValue([{ id: "pl1", name: "Faves", trackCount: 1, sample: ["A"] }]);
+    mocked.getPlaylist.mockResolvedValue({ id: "pl1", name: "Faves", tracks: [{ uri: "spotify:track:0000000000000000000aaa", title: "A", artist: "X", kind: "track" }] });
+    mocked.createTag.mockResolvedValue({ status: 200, body: { tag: { tagId: "t1" }, token: "sig" } });
+    await go(/library/i);
+    await waitFor(() => expect(screen.getByText("Faves")).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole("button", { name: /Faves/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /make a tag for this/i })).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: /make a tag for this/i }));
+
+    expect(mocked.createTag).toHaveBeenCalledWith(expect.objectContaining({ intent: "library", playlistId: "pl1" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /write to nfc tag/i })).toBeInTheDocument());
+  });
+
+  it("adds a searched song to an open playlist", async () => {
+    mocked.listPlaylists.mockResolvedValue([{ id: "pl1", name: "Faves", trackCount: 0, sample: [] }]);
+    mocked.getPlaylist.mockResolvedValue({ id: "pl1", name: "Faves", tracks: [] });
+    mocked.spotifySearch.mockResolvedValue({ results: [{ uri: "spotify:track:0000000000000000000bbb", title: "New Song", artist: "Y", kind: "track" }], groups: { albums: [], tracks: [{ uri: "spotify:track:0000000000000000000bbb", title: "New Song", artist: "Y", kind: "track" }], artists: [], playlists: [] } });
+    mocked.addPlaylistTracks.mockResolvedValue({ added: 1, playlist: { id: "pl1", name: "Faves", tracks: [] } });
+    await go(/library/i);
+    await userEvent.click(await screen.findByRole("button", { name: /Faves/i }));
+
+    await userEvent.type(await screen.findByLabelText(/search songs to add/i), "new");
+    await userEvent.click(screen.getByRole("button", { name: "Search" }));
+    await userEvent.click(await screen.findByRole("button", { name: /New Song/i }));
+    expect(mocked.addPlaylistTracks).toHaveBeenCalledWith("pl1", [expect.objectContaining({ uri: "spotify:track:0000000000000000000bbb" })]);
   });
 });
