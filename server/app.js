@@ -2796,7 +2796,11 @@ function forceHttpsRedirect(req, res, next) {
   // Audio-fetch routes that LMS pulls over plain HTTP on the LAN must NOT be
   // redirected to https — LMS can't follow the TLS hop to this self-hosted port.
   // Browsers still reach these over https via the nginx proxy (x-forwarded-proto).
-  if (req.path.startsWith("/api/archive/file/") || req.path.startsWith("/api/local-stream/")) {
+  if (
+    req.path.startsWith("/api/archive/file/") ||
+    req.path.startsWith("/api/local-stream/") ||
+    req.path.startsWith("/api/stream/")
+  ) {
     next();
     return;
   }
