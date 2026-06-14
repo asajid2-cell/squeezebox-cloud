@@ -1983,8 +1983,12 @@ function AppPlaylistDetail({
       // Browser playback: enqueue the streamable tracks directly. Reverse the
       // play-next list so it lands in order right after the current track.
       const playable = current.tracks.slice(0, 200).filter((track) => localStreamUrl(track));
-      if (action === "play-next") [...playable].reverse().forEach((track) => local.playNext(track));
-      else playable.forEach((track) => local.addToQueue(track));
+      if (action === "play-next") {
+        // With an empty queue, playNext auto-plays the first inserted item, so a
+        // reversed loop would start the last track. Seed the queue in order instead.
+        if (local.index < 0) local.playTracks(playable, 0);
+        else [...playable].reverse().forEach((track) => local.playNext(track));
+      } else playable.forEach((track) => local.addToQueue(track));
       return;
     }
     await onAction(async () => {
@@ -2177,8 +2181,11 @@ function PlaylistTracks({
       await onAction(async () => {
         const queueTracks = await getQueueTracks();
         const playable = (queueTracks || tracks).filter((item) => localStreamUrl(item)).slice(0, 200);
-        if (action === "play-next") [...playable].reverse().forEach((track) => local.playNext(track));
-        else playable.forEach((track) => local.addToQueue(track));
+        if (action === "play-next") {
+          // Empty queue: playNext would auto-play the (reversed) last item first.
+          if (local.index < 0) local.playTracks(playable, 0);
+          else [...playable].reverse().forEach((track) => local.playNext(track));
+        } else playable.forEach((track) => local.addToQueue(track));
       });
       return;
     }
