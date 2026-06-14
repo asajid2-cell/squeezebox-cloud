@@ -806,10 +806,14 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
         res.status(400).json({ error: "Spotify tracks must come from Cloud Squeeze search, playlist, or library results" });
         return;
       }
-      const start = Math.min(Math.max(0, parsed.data.startIndex || 0), playable.length - 1);
-      const startTrack = playable[start];
+      // Use the server's canonical metadata for known Spotify tracks, not the
+      // caller-supplied objects — otherwise a valid URI can carry spoofed
+      // title/artist/art into LMS + the queue, and compact posts lose real artwork.
+      const canonicalPlayable = canonicalizeSpotifyTracks(playable);
+      const start = Math.min(Math.max(0, parsed.data.startIndex || 0), canonicalPlayable.length - 1);
+      const startTrack = canonicalPlayable[start];
       const wantShuffle = Boolean(appState.playback.shuffle);
-      let rest = [...playable.slice(start + 1), ...playable.slice(0, start)];
+      let rest = [...canonicalPlayable.slice(start + 1), ...canonicalPlayable.slice(0, start)];
       if (wantShuffle) rest = shuffleArray(rest);
       try {
         const playerId = await hotPlayerId(lms);
