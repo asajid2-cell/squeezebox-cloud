@@ -168,7 +168,12 @@ function useLocalPlayerEngine(): LocalPlayerApi {
     const nextI = i + 1;
     if (nextI < q.length) playAt(nextI);
     else if (repeatRef.current === "all") playAt(0);
-    else setIsPlaying(false);
+    else {
+      // End of queue, repeat off: actually halt the audio element, not just the UI
+      // flag — otherwise the current track keeps playing while the UI shows stopped.
+      audioRef.current?.pause();
+      setIsPlaying(false);
+    }
   }, [playAt]);
 
   useEffect(() => {
