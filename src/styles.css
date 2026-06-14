@@ -366,7 +366,9 @@ nav button.active svg { color: var(--rose); }
   background: var(--bg-soft);
   box-shadow: none;
 }
-.track-core h3 { margin-top: 8px; margin-bottom: 7px; font-size: var(--step-2); }
+.track-core { min-width: 0; }
+.track-core h3 { margin-top: 8px; margin-bottom: 7px; font-size: var(--step-2); overflow-wrap: anywhere; }
+.track-core > p { overflow-wrap: anywhere; }
 .source-chip {
   display: inline-flex;
   align-items: center;
@@ -458,9 +460,6 @@ nav button.active svg { color: var(--rose); }
 .shuffle-source button {
   text-transform: capitalize;
 }
-.smart-shuffle {
-  grid-column: 1 / -1;
-}
 .volume-row {
   display: grid;
   grid-template-columns: auto 1fr 42px;
@@ -533,8 +532,6 @@ input[type="range"] {
 .local-progress { margin: 14px 0 6px; }
 .local-progress input[type="range"] { width: 100%; accent-color: var(--rose); }
 .local-times { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-.local-volume { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: var(--muted); }
-.local-volume input[type="range"] { flex: 1; accent-color: var(--rose); }
 .archive-row.is-current { border-color: var(--rose); }
 .archive-row.is-current strong { color: var(--rose); }
 .archive-thumb { border: 1px solid var(--line); cursor: pointer; }
@@ -984,7 +981,7 @@ input[type="range"] {
   color: var(--text);
 }
 .collection-row span {
-  color: var(--rose);
+  color: var(--muted);
   font-size: 13px;
 }
 .source-tabs {
@@ -1120,7 +1117,7 @@ input[type="range"] {
   color: var(--text);
 }
 .collection-inline span {
-  color: var(--rose);
+  color: var(--muted);
   font-size: 13px;
 }
 .link-button {
@@ -1232,10 +1229,12 @@ input[type="range"] {
 .server-card strong {
   color: var(--text);
   font-size: 22px;
+  overflow-wrap: anywhere;
 }
 .server-card span {
   color: var(--muted);
   font-size: 13px;
+  overflow-wrap: anywhere;
 }
 .connect-status {
   display: flex;
@@ -1298,9 +1297,9 @@ input[type="range"] {
   padding: 12px;
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-row);
-  background: rgba(255, 95, 131, .05);
+  background: var(--field);
 }
-.port-row strong { display: block; color: var(--rose); }
+.port-row strong { display: block; color: var(--text); }
 .panel-title-row {
   display: flex;
   justify-content: space-between;
@@ -1311,14 +1310,16 @@ input[type="range"] {
 .panel-title-row h2 { margin-bottom: 0; }
 .admin-row, .setting-row {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
   min-height: 64px;
   border-top: 1px solid var(--line-soft);
 }
+.admin-row > div { min-width: 0; }
+.admin-row small { overflow-wrap: anywhere; }
 .setting-row {
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 .setting-row input[type="number"] {
   width: 72px;
@@ -1331,22 +1332,6 @@ input[type="range"] {
 .setting-row input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--rose); }
 .ok { color: var(--green); }
 .bad { color: var(--rose); }
-.audit-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-}
-.audit-grid div {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px;
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-row);
-  background: var(--field);
-}
-.audit-grid svg { color: var(--rose); }
-
 @media (max-width: 1365px) {
   body { overflow: auto; }
   .desktop-shell { grid-template-columns: 260px minmax(0, 1fr); }
@@ -1390,7 +1375,7 @@ input[type="range"] {
       "search"
       "rail";
   }
-  .playing-layout, .right-rail, .audit-grid, .connect-grid, .connect-steps, .port-row { grid-template-columns: 1fr; }
+  .playing-layout, .right-rail, .connect-grid, .connect-steps, .port-row { grid-template-columns: 1fr; }
   /* now-playing art stays square + capped (don't let the 1-col frame go wide-short) */
   .album-art { width: min(100%, 260px); justify-self: center; }
   /* queue rows: 2-col, actions wrap to their own full-width line */

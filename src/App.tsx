@@ -1373,17 +1373,18 @@ function SpotifyDetail({
 function RowMenu({ children, label }: { children: ReactNode; label?: string }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!open) return;
     function onDoc(e: MouseEvent) { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); }
-    function onKey(e: KeyboardEvent) { if (e.key === "Escape") setOpen(false); }
+    function onKey(e: KeyboardEvent) { if (e.key === "Escape") { setOpen(false); triggerRef.current?.focus(); } }
     document.addEventListener("mousedown", onDoc);
     document.addEventListener("keydown", onKey);
     return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
   }, [open]);
   return (
     <div className="row-menu" ref={ref}>
-      <button className="icon-button" aria-label={label || "More actions"} aria-haspopup="true" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+      <button ref={triggerRef} className="icon-button" aria-label={label || "More actions"} aria-expanded={open} onClick={() => setOpen((o) => !o)}>
         <MoreHorizontal size={16} />
       </button>
       {open && (
@@ -1489,6 +1490,7 @@ function AddToPlaylistButton({ track }: { track: Track }) {
   const [newName, setNewName] = useState("");
   const [status, setStatus] = useState("");
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const popId = useId();
 
   useEffect(() => {
@@ -1496,7 +1498,9 @@ function AddToPlaylistButton({ track }: { track: Track }) {
     function onDocClick(event: MouseEvent) {
       if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
     }
-    function onKey(event: KeyboardEvent) { if (event.key === "Escape") setOpen(false); }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") { setOpen(false); triggerRef.current?.focus(); }
+    }
     document.addEventListener("mousedown", onDocClick);
     document.addEventListener("keydown", onKey);
     return () => {
@@ -1542,7 +1546,7 @@ function AddToPlaylistButton({ track }: { track: Track }) {
 
   return (
     <div className="add-to-playlist" ref={ref}>
-      <button className="ghost-add" title="Add to playlist" aria-haspopup="true" aria-expanded={open} aria-controls={open ? popId : undefined} onClick={() => setOpen((value) => !value)}>
+      <button ref={triggerRef} className="ghost-add" title="Add to playlist" aria-expanded={open} aria-controls={open ? popId : undefined} onClick={() => setOpen((value) => !value)}>
         <ListPlus size={14} /> Save
       </button>
       {open && (
