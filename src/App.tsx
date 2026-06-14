@@ -2429,9 +2429,9 @@ function AdminConsole({ state, onSave, onLogout }: { state: AppState; onSave: ()
           <input
             type="number"
             min="1"
-            max="50"
+            max="25"
             value={settings.maxQueuePerUser}
-            onChange={(event) => setSettings({ ...settings, maxQueuePerUser: Number(event.currentTarget.value) })}
+            onChange={(event) => setSettings({ ...settings, maxQueuePerUser: Math.min(25, Math.max(1, Number(event.currentTarget.value) || 1)) })}
           />
         </label>
         <button className="primary" onClick={() => saveAdminSettings(settings).then(onSave)}>
