@@ -315,7 +315,7 @@ function AppShell() {
     setSpotifyGroups(emptySpotifyGroups);
     const timer = window.setTimeout(async () => {
       try {
-        if (sourceFilter === "spotify") {
+        if (sourceFilter === "spotify" && state?.services?.spotify?.configured) {
           const term = query.trim() || spotifyRecommendationQuery;
           // Tracks return fast; artist/album/playlist buckets are slower, so load
           // them in parallel and merge in when ready instead of blocking the list.
@@ -518,8 +518,10 @@ function PublicScreen({
     );
   }
 
-  const hasTrack = state.nowPlaying.id !== "idle" && (state.nowPlaying.duration || 0) > 0;
-  const controlsDisabled = !state.player.connected || Boolean(state.player.reconnecting) || actionPending;
+  // A real track is one with a non-idle identity — don't require a known duration,
+  // or live streams / duration-unknown tracks falsely read as "no track".
+  const hasTrack = state.nowPlaying.id !== "idle";
+  const controlsDisabled = !state.player.connected || !state.player.online || Boolean(state.player.reconnecting) || actionPending;
   if (mode === "local") {
     return (
       <div className="content-grid">
@@ -2380,7 +2382,7 @@ function AdminConsole({ state, onSave, onLogout }: { state: AppState; onSave: ()
           <input
             type="number"
             min="1"
-            max="10"
+            max="50"
             value={settings.maxQueuePerUser}
             onChange={(event) => setSettings({ ...settings, maxQueuePerUser: Number(event.currentTarget.value) })}
           />

@@ -849,7 +849,8 @@ input[type="range"] {
   display: grid;
   place-items: center;
   padding: 0;
-  border-color: var(--line-soft);
+  border: 1px solid var(--line-soft);   /* explicit so <a class="icon-button"> gets the control shape too */
+  border-radius: var(--r-control);
   background: var(--field);
   color: var(--muted);
 }
@@ -1050,6 +1051,7 @@ input[type="range"] {
 .track-actions .ghost-add { min-width: 76px; }
 .cover-thumb {
   width: 100%;
+  height: auto;            /* override the shared .mini-art 42px so aspect-ratio wins */
   aspect-ratio: 1;
   align-self: center;
   border-radius: var(--radius-row);
