@@ -2608,7 +2608,11 @@ function uniquePlayableInputs(tracks) {
 
 function playableTrackInputKey(track) {
   if (!track || typeof track !== "object") return "";
-  return String(track.uri || track.path || track.lmsTrackId || "").trim().toLowerCase();
+  // Archived tracks are playable by id ("archive:<file>") with no uri/path, so key
+  // them by that id — otherwise batch queueing drops them as keyless (de-dup miss).
+  const id = String(track.id || "");
+  const archiveKey = id.startsWith("archive:") ? id : "";
+  return String(track.uri || track.path || track.lmsTrackId || archiveKey || "").trim().toLowerCase();
 }
 
 function publicRequestsOpen() {
