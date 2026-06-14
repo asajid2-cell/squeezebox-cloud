@@ -57,6 +57,7 @@ import {
   fetchState,
   getSpotifyConnect,
   hasAdminSession,
+  validateAdminSession,
   loginAdmin,
   movePlaylistTrack,
   moveQueueItem,
@@ -2317,6 +2318,15 @@ function RecentPicks({ picks }: { picks: AppState["recentPicks"] }) {
 function AdminPage({ state, onSave }: { state: AppState; onSave: () => void }) {
   const [authenticated, setAuthenticated] = useState(hasAdminSession);
 
+  // A stored token can outlive the server's in-memory session (TTL / restart);
+  // verify it on mount and drop back to login instead of showing dead controls.
+  useEffect(() => {
+    if (!authenticated) return;
+    let cancelled = false;
+    validateAdminSession().then((ok) => { if (!ok && !cancelled) setAuthenticated(false); });
+    return () => { cancelled = true; };
+  }, [authenticated]);
+
   if (!authenticated) {
     return <AdminLogin onLogin={() => setAuthenticated(true)} />;
   }
@@ -2367,6 +2377,20 @@ function AdminConsole({ state, onSave, onLogout }: { state: AppState; onSave: ()
   const [settings, setSettings] = useState(state.admin);
   const [connectionGuide, setConnectionGuide] = useState<ConnectionGuide | null>(null);
   const [checkingConnection, setCheckingConnection] = useState(false);
+  const [saveError, setSaveError] = useState("");
+
+  async function handleSaveSettings() {
+    setSaveError("");
+    try {
+      await saveAdminSettings(settings);
+      onSave();
+    } catch (err) {
+      // A failed save is usually an expired/restarted admin session — verify and
+      // bounce to login if it's gone, otherwise surface the real error.
+      if (!(await validateAdminSession())) { onLogout(); return; }
+      setSaveError(err instanceof Error ? err.message : "Could not save settings");
+    }
+  }
   const musicInfo = state.services.musicInfo || { configured: false, detail: "Not checked yet" };
   const serviceRows = useMemo(
     () => [
@@ -2455,10 +2479,11 @@ function AdminConsole({ state, onSave, onLogout }: { state: AppState; onSave: ()
             onChange={(event) => setSettings({ ...settings, maxQueuePerUser: Math.min(25, Math.max(1, Number(event.currentTarget.value) || 1)) })}
           />
         </label>
-        <button className="primary" onClick={() => saveAdminSettings(settings).then(onSave)}>
+        <button className="primary" onClick={handleSaveSettings}>
           <SlidersHorizontal size={18} />
           Save settings
         </button>
+        {saveError && <small className="form-error">{saveError}</small>}
       </section>
     </div>
   );

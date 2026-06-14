@@ -1785,6 +1785,12 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     }
   }));
 
+  // Lightweight session probe so the UI can detect an expired/restarted in-memory
+  // admin session and return to the login screen instead of showing dead controls.
+  app.get("/api/admin/session", requireAdmin, (_req, res) => {
+    res.json({ ok: true });
+  });
+
   app.post("/api/admin/settings", requireAdmin, (req, res) => {
     const parsed = adminSettingsSchema.safeParse(req.body || {});
     if (!parsed.success) {

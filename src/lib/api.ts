@@ -402,6 +402,22 @@ export function clearAdminSession() {
   window.localStorage.removeItem("cloud-squeeze-admin-token");
 }
 
+/** Confirm the stored admin token is still a live server session (they're in-memory
+ * and expire / reset on restart). Clears the token if the server rejects it. */
+export async function validateAdminSession(): Promise<boolean> {
+  if (!hasAdminSession()) return false;
+  try {
+    const response = await fetch(`${apiBase}/admin/session`, { headers: adminAuthHeader() });
+    if (response.status === 401 || response.status === 403) {
+      clearAdminSession();
+      return false;
+    }
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 function adminAuthHeader(): Record<string, string> {
   const token = window.localStorage.getItem("cloud-squeeze-admin-token");
   return token ? { Authorization: `Bearer ${token}` } : {};
