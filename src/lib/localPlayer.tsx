@@ -374,6 +374,9 @@ export function PlaybackModeToggle() {
 function LocalArchiveButton({ track }: { track: Track | null }) {
   const [state, setState] = useState<"idle" | "done" | "error">("idle");
   if (!track) return null;
+  // The archive endpoint only accepts Spotify tracks; uploaded/VPS or already-archived
+  // files would reliably fail, so don't offer the action for them.
+  if (!(track.uri || track.id || "").toString().includes("spotify:")) return null;
   async function onClick() {
     try {
       await archiveTrack(track as Track);
