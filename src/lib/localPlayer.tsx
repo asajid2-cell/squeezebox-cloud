@@ -248,13 +248,31 @@ function useLocalPlayerEngine(): LocalPlayerApi {
   const removeAt = useCallback((i: number) => {
     const q = [...queueRef.current];
     if (i < 0 || i >= q.length) return;
+    const cur = indexRef.current;
     q.splice(i, 1);
     setQueueBoth(q);
-    if (i < indexRef.current) {
-      setIndex(indexRef.current - 1);
-      indexRef.current -= 1;
+    const stop = () => {
+      const audio = audioRef.current;
+      if (audio) { audio.pause(); audio.src = ""; }
+      setIndex(-1);
+      indexRef.current = -1;
+      setIsPlaying(false);
+      setElapsed(0);
+      setDuration(0);
+    };
+    if (q.length === 0) { stop(); return; }
+    if (i < cur) {
+      // a track before the current one went away — shift the pointer to stay on it
+      setIndex(cur - 1);
+      indexRef.current = cur - 1;
+    } else if (i === cur) {
+      // the playing track was removed: play whatever shifted into its slot (the
+      // former next track), or stop if it was the last item in the queue.
+      if (i >= q.length) stop();
+      else playAt(i);
     }
-  }, [setQueueBoth]);
+    // i > cur: the current track is unaffected, keep playing.
+  }, [playAt, setQueueBoth]);
 
   const jumpTo = useCallback((i: number) => playAt(i), [playAt]);
 
