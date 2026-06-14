@@ -1344,9 +1344,11 @@ input[type="range"] {
   .right-rail { grid-template-columns: 1fr 1fr; }
 }
 
-/* below ~1024px the 2-col content grid starves each column so the now-playing
-   controls overflow and the queue panel covers them — stack to one column. */
-@media (max-width: 1400px) {
+/* The 3-col content grid only has room for the now-playing column to fit its
+   180px art + 4-button transport (~414px needed) once the viewport is ~1500px+.
+   Below that the column starves and the rightmost transport button clips, so we
+   stack to a single column. */
+@media (max-width: 1500px) {
   .content-grid {
     grid-template-columns: 1fr;
     grid-template-areas:
