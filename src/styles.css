@@ -270,7 +270,7 @@ nav button.active svg { color: var(--rose); }
   font-weight: 800;
 }
 .top-link {
-  min-height: 42px;
+  min-height: 44px;
   padding: 0 16px;
   border: 1px solid var(--line);
   border-radius: var(--radius-row);
@@ -715,7 +715,7 @@ input[type="range"] {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.queue-row > span, .result-row > span { color: var(--muted); font-size: 13px; }
+.queue-row > span, .result-row > span { color: var(--muted); font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
 /* secondary row action — quiet by default, warms on hover so it recedes behind
    the primary Play button (clear weight hierarchy instead of a wall of rose). */
 .ghost-add {
@@ -979,10 +979,14 @@ input[type="range"] {
 .collection-row strong {
   display: block;
   color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .collection-row span {
   color: var(--muted);
   font-size: 13px;
+  overflow-wrap: anywhere;
 }
 .source-tabs {
   display: flex;

@@ -257,7 +257,22 @@ function AppShell() {
   const [actionError, setActionError] = useState("");
   const [actionPending, setActionPending] = useState(false);
   const actionPendingCount = useRef(0);
+  const searchRef = useRef<HTMLInputElement>(null);
   const isAdminRoute = window.location.pathname.replace(/\/$/, "").endsWith("/admin");
+
+  // Wire the advertised Ctrl/Cmd+K affordance to focus the search field.
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setActiveScreen("Library");
+        searchRef.current?.focus();
+        searchRef.current?.select();
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
 
   const refresh = useCallback(async () => {
     setState(await fetchState());
@@ -356,6 +371,7 @@ function AppShell() {
         <div className="sidebar-search">
           <Search size={18} />
           <input
+            ref={searchRef}
             aria-label="Search music"
             placeholder="Search..."
             value={query}
@@ -1175,7 +1191,7 @@ function SearchPanel({
       {sourceFilter === "spotify" && spotifyAvailable && !detail && (
         <div className="suggestion-row" aria-label="Spotify recommendations">
           {spotifySuggestionTerms.map((term) => (
-            <button key={term} onClick={() => setQuery(term)} className={query.toLowerCase() === term ? "is-selected" : ""}>
+            <button key={term} onClick={() => setQuery(term)} aria-pressed={query.toLowerCase() === term} className={query.toLowerCase() === term ? "is-selected" : ""}>
               {term}
             </button>
           ))}
@@ -1388,7 +1404,7 @@ function RowMenu({ children, label }: { children: ReactNode; label?: string }) {
         <MoreHorizontal size={16} />
       </button>
       {open && (
-        <div className="row-menu__pop" onClick={(e) => { if ((e.target as HTMLElement).closest(".row-menu__item")) setOpen(false); }}>
+        <div className="row-menu__pop" onClick={(e) => { if ((e.target as HTMLElement).closest(".row-menu__item")) { setOpen(false); triggerRef.current?.focus(); } }}>
           {children}
         </div>
       )}
@@ -1514,6 +1530,7 @@ function AddToPlaylistButton({ track }: { track: Track }) {
       setOpen(false);
       setStatus("");
       setCreating(false);
+      triggerRef.current?.focus();
     }, 1100);
   }
 
@@ -2202,14 +2219,18 @@ function RightRail({ state }: { state: AppState }) {
 }
 
 function RecentPicks({ picks }: { picks: AppState["recentPicks"] }) {
+  const [showAll, setShowAll] = useState(false);
+  const visible = showAll ? picks : picks.slice(0, 6);
   return (
     <section className="recent-picks">
       <div>
         <span>Recent picks</span>
-        <button disabled={picks.length === 0}>View all</button>
+        <button disabled={picks.length <= 6} aria-expanded={showAll} onClick={() => setShowAll((value) => !value)}>
+          {showAll ? "Show less" : "View all"}
+        </button>
       </div>
       {picks.length === 0 && <p className="empty-sidebar">No recent picks yet.</p>}
-      {picks.slice(0, 6).map((pick) => (
+      {visible.map((pick) => (
         <div className="recent-row" key={`${pick.title}-${pick.status}`}>
           <Music2 size={17} />
           <div>
