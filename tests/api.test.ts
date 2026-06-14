@@ -6540,7 +6540,8 @@ describe("Tap admin binding API", () => {
   function tapApp() {
     const file = path.join(os.tmpdir(), `tap-api-${crypto.randomBytes(6).toString("hex")}.json`);
     const tapStore = createTapStore({ file });
-    return { app: createApp({ lms: mockLms, tapStore }), file };
+    const playlists = createPlaylistStore(path.join(os.tmpdir(), `tap-pl-${crypto.randomBytes(6).toString("hex")}.json`));
+    return { app: createApp({ lms: mockLms, tapStore, playlists }), file, playlists };
   }
 
   async function adminAuth(app: ReturnType<typeof createApp>) {
@@ -6655,8 +6656,9 @@ describe("Tap resolver golden cases", () => {
   function setup(lms: ReturnType<typeof recordingLms>) {
     const file = path.join(os.tmpdir(), `tap-play-${crypto.randomBytes(6).toString("hex")}.json`);
     const tapStore = createTapStore({ file });
-    const app = createApp({ lms, tapStore });
-    return { app, tapStore };
+    const playlists = createPlaylistStore(path.join(os.tmpdir(), `tap-play-pl-${crypto.randomBytes(6).toString("hex")}.json`));
+    const app = createApp({ lms, tapStore, playlists });
+    return { app, tapStore, playlists };
   }
 
   const unknownSpotifyTrack = { uri: "spotify:track:0123456789abcdefghijAB", title: "Kyoto", artist: "Phoebe Bridgers", source: "Spotify" };
@@ -6799,8 +6801,8 @@ describe("Tap resolver golden cases", () => {
     expect(tapStore.get(a.tagId)?.resumeState).toMatchObject({ index: 7, seconds: 33 });
   });
 
-  it("binds a discovery tag (no fixed target, just a kind)", async () => {
-    const { app } = setup(recordingLms());
+  it("binds a discovery tag and auto-creates its dedicated save playlist", async () => {
+    const { app, playlists } = setup(recordingLms());
     const auth = await request(app).post("/api/admin/login").send({ password: "admin" }).then((r) => `Bearer ${r.body.token}`);
     const res = await request(app)
       .post("/api/tap")
@@ -6808,5 +6810,73 @@ describe("Tap resolver golden cases", () => {
       .send({ intent: "discover", source: "spotify", display: { title: "Surprise me", kind: "discover" } })
       .expect(200);
     expect(res.body.tag.playSpec).toEqual({ kind: "discover", source: "spotify" });
+    // A linked, dedicated playlist now exists for auto-saving its surprises.
+    expect(res.body.tag.savePlaylistId).toBeTruthy();
+    expect(playlists.get(res.body.tag.savePlaylistId)?.name).toMatch(/Surprise me/);
+  });
+
+  it("plays a library tag by forcing the saved playlist's tracks onto the speaker", async () => {
+    const lms = recordingLms();
+    const { app, tapStore, playlists } = setup(lms);
+    const pl = playlists.create({ name: "Faves" });
+    playlists.addTracks(pl.id, [
+      { uri: "spotify:track:0000000000000000000aaa", title: "A", kind: "track" },
+      { uri: "spotify:track:0000000000000000000bbb", title: "B", kind: "track" }
+    ]);
+    const tag = tapStore.create({ playSpec: { kind: "library", playlistId: pl.id }, display: {} });
+
+    await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token: tapStore.tokenFor(tag.tagId) }).expect(200);
+    const plays = lms.calls.filter((c) => c.m === "playTrack");
+    expect(plays).toHaveLength(2);
+    expect(plays[0].args[2]).toBe("play-now"); // first forces playback
+    expect(plays[1].args[2]).toBe("add-queue"); // rest append
+  });
+
+  it("returns a clean error when a library tag points at a missing playlist", async () => {
+    const lms = recordingLms();
+    const { app, tapStore } = setup(lms);
+    const tag = tapStore.create({ playSpec: { kind: "library", playlistId: "pl-gone" }, display: {} });
+    const res = await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token: tapStore.tokenFor(tag.tagId) }).expect(502);
+    expect(res.body.reason).toBe("lms_error");
+    expect(lms.calls.some((c) => c.m === "playTrack")).toBe(false);
+  });
+});
+
+describe("Tap library playlists API", () => {
+  function libApp() {
+    const tapStore = createTapStore({ file: path.join(os.tmpdir(), `tap-lib-${crypto.randomBytes(6).toString("hex")}.json`) });
+    const playlists = createPlaylistStore(path.join(os.tmpdir(), `tap-lib-pl-${crypto.randomBytes(6).toString("hex")}.json`));
+    return { app: createApp({ lms: mockLms, tapStore, playlists }), playlists };
+  }
+
+  it("creates, lists, adds tracks to, and deletes a playlist", async () => {
+    const { app } = libApp();
+    const created = await request(app).post("/api/tap/playlists").send({ name: "Road trip" }).expect(200);
+    const id = created.body.playlist.id;
+    expect(created.body.playlist.name).toBe("Road trip");
+
+    await request(app).post(`/api/tap/playlists/${id}/tracks`)
+      .send({ track: { uri: "spotify:track:0000000000000000000ccc", title: "Song", kind: "track" } }).expect(200);
+
+    const list = await request(app).get("/api/tap/playlists").expect(200);
+    expect(list.body.playlists.find((p: { id: string }) => p.id === id)?.trackCount).toBe(1);
+
+    const one = await request(app).get(`/api/tap/playlists/${id}`).expect(200);
+    expect(one.body.playlist.tracks).toHaveLength(1);
+
+    await request(app).delete(`/api/tap/playlists/${id}`).expect(200);
+    await request(app).get(`/api/tap/playlists/${id}`).expect(404);
+  });
+
+  it("seeds a playlist with tracks at creation (save-what's-playing)", async () => {
+    const { app } = libApp();
+    const res = await request(app).post("/api/tap/playlists")
+      .send({ name: "Now", tracks: [{ uri: "spotify:track:0000000000000000000ddd", title: "X", kind: "track" }] }).expect(200);
+    expect(res.body.playlist.tracks).toHaveLength(1);
+  });
+
+  it("rejects creating a playlist with no name", async () => {
+    const { app } = libApp();
+    await request(app).post("/api/tap/playlists").send({ name: "" }).expect(400);
   });
 });

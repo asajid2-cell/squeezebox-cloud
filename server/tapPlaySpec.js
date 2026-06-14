@@ -23,6 +23,7 @@ const spotifyPlaylistUri = z
   .regex(/^spotify:playlist:[A-Za-z0-9]+$/i, "expected a spotify:playlist:<id> URI");
 
 const localAlbumId = z.string().min(1);
+const libraryPlaylistId = z.string().min(1);
 const startIndex = z.number().int().nonnegative();
 // A discovery tag's optional theming seed (artist/genre text); empty => pure taste.
 const discoverSeed = z.string().max(120).optional();
@@ -56,7 +57,10 @@ const playSpecSchema = z.union([
   z.object({ kind: z.literal("playlist"), source: z.literal("spotify"), playlistUri: spotifyPlaylistUri }),
   // A "surprise me" tag: every tap resolves a FRESH pick from the taste-seeded
   // recommender at play time, so it stores no fixed target — only an optional seed.
-  z.object({ kind: z.literal("discover"), source: z.literal("spotify"), seed: discoverSeed })
+  z.object({ kind: z.literal("discover"), source: z.literal("spotify"), seed: discoverSeed }),
+  // A tag bound to one of OUR app-managed (library) playlists — plays its saved
+  // tracks. The playlist is editable in the Library, so the tag follows it.
+  z.object({ kind: z.literal("library"), playlistId: libraryPlaylistId })
 ]);
 
 export function validatePlaySpec(spec) {
@@ -93,6 +97,12 @@ export function buildPlaySpec(input = {}) {
     const spec = { kind: "discover", source: "spotify" };
     if (seed) spec.seed = seed.slice(0, 120);
     return spec;
+  }
+
+  if (intent === "library") {
+    const playlistId = String(input.playlistId || "").trim();
+    if (!playlistId) throw new Error("A library playlist binding needs a playlistId");
+    return { kind: "library", playlistId };
   }
 
   if (intent === "album-from-top" || intent === "album-from-track") {

@@ -47,7 +47,7 @@ const MAX_EVENTS = 5000; // bounded tap-history log for analytics
 
 // Tag ids registered as fixed sub-routes before /api/tap/:id — an imported tag
 // must never be allowed to claim one (or use slashes / absurd length).
-const RESERVED_TAG_IDS = new Set(["analytics", "settings", "export", "import", "session", "whoami", "now"]);
+const RESERVED_TAG_IDS = new Set(["analytics", "settings", "export", "import", "session", "whoami", "now", "playlists"]);
 function isImportableTagId(id) {
   return typeof id === "string" && /^[A-Za-z0-9_-]{6,64}$/.test(id) && !RESERVED_TAG_IDS.has(id);
 }
@@ -111,7 +111,7 @@ export function createTapStore({ file = defaultFile(), persist: persistEnabled =
   load();
 
   return {
-    create({ playSpec, display = {}, label = "", policy }) {
+    create({ playSpec, display = {}, label = "", policy, savePlaylistId }) {
       const validated = validatePlaySpec(playSpec);
       if (!validated.ok) throw new Error("Invalid PlaySpec for tag");
       let tagId = newTagId();
@@ -127,6 +127,9 @@ export function createTapStore({ file = defaultFile(), persist: persistEnabled =
         tapCount: 0,
         lastTappedAt: null
       };
+      // A discover tag's dedicated auto-save playlist (songs it surfaces are saved
+      // there → a growing discovery library).
+      if (savePlaylistId) tag.savePlaylistId = String(savePlaylistId);
       tags.set(tagId, tag);
       persist();
       return clone(tag);
@@ -155,6 +158,10 @@ export function createTapStore({ file = defaultFile(), persist: persistEnabled =
       if (patch.label !== undefined) tag.label = patch.label;
       if (patch.enabled !== undefined) tag.enabled = Boolean(patch.enabled);
       if (patch.policy !== undefined) tag.policy = normalizePolicy(patch.policy);
+      if (patch.savePlaylistId !== undefined) {
+        if (patch.savePlaylistId) tag.savePlaylistId = String(patch.savePlaylistId);
+        else delete tag.savePlaylistId;
+      }
       if (patch.sun !== undefined) {
         // Opt a tag into the NTAG 424 SUN tier by giving it a 16-byte hex AES key;
         // clearing the key reverts it to the static-token path.

@@ -1906,7 +1906,15 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     try {
       const body = req.body || {};
       const playSpec = buildPlaySpec(body);
-      const tag = tapStore.create({ playSpec, display: body.display || {}, label: body.label || "", policy: body.policy });
+      // A discover tag gets a dedicated auto-save playlist so every surprise it
+      // surfaces lands in the Library. Caller may opt out with saveToLibrary:false.
+      let savePlaylistId;
+      if (playSpec.kind === "discover" && body.saveToLibrary !== false) {
+        const base = body.display?.title || body.label || "Surprise";
+        try { savePlaylistId = playlists.create({ name: `${base} — discoveries`, description: "Auto-saved from a Surprise tag.", createdBy: req.hlUser?.username || "tap" }).id; }
+        catch { /* hit the playlist cap — bind the tag anyway, just without auto-save */ }
+      }
+      const tag = tapStore.create({ playSpec, display: body.display || {}, label: body.label || "", policy: body.policy, savePlaylistId });
       const token = tapStore.tokenFor(tag.tagId);
       logEvent("tap.bind", { tagId: tag.tagId, kind: playSpec.kind, source: playSpec.source });
       res.json({ tag, token, tapUrl: tapUrlFor(req, tag.tagId, token), tapPath: `/tap/t/${tag.tagId}` });
@@ -1945,6 +1953,58 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       connected: Boolean(appState.player?.connected),
       name: appState.player?.name || ""
     });
+  });
+
+  // --- Tap Library: app-managed playlists, SHARED with the main jukebox
+  // (same playlists.json), but gated by the Tap's hl-auth so the console can
+  // create/edit/link them. Registered before /api/tap/:id so "playlists" isn't an id.
+  const playlistFail = (res, error) => res.status(error?.status || 400).json({ error: error?.message || "Playlist error" });
+
+  app.get("/api/tap/playlists", requireTapAccess, (_req, res) => {
+    res.json({ playlists: playlists.list() });
+  });
+
+  app.post("/api/tap/playlists", requireTapAccess, (req, res) => {
+    try {
+      const tracks = Array.isArray(req.body?.tracks) ? req.body.tracks : [];
+      const created = playlists.create({ name: req.body?.name, description: req.body?.description, createdBy: req.hlUser?.username || "tap" });
+      // Optionally seed it with tracks in one shot (e.g. "save what's playing").
+      if (tracks.length) { try { playlists.addTracks(created.id, tracks); } catch { /* skip bad seed */ } }
+      res.json({ playlist: playlists.get(created.id) });
+    } catch (error) { playlistFail(res, error); }
+  });
+
+  app.get("/api/tap/playlists/:id", requireTapAccess, (req, res) => {
+    const pl = playlists.get(req.params.id);
+    if (!pl) { res.status(404).json({ error: "Playlist not found" }); return; }
+    res.json({ playlist: pl });
+  });
+
+  app.patch("/api/tap/playlists/:id", requireTapAccess, (req, res) => {
+    try { res.json({ playlist: playlists.rename(req.params.id, { name: req.body?.name, description: req.body?.description }) }); }
+    catch (error) { playlistFail(res, error); }
+  });
+
+  app.delete("/api/tap/playlists/:id", requireTapAccess, (req, res) => {
+    try { playlists.remove(req.params.id); res.json({ ok: true }); }
+    catch (error) { playlistFail(res, error); }
+  });
+
+  app.post("/api/tap/playlists/:id/tracks", requireTapAccess, (req, res) => {
+    try {
+      const tracks = Array.isArray(req.body?.tracks) ? req.body.tracks : req.body?.track ? [req.body.track] : [];
+      res.json(playlists.addTracks(req.params.id, tracks));
+    } catch (error) { playlistFail(res, error); }
+  });
+
+  app.delete("/api/tap/playlists/:id/tracks/:key", requireTapAccess, (req, res) => {
+    try { res.json({ playlist: playlists.removeTrack(req.params.id, decodeURIComponent(req.params.key)) }); }
+    catch (error) { playlistFail(res, error); }
+  });
+
+  app.post("/api/tap/playlists/:id/tracks/move", requireTapAccess, (req, res) => {
+    try { res.json({ playlist: playlists.moveTrack(req.params.id, req.body || {}) }); }
+    catch (error) { playlistFail(res, error); }
   });
 
   // Registered BEFORE /api/tap/:id so "analytics"/"settings" aren't matched as ids.
@@ -2120,7 +2180,9 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       stopGeneratedPlayback();
 
       if (tag.playSpec?.kind === "discover") {
-        await playDiscoverTag(lms, playerId, tag.playSpec, { taste, queue: behavior.playMode === "queue" });
+        await playDiscoverTag(lms, playerId, tag.playSpec, { taste, queue: behavior.playMode === "queue", playlists, savePlaylistId: tag.savePlaylistId });
+      } else if (tag.playSpec?.kind === "library") {
+        await playLibraryTag(lms, playerId, tag.playSpec, { playlists, queue: behavior.playMode === "queue" });
       } else {
         await playTapTarget(lms, playerId, tag.playSpec, behavior);
       }
@@ -3272,7 +3334,7 @@ async function refillDiscoverPool(lms, playerId, seed, taste) {
 // the speaker — first track plays now, the rest are appended so the surprise
 // keeps going. Serves from a warm pool for instant taps. It deliberately does
 // NOT engage the app's smart-radio (that "defers" and overrides later taps).
-async function playDiscoverTag(lms, playerId, playSpec, { taste = defaultListenerTasteStore, queue = false } = {}) {
+async function playDiscoverTag(lms, playerId, playSpec, { taste = defaultListenerTasteStore, queue = false, playlists = null, savePlaylistId = "" } = {}) {
   if (!spotifyBrowsingAvailable()) {
     throw new Error("Spotify browsing is unavailable for discovery right now");
   }
@@ -3295,9 +3357,28 @@ async function playDiscoverTag(lms, playerId, playSpec, { taste = defaultListene
   for (const track of picks.slice(1)) {
     await lms.playTrack(playerId, track, "add-queue").catch(() => {});
   }
+  // Auto-save the surfaced songs to this tag's dedicated playlist — tap, hear new
+  // music, find it later in your Library. addTracks dedups, so revisits don't pile up.
+  if (playlists && savePlaylistId) {
+    try { playlists.addTracks(savePlaylistId, picks); } catch { /* playlist gone — skip save */ }
+  }
   // Refill in the background (don't await) so the next tap stays instant.
   if (pool.tracks.length < 5) refillDiscoverPool(lms, playerId, seed, taste);
   return { kind: "discover", queued: picks.length };
+}
+
+// Resolve + play a "library" tag: force the saved playlist's tracks onto the
+// speaker (first plays now, the rest queue), directly — no app-radio deferral.
+async function playLibraryTag(lms, playerId, playSpec, { playlists, queue = false } = {}) {
+  const playlist = playlists?.get?.(playSpec?.playlistId);
+  if (!playlist) throw new Error("That playlist no longer exists");
+  const tracks = Array.isArray(playlist.tracks) ? playlist.tracks : [];
+  if (tracks.length === 0) throw new Error("That playlist is empty");
+  await lms.playTrack(playerId, tracks[0], queue ? "add-queue" : "play-now");
+  for (const track of tracks.slice(1)) {
+    await lms.playTrack(playerId, track, "add-queue").catch(() => {});
+  }
+  return { kind: "library", queued: tracks.length };
 }
 
 async function buildGeneratedQueue(lms, playerId, seed, mode, count, requestedBy, { allowLocalWideFallback = true, taste = defaultListenerTasteStore } = {}) {

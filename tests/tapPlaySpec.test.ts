@@ -64,6 +64,15 @@ describe("Tap PlaySpec construction", () => {
     expect(spec).toEqual({ kind: "discover", source: "spotify", seed: "phoebe bridgers" });
   });
 
+  it("builds a library-playlist spec from a playlist id", () => {
+    const spec = buildPlaySpec({ intent: "library", playlistId: "pl-abc123" });
+    expect(spec).toEqual({ kind: "library", playlistId: "pl-abc123" });
+  });
+
+  it("rejects a library spec with no playlistId", () => {
+    expect(() => buildPlaySpec({ intent: "library" })).toThrow(/playlist/i);
+  });
+
   it("rejects an unknown intent", () => {
     // @ts-expect-error deliberately invalid
     expect(() => buildPlaySpec({ intent: "teleport" })).toThrow(/intent/i);
@@ -79,7 +88,8 @@ describe("Tap PlaySpec validation (round-trip)", () => {
       buildPlaySpec({ intent: "album-from-track", source: "local", albumId: "42", startIndex: 2 }),
       buildPlaySpec({ intent: "playlist", source: "spotify", playlistUri: "spotify:playlist:abc123" }),
       buildPlaySpec({ intent: "discover", source: "spotify" }),
-      buildPlaySpec({ intent: "discover", source: "spotify", seed: "mitski" })
+      buildPlaySpec({ intent: "discover", source: "spotify", seed: "mitski" }),
+      buildPlaySpec({ intent: "library", playlistId: "pl-abc123" })
     ];
     for (const spec of specs) {
       expect(validatePlaySpec(spec).ok).toBe(true);

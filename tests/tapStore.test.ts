@@ -140,4 +140,14 @@ describe("Tap store — QoL: party queue, smart resume", () => {
     const updated = store.update(tag.tagId, { playSpec: newSpec });
     expect(updated.resumeState).toBeUndefined();
   });
+
+  it("stores and updates a discover tag's auto-save playlist link", () => {
+    const store = createTapStore({ file });
+    const discover = { kind: "discover", source: "spotify" };
+    const tag = store.create({ playSpec: discover, display, savePlaylistId: "pl-xyz" });
+    expect(tag.savePlaylistId).toBe("pl-xyz");
+    expect(createTapStore({ file }).get(tag.tagId)?.savePlaylistId).toBe("pl-xyz"); // persisted
+    const cleared = store.update(tag.tagId, { savePlaylistId: "" });
+    expect(cleared.savePlaylistId).toBeUndefined();
+  });
 });
