@@ -1856,8 +1856,11 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
         res.status(400).json({ error: "Invalid file" });
         return;
       }
-      const filePath = path.join(archiveDir, requested);
-      if (path.dirname(filePath) !== path.resolve(archiveDir)) {
+      // Resolve both sides to absolute so the containment check works regardless of
+      // whether ARCHIVE_DIR is relative (the default "./archive") or absolute.
+      const archiveRoot = path.resolve(archiveDir);
+      const filePath = path.resolve(archiveRoot, requested);
+      if (path.dirname(filePath) !== archiveRoot) {
         res.status(400).json({ error: "Invalid file" });
         return;
       }
