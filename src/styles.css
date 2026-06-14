@@ -546,10 +546,12 @@ nav button.active svg { color: var(--rose); }
 }
 .transport button { display: grid; place-items: center; padding: 0; }
 .transport .play-button {
-  background: linear-gradient(180deg, #ff7192, #ff4772);
-  border-color: transparent;
-  box-shadow: 0 10px 28px rgba(255, 71, 114, .20);
+  background: var(--rose);
+  border-color: var(--rose);
+  color: var(--rose-ink);
+  box-shadow: none;
 }
+.transport .play-button:hover { background: var(--rose-strong); border-color: var(--rose-strong); }
 .playback-options {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -627,14 +629,14 @@ input[type="range"] {
   gap: 4px;
   margin: 14px 0 12px;
   padding: 4px;
-  background: #05060a;
+  background: #07080d;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 999px;
 }
 .mode-toggle button {
   padding: 8px 6px;
   border: 0;
-  border-radius: 7px;
+  border-radius: 999px;
   background: transparent;
   color: var(--muted);
   font-size: 12px;
@@ -642,8 +644,8 @@ input[type="range"] {
   cursor: pointer;
 }
 .mode-toggle button.active {
-  background: linear-gradient(180deg, var(--rose), #c8345c);
-  color: #fff;
+  background: var(--rose-soft);
+  color: var(--text);
 }
 .local-art {
   width: 132px;
