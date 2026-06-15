@@ -717,7 +717,7 @@ function saveQueue() {
 // Playlists to auto-archive: names starting with any of these (case-insensitive).
 // "archive" → archive-only; "easw" → the EASW<email> convention (archive + email).
 const WATCH_PREFIXES = (process.env.ARCHIVE_WATCH_PREFIX || "archive,easw").toLowerCase().split(",").map((s) => s.trim()).filter(Boolean);
-const SCAN_INTERVAL_MS = Number(process.env.ARCHIVE_SCAN_INTERVAL_MS) || 5 * 60 * 1000;
+const SCAN_INTERVAL_MS = Number(process.env.ARCHIVE_SCAN_INTERVAL_MS) || 30 * 1000;
 
 function isWatchedTitle(title) {
   const t = String(title || "").trim().toLowerCase();
@@ -779,6 +779,12 @@ export async function scanWatchedPlaylists(lms, playerId) {
     if (!pid) return { scanning: false, queued: 0, playlists: 0, reason: "no player" };
     const all = await lms.spotifyLibrary(pid, "playlists", 200).catch(() => []);
     const watched = (Array.isArray(all) ? all : []).filter((p) => isWatchedTitle(p.title));
+    // Spotty returns an empty library when the player just dropped or its cache
+    // is cold. If we had watched playlists a moment ago, treat empty as a transient
+    // blip — KEEP the snapshot (don't wipe groups / forget what we watch) and bail.
+    if (watched.length === 0 && watchedPlaylists.length > 0) {
+      return { scanning: false, queued: 0, playlists: watchedPlaylists.length, reason: "transient-empty" };
+    }
     const next = [];
     for (const pl of watched) {
       // An EASW<email> playlist mails each new song to <email>; its group is
