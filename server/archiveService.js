@@ -877,20 +877,12 @@ async function spotifyMyPlaylists(token) {
 // NOTE: the dedicated /playlists/{id}/tracks endpoint is 403 for new apps, but the
 // playlist OBJECT returns the first 100 tracks inline (200) — plenty for these
 // small archive playlists. (Pagination past 100 would need the forbidden endpoint.)
-async function spotifyPlaylistTracks(id, token) {
-  const j = await spotifyGet(`https://api.spotify.com/v1/playlists/${id}?fields=tracks(items(track(uri,name,artists(name),album(name,images))))`, token);
-  const out = [];
-  for (const it of (j.tracks?.items || [])) {
-    const t = it.track;
-    if (!t || !t.uri || !/^spotify:track:/i.test(t.uri)) continue;
-    out.push({ uri: t.uri, title: t.name, artist: (t.artists || []).map((a) => a.name).join(", "), album: t.album?.name, art: t.album?.images?.[0]?.url });
-  }
-  return out;
-}
-
-// Web-API scan: accurate watched-set + snapshot_id change-detection. Reuses the
-// same enqueue/cover/snapshot/grouping as the Spotty scanner.
-export async function scanWatchedPlaylistsWebApi() {
+// Web-API scan: the Web API gives the AUTHORITATIVE archive*/easw* list +
+// snapshot_id (instant deletes/adds, cheap change-detection), but it can't read
+// playlist CONTENTS (the new-app restriction). So Spotty does the track read —
+// and ONLY for playlists whose snapshot_id changed. Most cycles = one /me/playlists
+// call, zero Spotty calls.
+export async function scanWatchedPlaylistsWebApi(lms) {
   if (scanning) return { scanning: true, queued: 0, playlists: watchedPlaylists.length };
   scanning = true;
   let queued = 0;
@@ -899,34 +891,59 @@ export async function scanWatchedPlaylistsWebApi() {
     if (!token) return { scanning: false, queued: 0, playlists: 0, reason: "no-token" };
     const all = await spotifyMyPlaylists(token);
     const watched = all.filter((p) => isWatchedTitle(p.name));
+
+    // Which playlists changed (new or snapshot_id moved)? Only those need a read.
+    const needsRead = watched.filter((pl) => {
+      const prior = watchedPlaylists.find((w) => w.id === pl.id);
+      return !prior || !prior.snapshotId || prior.snapshotId !== pl.snapshot_id;
+    });
+    // Map playlist uri -> Spotty browseId, but only bother if something changed.
+    const browseByUri = new Map();
+    let pid = "";
+    if (needsRead.length && lms) {
+      pid = await resolveArchivePlayer(lms);
+      if (pid) {
+        const lib = await lms.spotifyLibrary(pid, "playlists", 200).catch(() => []);
+        for (const s of (Array.isArray(lib) ? lib : [])) if (s?.uri) browseByUri.set(s.uri, s.browseId);
+      }
+    }
+
     const next = [];
     for (const pl of watched) {
       const emailTo = emailFromTitle(pl.name);
       const name = emailTo || String(pl.name || "").trim();
       const prior = watchedPlaylists.find((w) => w.id === pl.id);
-      let keys;
-      if (prior && prior.snapshotId && prior.snapshotId === pl.snapshot_id) {
-        keys = prior.keys || []; // unchanged → reuse, no track read (the cheap path)
-      } else {
-        const tracks = await spotifyPlaylistTracks(pl.id, token);
-        keys = [];
-        for (const t of tracks) {
-          const stem = trackStem(t.artist, t.title);
-          keys.push(stem);
-          try { if (enqueueTrack({ uri: t.uri, artist: t.artist, title: t.title, album: t.album, art: t.art, emailTo }).queued) queued += 1; }
-          catch { /* unarchivable — skip */ }
-          if (isAlreadyArchived(t.artist, t.title)) await saveCover(stem, t.art);
+      let keys = prior?.keys || [];
+      let snapId = prior?.snapshotId || "";
+      const changed = !prior || prior.snapshotId !== pl.snapshot_id;
+      if (changed) {
+        const browseId = browseByUri.get(pl.uri);
+        if (browseId !== undefined && pid && lms) {
+          // Spotty knows this playlist → read its tracks and accept the new snapshot.
+          const tracks = await lms.spotifyChildren(pid, { uri: pl.uri, browseId, kind: "playlist", title: pl.name }, 400).catch(() => []);
+          keys = [];
+          for (const t of (Array.isArray(tracks) ? tracks : [])) {
+            const uri = t.uri || t.id;
+            if (!uri || !/track[:/]/i.test(String(uri))) continue;
+            const stem = trackStem(t.artist, t.title);
+            keys.push(stem);
+            try { if (enqueueTrack({ uri, artist: t.artist, title: t.title, album: t.album, art: t.art, emailTo }).queued) queued += 1; }
+            catch { /* unarchivable — skip */ }
+            if (isAlreadyArchived(t.artist, t.title)) await saveCover(stem, t.art);
+          }
+          snapId = pl.snapshot_id;
         }
+        // else: Spotty doesn't list it yet (cache lag) → keep prior keys + OLD
+        // snapshot id, so we retry the read on the next cycle.
       }
-      next.push({ id: pl.id, name, uri: pl.uri, trackCount: keys.length, updatedAt: new Date().toISOString(), keys, email: emailTo ? true : undefined, snapshotId: pl.snapshot_id });
+      next.push({ id: pl.id, name, uri: pl.uri, trackCount: keys.length, updatedAt: new Date().toISOString(), keys, email: emailTo ? true : undefined, snapshotId: snapId });
     }
-    // Web API is authoritative — a vanished playlist is genuinely gone, so we
-    // replace the snapshot outright (no transient-empty guard needed here).
+    // The Web API list is authoritative — playlists not in it are genuinely gone.
     watchedPlaylists = next;
     lastScanAt = new Date().toISOString();
     await saveWatchSnapshot();
-    if (queued) console.log(`[archive] web-scan: ${watched.length} watched, queued ${queued} new track(s).`);
-    return { scanning: false, queued, playlists: watched.length, lastScanAt, via: "web" };
+    if (queued) console.log(`[archive] web-scan: ${watched.length} watched, ${needsRead.length} changed, queued ${queued}.`);
+    return { scanning: false, queued, playlists: watched.length, changed: needsRead.length, lastScanAt, via: "web" };
   } finally {
     scanning = false;
   }
@@ -938,7 +955,7 @@ export async function scanWatchedPlaylistsWebApi() {
 export function startArchiveWatcher(lms) {
   loadWatchSnapshot();
   const web = spotifyWebConfigured();
-  const kick = () => (web ? scanWatchedPlaylistsWebApi() : scanWatchedPlaylists(lms))
+  const kick = () => (web ? scanWatchedPlaylistsWebApi(lms) : scanWatchedPlaylists(lms))
     .catch((e) => console.warn(`[archive] scan failed: ${e?.message || e}`));
   console.log(`[archive] watcher using ${web ? "Spotify Web API" : "Spotty browse"} (interval ${SCAN_INTERVAL_MS}ms).`);
   const first = setTimeout(kick, web ? 5000 : 20000);

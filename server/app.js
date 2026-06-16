@@ -1931,7 +1931,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
   // also runs this on a timer). Returns how many new tracks were queued.
   app.post("/api/archive/scan", async (_req, res) => {
     try {
-      const result = spotifyWebConfigured() ? await scanWatchedPlaylistsWebApi() : await scanWatchedPlaylists(lms);
+      const result = spotifyWebConfigured() ? await scanWatchedPlaylistsWebApi(lms) : await scanWatchedPlaylists(lms);
       res.json({ ok: true, ...result, scan: getWatchStatus() });
     } catch (error) {
       res.status(502).json({ ok: false, error: error.message });
