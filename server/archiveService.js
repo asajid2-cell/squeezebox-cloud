@@ -898,13 +898,19 @@ export async function scanWatchedPlaylistsWebApi(lms) {
       return !prior || !prior.snapshotId || prior.snapshotId !== pl.snapshot_id;
     });
     // Map playlist uri -> Spotty browseId, but only bother if something changed.
+    // spottyReachable distinguishes "LMS responded (array)" from "LMS blip (threw)"
+    // so we don't accept a changed snapshot we never actually got to read.
     const browseByUri = new Map();
     let pid = "";
+    let spottyReachable = false;
     if (needsRead.length && lms) {
       pid = await resolveArchivePlayer(lms);
       if (pid) {
-        const lib = await lms.spotifyLibrary(pid, "playlists", 200).catch(() => []);
-        for (const s of (Array.isArray(lib) ? lib : [])) if (s?.uri) browseByUri.set(s.uri, s.browseId);
+        const lib = await lms.spotifyLibrary(pid, "playlists", 200).catch(() => null);
+        if (Array.isArray(lib)) {
+          spottyReachable = true;
+          for (const s of lib) if (s?.uri) browseByUri.set(s.uri, s.browseId);
+        }
       }
     }
 
@@ -937,10 +943,11 @@ export async function scanWatchedPlaylistsWebApi(lms) {
             }
           }
         }
-        // Accept the new snapshot whether or not Spotty could read it, so an
-        // unreadable/empty playlist doesn't force a Spotty call every cycle. A real
-        // edit changes snapshot_id and re-triggers the read.
-        snapId = pl.snapshot_id;
+        // Accept the new snapshot only if Spotty was actually reachable this cycle:
+        // a playlist Spotty genuinely can't see (beyond its browse window) shouldn't
+        // force a read every cycle, but if LMS blipped (unreachable) we must NOT
+        // swallow the change — keep the old snapshot so we retry when it's back.
+        if (spottyReachable) snapId = pl.snapshot_id;
       }
       next.push({ id: pl.id, name, uri: pl.uri, trackCount: keys.length, updatedAt: new Date().toISOString(), keys, email: emailTo ? true : undefined, snapshotId: snapId });
     }
