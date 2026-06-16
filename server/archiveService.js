@@ -874,17 +874,16 @@ async function spotifyMyPlaylists(token) {
 }
 
 // A playlist's tracks via the Web API, normalized to the archive track shape.
+// NOTE: the dedicated /playlists/{id}/tracks endpoint is 403 for new apps, but the
+// playlist OBJECT returns the first 100 tracks inline (200) — plenty for these
+// small archive playlists. (Pagination past 100 would need the forbidden endpoint.)
 async function spotifyPlaylistTracks(id, token) {
+  const j = await spotifyGet(`https://api.spotify.com/v1/playlists/${id}?fields=tracks(items(track(uri,name,artists(name),album(name,images))))`, token);
   const out = [];
-  let url = `https://api.spotify.com/v1/playlists/${id}/tracks?limit=100&fields=next,items(track(uri,name,artists(name),album(name,images)))`;
-  while (url) {
-    const j = await spotifyGet(url, token);
-    for (const it of (j.items || [])) {
-      const t = it.track;
-      if (!t || !t.uri || !/^spotify:track:/i.test(t.uri)) continue;
-      out.push({ uri: t.uri, title: t.name, artist: (t.artists || []).map((a) => a.name).join(", "), album: t.album?.name, art: t.album?.images?.[0]?.url });
-    }
-    url = j.next;
+  for (const it of (j.tracks?.items || [])) {
+    const t = it.track;
+    if (!t || !t.uri || !/^spotify:track:/i.test(t.uri)) continue;
+    out.push({ uri: t.uri, title: t.name, artist: (t.artists || []).map((a) => a.name).join(", "), album: t.album?.name, art: t.album?.images?.[0]?.url });
   }
   return out;
 }
