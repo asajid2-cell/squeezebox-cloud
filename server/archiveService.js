@@ -827,12 +827,122 @@ async function saveWatchSnapshot() {
   await fs.writeFile(SNAPSHOT_FILE, JSON.stringify({ watchedPlaylists, lastScanAt }, null, 2)).catch(() => {});
 }
 
+// ---------------------------------------------------------------------------
+// Spotify Web-API watcher (the accurate, lightweight path). Lists the user's
+// archive*/easw* playlists via the Web API (no Spotty stale cache → deletes/adds
+// are instant) and uses each playlist's `snapshot_id` to skip unchanged ones
+// (cheap: most cycles are a single /me/playlists call, no track reads). Falls
+// back to the Spotty scanner when SPOTIFY_REFRESH_TOKEN isn't configured. The
+// DOWNLOAD still goes through spotty --single-track — only discovery + reading
+// moves to the Web API.
+// ---------------------------------------------------------------------------
+
+let spotifyToken = { value: "", exp: 0 };
+
+export function spotifyWebConfigured() {
+  return Boolean(process.env.SPOTIFY_REFRESH_TOKEN && process.env.SPOTIFY_CLIENT_ID && process.env.SPOTIFY_CLIENT_SECRET);
+}
+
+async function spotifyAccessToken() {
+  if (!spotifyWebConfigured()) return "";
+  if (spotifyToken.value && spotifyToken.exp > Date.now()) return spotifyToken.value;
+  const auth = Buffer.from(`${process.env.SPOTIFY_CLIENT_ID}:${process.env.SPOTIFY_CLIENT_SECRET}`).toString("base64");
+  const res = await fetch("https://accounts.spotify.com/api/token", {
+    method: "POST",
+    headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: process.env.SPOTIFY_REFRESH_TOKEN })
+  });
+  if (!res.ok) throw new Error(`spotify token refresh ${res.status}: ${(await res.text().catch(() => "")).slice(0, 120)}`);
+  const j = await res.json();
+  spotifyToken = { value: j.access_token, exp: Date.now() + (Number(j.expires_in || 3600) - 60) * 1000 };
+  return spotifyToken.value;
+}
+
+async function spotifyGet(url, token) {
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (res.status === 429) { await delay((Number(res.headers.get("retry-after")) || 2) * 1000); return spotifyGet(url, token); }
+  if (!res.ok) throw new Error(`spotify GET ${res.status} ${url}`);
+  return res.json();
+}
+
+// All of the user's playlists (paginated), with id/name/snapshot_id/uri.
+async function spotifyMyPlaylists(token) {
+  const out = [];
+  let url = "https://api.spotify.com/v1/me/playlists?limit=50";
+  while (url) { const j = await spotifyGet(url, token); out.push(...(j.items || [])); url = j.next; }
+  return out;
+}
+
+// A playlist's tracks via the Web API, normalized to the archive track shape.
+async function spotifyPlaylistTracks(id, token) {
+  const out = [];
+  let url = `https://api.spotify.com/v1/playlists/${id}/tracks?limit=100&fields=next,items(track(uri,name,artists(name),album(name,images)))`;
+  while (url) {
+    const j = await spotifyGet(url, token);
+    for (const it of (j.items || [])) {
+      const t = it.track;
+      if (!t || !t.uri || !/^spotify:track:/i.test(t.uri)) continue;
+      out.push({ uri: t.uri, title: t.name, artist: (t.artists || []).map((a) => a.name).join(", "), album: t.album?.name, art: t.album?.images?.[0]?.url });
+    }
+    url = j.next;
+  }
+  return out;
+}
+
+// Web-API scan: accurate watched-set + snapshot_id change-detection. Reuses the
+// same enqueue/cover/snapshot/grouping as the Spotty scanner.
+export async function scanWatchedPlaylistsWebApi() {
+  if (scanning) return { scanning: true, queued: 0, playlists: watchedPlaylists.length };
+  scanning = true;
+  let queued = 0;
+  try {
+    const token = await spotifyAccessToken();
+    if (!token) return { scanning: false, queued: 0, playlists: 0, reason: "no-token" };
+    const all = await spotifyMyPlaylists(token);
+    const watched = all.filter((p) => isWatchedTitle(p.name));
+    const next = [];
+    for (const pl of watched) {
+      const emailTo = emailFromTitle(pl.name);
+      const name = emailTo || String(pl.name || "").trim();
+      const prior = watchedPlaylists.find((w) => w.id === pl.id);
+      let keys;
+      if (prior && prior.snapshotId && prior.snapshotId === pl.snapshot_id) {
+        keys = prior.keys || []; // unchanged → reuse, no track read (the cheap path)
+      } else {
+        const tracks = await spotifyPlaylistTracks(pl.id, token);
+        keys = [];
+        for (const t of tracks) {
+          const stem = trackStem(t.artist, t.title);
+          keys.push(stem);
+          try { if (enqueueTrack({ uri: t.uri, artist: t.artist, title: t.title, album: t.album, art: t.art, emailTo }).queued) queued += 1; }
+          catch { /* unarchivable — skip */ }
+          if (isAlreadyArchived(t.artist, t.title)) await saveCover(stem, t.art);
+        }
+      }
+      next.push({ id: pl.id, name, uri: pl.uri, trackCount: keys.length, updatedAt: new Date().toISOString(), keys, email: emailTo ? true : undefined, snapshotId: pl.snapshot_id });
+    }
+    // Web API is authoritative — a vanished playlist is genuinely gone, so we
+    // replace the snapshot outright (no transient-empty guard needed here).
+    watchedPlaylists = next;
+    lastScanAt = new Date().toISOString();
+    await saveWatchSnapshot();
+    if (queued) console.log(`[archive] web-scan: ${watched.length} watched, queued ${queued} new track(s).`);
+    return { scanning: false, queued, playlists: watched.length, lastScanAt, via: "web" };
+  } finally {
+    scanning = false;
+  }
+}
+
 // Start the periodic auto-archiver: restore the last snapshot for instant
-// grouping, scan shortly after boot, then on an interval.
+// grouping, scan shortly after boot, then on an interval. Prefers the Web-API
+// watcher (accurate + cheap) and falls back to the Spotty scanner.
 export function startArchiveWatcher(lms) {
   loadWatchSnapshot();
-  const kick = () => scanWatchedPlaylists(lms).catch((e) => console.warn(`[archive] scan failed: ${e?.message || e}`));
-  const first = setTimeout(kick, 20000); // let the player + Spotty settle after boot
+  const web = spotifyWebConfigured();
+  const kick = () => (web ? scanWatchedPlaylistsWebApi() : scanWatchedPlaylists(lms))
+    .catch((e) => console.warn(`[archive] scan failed: ${e?.message || e}`));
+  console.log(`[archive] watcher using ${web ? "Spotify Web API" : "Spotty browse"} (interval ${SCAN_INTERVAL_MS}ms).`);
+  const first = setTimeout(kick, web ? 5000 : 20000);
   first.unref?.();
   const timer = setInterval(kick, SCAN_INTERVAL_MS);
   timer.unref?.();
