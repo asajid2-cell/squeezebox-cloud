@@ -919,22 +919,28 @@ export async function scanWatchedPlaylistsWebApi(lms) {
       if (changed) {
         const browseId = browseByUri.get(pl.uri);
         if (browseId !== undefined && pid && lms) {
-          // Spotty knows this playlist → read its tracks and accept the new snapshot.
+          // Spotty knows this playlist → read its tracks.
           const tracks = await lms.spotifyChildren(pid, { uri: pl.uri, browseId, kind: "playlist", title: pl.name }, 400).catch(() => []);
-          keys = [];
-          for (const t of (Array.isArray(tracks) ? tracks : [])) {
-            const uri = t.uri || t.id;
-            if (!uri || !/track[:/]/i.test(String(uri))) continue;
-            const stem = trackStem(t.artist, t.title);
-            keys.push(stem);
-            try { if (enqueueTrack({ uri, artist: t.artist, title: t.title, album: t.album, art: t.art, emailTo }).queued) queued += 1; }
-            catch { /* unarchivable — skip */ }
-            if (isAlreadyArchived(t.artist, t.title)) await saveCover(stem, t.art);
+          const read = Array.isArray(tracks) ? tracks : [];
+          // Keep prior keys if the read came back empty but we HAD tracks (likely a
+          // transient Spotty blip, not a real wipe) — otherwise take the read.
+          if (read.length > 0 || (prior?.keys?.length || 0) === 0) {
+            keys = [];
+            for (const t of read) {
+              const uri = t.uri || t.id;
+              if (!uri || !/track[:/]/i.test(String(uri))) continue;
+              const stem = trackStem(t.artist, t.title);
+              keys.push(stem);
+              try { if (enqueueTrack({ uri, artist: t.artist, title: t.title, album: t.album, art: t.art, emailTo }).queued) queued += 1; }
+              catch { /* unarchivable — skip */ }
+              if (isAlreadyArchived(t.artist, t.title)) await saveCover(stem, t.art);
+            }
           }
-          snapId = pl.snapshot_id;
         }
-        // else: Spotty doesn't list it yet (cache lag) → keep prior keys + OLD
-        // snapshot id, so we retry the read on the next cycle.
+        // Accept the new snapshot whether or not Spotty could read it, so an
+        // unreadable/empty playlist doesn't force a Spotty call every cycle. A real
+        // edit changes snapshot_id and re-triggers the read.
+        snapId = pl.snapshot_id;
       }
       next.push({ id: pl.id, name, uri: pl.uri, trackCount: keys.length, updatedAt: new Date().toISOString(), keys, email: emailTo ? true : undefined, snapshotId: snapId });
     }
