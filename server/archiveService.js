@@ -803,6 +803,19 @@ export function groupArchiveFiles(files = [], snapshot = watchedPlaylists) {
   return [...buckets.entries()].map(([name, groupFiles]) => ({ name, manual: name === "Manual", count: groupFiles.length, files: groupFiles }));
 }
 
+// Spotty caps each playlist-browse call at ~100, so page through to catch watched
+// playlists past #100 (a library can have hundreds).
+async function fetchAllSpotifyPlaylists(lms, pid, maxPages = 6) {
+  const all = [];
+  for (let page = 0; page < maxPages; page += 1) {
+    const batch = await lms.spotifyLibrary(pid, "playlists", 100, page * 100).catch(() => []);
+    if (!Array.isArray(batch) || batch.length === 0) break;
+    all.push(...batch);
+    if (batch.length < 100) break;
+  }
+  return all;
+}
+
 async function resolveArchivePlayer(lms, playerId) {
   if (playerId) return playerId;
   // Prefer the always-on headless "Archiver" player so scans work even when the
@@ -824,7 +837,7 @@ export async function scanWatchedPlaylists(lms, playerId) {
   try {
     const pid = await resolveArchivePlayer(lms, playerId);
     if (!pid) return { scanning: false, queued: 0, playlists: 0, reason: "no player" };
-    const all = await lms.spotifyLibrary(pid, "playlists", 200).catch(() => []);
+    const all = await fetchAllSpotifyPlaylists(lms, pid);
     const watched = (Array.isArray(all) ? all : []).filter((p) => isWatchedTitle(p.title));
     // Spotty returns an empty library when the player just dropped or its cache
     // is cold. If we had watched playlists a moment ago, treat empty as a transient
