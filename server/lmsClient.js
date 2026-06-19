@@ -100,8 +100,15 @@ export class LmsClient {
   }
 
   async statusFromJson() {
-    const playersResponse = await this.jsonRequest(["", ["players", 0, 10]]);
-    const players = playersResponse?.result?.players_loop || [];
+    const playersResponse = await this.jsonRequest(["", ["players", 0, 99]]);
+    const allPlayers = playersResponse?.result?.players_loop || [];
+    // Ignore the headless "Archiver" player (a null-output squeezelite that exists
+    // only so the archiver can browse Spotify when the real speaker is off). It
+    // must never be chosen as THE player for playback — defer to the real one.
+    const headless = String(process.env.HEADLESS_PLAYER_MAC || "").toLowerCase();
+    const players = headless
+      ? allPlayers.filter((p) => String(p?.playerid || "").toLowerCase() !== headless)
+      : allPlayers;
     if (!Array.isArray(players) || players.length < 1) {
       return { connected: false, online: true, detail: "LMS online, no player connected" };
     }

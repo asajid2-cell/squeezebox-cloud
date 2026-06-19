@@ -50,6 +50,7 @@ export async function startArchiveService() {
   await fs.mkdir(ARCHIVE_DIR, { recursive: true }).catch(() => {});
   await fs.mkdir(CACHE_DIR, { recursive: true }).catch(() => {});
   await loadQueue();
+  await loadEmailed();
   // Recover from a crash: any job left "downloading" goes back to "queued".
   let changed = false;
   for (const job of queue) {
@@ -434,17 +435,23 @@ function escapeHtml(s) {
 /** Email a freshly-archived track (compressed) to the playlist-title address. */
 async function emailArchivedTrack(job, flacPath) {
   const to = job?.emailTo;
-  if (!to) return;
-  if (!RESEND_API_KEY) { console.warn(`[archive] email skipped (set RESEND_API_KEY): ${job.artist} - ${job.title}`); return; }
+  if (!to) return false;
+  if (!RESEND_API_KEY) { console.warn(`[archive] email skipped (set RESEND_API_KEY): ${job.artist} - ${job.title}`); return false; }
+  const stem = `${sanitize(job.artist)} - ${sanitize(job.title)}`;
+  const key = emailKey(stem, to);
+  // Claim before sending so a concurrent scan, the download worker, or a restart
+  // can't mail the same track twice. A genuine failure below releases the claim.
+  if (emailedSet.has(key)) return false;
+  emailedSet.add(key);
+  await saveEmailed();
   const mp3Path = path.join(ARCHIVE_DIR, `.email-${job.id}.mp3`);
   try {
     await transcodeForEmail(flacPath, mp3Path);
     const buf = await fs.readFile(mp3Path);
     if (buf.length > EMAIL_MAX_BYTES) {
       console.warn(`[archive] email skipped (${Math.round(buf.length / 1e6)}MB > cap): ${job.title}`);
-      return;
+      return false; // keep the claim — a too-big file won't shrink on retry
     }
-    const stem = `${sanitize(job.artist)} - ${sanitize(job.title)}`;
     const filename = `${stem}.mp3`;
     const base = (process.env.ARCHIVE_PUBLIC_BASE || "https://harmonizerlabs.cc/cloud-squeeze").replace(/\/$/, "");
     const flacUrl = `${base}/api/archive/file/${encodeURIComponent(`${stem}.flac`)}`;
@@ -478,13 +485,29 @@ async function emailArchivedTrack(job, flacPath) {
         headers: { "List-Unsubscribe": `<mailto:archive@harmonizerlabs.cc?subject=unsubscribe%20${encodeURIComponent(to)}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" }
       })
     });
-    if (res.ok) console.log(`[archive] emailed "${job.title}" to ${to}`);
-    else console.warn(`[archive] email failed (${res.status}): ${(await res.text().catch(() => "")).slice(0, 200)}`);
+    if (res.ok) { console.log(`[archive] emailed "${job.title}" to ${to}`); return true; }
+    console.warn(`[archive] email failed (${res.status}): ${(await res.text().catch(() => "")).slice(0, 200)}`);
+    emailedSet.delete(key); await saveEmailed(); // release so a later pass retries
+    return false;
   } catch (e) {
     console.warn(`[archive] email error for "${job.title}": ${e?.message || e}`);
+    emailedSet.delete(key); await saveEmailed(); // release so a later pass retries
+    return false;
   } finally {
     await fs.unlink(mp3Path).catch(() => {});
   }
+}
+
+// Mail an already-on-disk track for an EASW playlist (the download path, which
+// normally sends the mail, never runs when the FLAC already exists). Dedup +
+// claim live inside emailArchivedTrack, so this is safe to call every scan.
+async function emailArchivedIfNeeded(t, emailTo) {
+  if (!emailTo || !isAlreadyArchived(t.artist, t.title)) return false;
+  const stem = trackStem(t.artist, t.title);
+  return emailArchivedTrack(
+    { id: crypto.randomUUID(), artist: t.artist, title: t.title, album: t.album, art: t.art, emailTo },
+    path.join(ARCHIVE_DIR, `${stem}.flac`)
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -731,6 +754,25 @@ let watchedPlaylists = []; // [{ name, uri, browseId, trackCount, updatedAt, key
 let lastScanAt = null;
 let scanning = false;
 
+// Which (track, address) pairs we've already emailed, so an EASW playlist mails
+// each song EXACTLY ONCE even though scans re-read it and even across restarts.
+// Email is irreversible, so this dedup has to be durable — keyed by archive stem
+// + lowercased address, persisted next to the FLACs.
+const EMAILED_FILE = path.join(ARCHIVE_DIR, "emailed.json");
+let emailedSet = new Set();
+function emailKey(stem, email) {
+  return JSON.stringify([stem, String(email || "").trim().toLowerCase()]);
+}
+async function saveEmailed() {
+  await fs.writeFile(EMAILED_FILE, JSON.stringify([...emailedSet])).catch(() => {});
+}
+async function loadEmailed() {
+  try {
+    const data = JSON.parse(await fs.readFile(EMAILED_FILE, "utf8"));
+    if (Array.isArray(data)) emailedSet = new Set(data);
+  } catch { /* none emailed yet */ }
+}
+
 // A track's archive filename stem ("Artist - Title") — must match
 // parseArchiveFilename so grouping lines up exactly with the saved FLAC files.
 function trackStem(artist, title) {
@@ -762,8 +804,13 @@ export function groupArchiveFiles(files = [], snapshot = watchedPlaylists) {
 }
 
 async function resolveArchivePlayer(lms, playerId) {
-  const pid = (playerId || process.env.ARCHIVE_PLAYER_MAC || "").trim();
-  if (pid) return pid;
+  if (playerId) return playerId;
+  // Prefer the always-on headless "Archiver" player so scans work even when the
+  // real Squeezebox is off (the whole point of the headless player).
+  const headless = (process.env.HEADLESS_PLAYER_MAC || "").trim();
+  if (headless) return headless;
+  const explicit = (process.env.ARCHIVE_PLAYER_MAC || "").trim();
+  if (explicit) return explicit;
   const status = await lms.status().catch(() => null);
   return status?.id || "";
 }
@@ -800,8 +847,12 @@ export async function scanWatchedPlaylists(lms, playerId) {
         keys.push(stem);
         try { if (enqueueTrack({ uri, artist: t.artist, title: t.title, album: t.album, art: t.art, emailTo }).queued) queued += 1; }
         catch { /* unarchivable track — skip */ }
-        // Backfill the cover for an already-archived track in this playlist.
-        if (isAlreadyArchived(t.artist, t.title)) await saveCover(stem, t.art);
+        // For an already-archived track the download path never runs, so backfill
+        // its cover and — if this is an EASW playlist — mail it (once) right here.
+        if (isAlreadyArchived(t.artist, t.title)) {
+          await saveCover(stem, t.art);
+          await emailArchivedIfNeeded(t, emailTo);
+        }
       }
       next.push({ name, uri: pl.uri, browseId: pl.browseId, trackCount: keys.length, updatedAt: new Date().toISOString(), keys, email: emailTo ? true : undefined });
     }
@@ -886,6 +937,7 @@ export async function scanWatchedPlaylistsWebApi(lms) {
   if (scanning) return { scanning: true, queued: 0, playlists: watchedPlaylists.length };
   scanning = true;
   let queued = 0;
+  let emailedNow = 0;
   try {
     const token = await spotifyAccessToken();
     if (!token) return { scanning: false, queued: 0, playlists: 0, reason: "no-token" };
@@ -939,7 +991,12 @@ export async function scanWatchedPlaylistsWebApi(lms) {
               keys.push(stem);
               try { if (enqueueTrack({ uri, artist: t.artist, title: t.title, album: t.album, art: t.art, emailTo }).queued) queued += 1; }
               catch { /* unarchivable — skip */ }
-              if (isAlreadyArchived(t.artist, t.title)) await saveCover(stem, t.art);
+              // Already on disk → no download will fire, so cover-backfill here and
+              // (for EASW) mail it once. The dedup inside guards re-reads.
+              if (isAlreadyArchived(t.artist, t.title)) {
+                await saveCover(stem, t.art);
+                if (await emailArchivedIfNeeded(t, emailTo)) emailedNow += 1;
+              }
             }
           }
         }
@@ -955,8 +1012,8 @@ export async function scanWatchedPlaylistsWebApi(lms) {
     watchedPlaylists = next;
     lastScanAt = new Date().toISOString();
     await saveWatchSnapshot();
-    if (queued) console.log(`[archive] web-scan: ${watched.length} watched, ${needsRead.length} changed, queued ${queued}.`);
-    return { scanning: false, queued, playlists: watched.length, changed: needsRead.length, lastScanAt, via: "web" };
+    if (queued || emailedNow) console.log(`[archive] web-scan: ${watched.length} watched, ${needsRead.length} changed, queued ${queued}, emailed ${emailedNow}.`);
+    return { scanning: false, queued, emailed: emailedNow, playlists: watched.length, changed: needsRead.length, lastScanAt, via: "web" };
   } finally {
     scanning = false;
   }
