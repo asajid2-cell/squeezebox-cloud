@@ -159,7 +159,7 @@ export async function getAnalytics(): Promise<TapAnalytics> {
   return (await asJson(res)) as TapAnalytics;
 }
 
-export type TapSettings = { debounceMs: number; partyMode: "open" | "closed"; requirePassword: boolean; hasPassword: boolean; partyQueue?: boolean };
+export type TapSettings = { debounceMs: number; partyMode: "open" | "closed"; requirePassword: boolean; hasPassword: boolean; partyQueue?: boolean; tapVolume?: number | null };
 
 // The Squeezebox's current now-playing, used to bind "what's playing right now"
 // straight onto a tag.

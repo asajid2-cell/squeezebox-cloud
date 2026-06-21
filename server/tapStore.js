@@ -52,13 +52,21 @@ function isImportableTagId(id) {
   return typeof id === "string" && /^[A-Za-z0-9_-]{6,64}$/.test(id) && !RESERVED_TAG_IDS.has(id);
 }
 
-const DEFAULT_SETTINGS = { debounceMs: 3000, partyMode: "open", requirePassword: false, password: "", partyQueue: false };
+const DEFAULT_SETTINGS = { debounceMs: 3000, partyMode: "open", requirePassword: false, password: "", partyQueue: false, tapVolume: 75 };
 
 // Runtime Tap settings (clamped + defaulted). The password is never echoed back
 // in plain form by the API — callers expose only `hasPassword`.
 function normalizeSettings(s = {}) {
   const debounceRaw = Number(s?.debounceMs);
   const debounceMs = Number.isFinite(debounceRaw) ? Math.max(0, Math.min(60000, Math.round(debounceRaw))) : DEFAULT_SETTINGS.debounceMs;
+  // Default loudness a tap normalizes to (0-100). A tag's own policy.volume
+  // overrides it; "off" (null) means don't touch the speaker's current volume.
+  let tapVolume = DEFAULT_SETTINGS.tapVolume;
+  if (s?.tapVolume === null) tapVolume = null;
+  else if (s?.tapVolume !== undefined && s?.tapVolume !== "") {
+    const v = Math.round(Number(s.tapVolume));
+    if (Number.isFinite(v)) tapVolume = Math.max(0, Math.min(100, v));
+  }
   return {
     debounceMs,
     partyMode: s?.partyMode === "closed" ? "closed" : "open",
@@ -67,7 +75,8 @@ function normalizeSettings(s = {}) {
     // Party queue: when on, every tap ADDS to the queue instead of replacing
     // playback — so a room full of people can stack records without cutting
     // each other off. A global flip, independent of each tag's own playMode.
-    partyQueue: Boolean(s?.partyQueue)
+    partyQueue: Boolean(s?.partyQueue),
+    tapVolume
   };
 }
 
@@ -252,7 +261,7 @@ export function createTapStore({ file = defaultFile(), persist: persistEnabled =
 
     // Safe settings for the admin API — never echoes the password back.
     publicSettings() {
-      return { debounceMs: settings.debounceMs, partyMode: settings.partyMode, requirePassword: settings.requirePassword, hasPassword: Boolean(settings.password), partyQueue: settings.partyQueue };
+      return { debounceMs: settings.debounceMs, partyMode: settings.partyMode, requirePassword: settings.requirePassword, hasPassword: Boolean(settings.password), partyQueue: settings.partyQueue, tapVolume: settings.tapVolume };
     },
 
     setSettings(patch = {}) {

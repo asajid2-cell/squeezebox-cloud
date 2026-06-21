@@ -2218,8 +2218,14 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
 
     try {
       const policy = tag.policy || {};
-      if (policy.volume !== null && policy.volume !== undefined) {
-        await lms.control(playerId, "volume", policy.volume).catch(() => {});
+      // Normalize loudness: a tag's own volume wins; otherwise fall back to the
+      // global tap volume (default 75%) so taps don't blast or whisper at whatever
+      // the speaker was left at. settings.tapVolume === null disables normalizing.
+      const tapVolume = policy.volume !== null && policy.volume !== undefined
+        ? policy.volume
+        : settings.tapVolume;
+      if (tapVolume !== null && tapVolume !== undefined) {
+        await lms.control(playerId, "volume", tapVolume).catch(() => {});
       }
 
       // Smart resume — BOOKMARK the tag that was playing before this tap. If a

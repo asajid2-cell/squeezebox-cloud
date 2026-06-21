@@ -650,7 +650,7 @@ function TagsView({ refreshKey, onRebind }: { refreshKey: number; onRebind: (t: 
                   <select value={t.policy?.volume ?? ""} aria-label={`Volume for ${t.display?.title || "tag"}`} disabled={busyId === t.tagId}
                     onChange={(e) => setPolicy(t, { volume: e.target.value === "" ? null : Number(e.target.value) })}>
                     <option value="">Default</option>
-                    {[20, 40, 60, 80, 100].map((v) => <option key={v} value={v}>{v}</option>)}
+                    {[20, 30, 40, 50, 60, 70, 75, 80, 90, 100].map((v) => <option key={v} value={v}>{v}</option>)}
                   </select>
                 </label>
               </div>
@@ -958,7 +958,7 @@ function SettingsView() {
   const [s, setS] = useState<TapSettings | null>(null);
   const [pwd, setPwd] = useState("");
   const [saved, setSaved] = useState(false);
-  useEffect(() => { getSettings().then(setS, () => setS({ debounceMs: 3000, partyMode: "open", requirePassword: false, hasPassword: false, partyQueue: false })); }, []);
+  useEffect(() => { getSettings().then(setS, () => setS({ debounceMs: 3000, partyMode: "open", requirePassword: false, hasPassword: false, partyQueue: false, tapVolume: 75 })); }, []);
 
   const save = async (patch: Record<string, unknown>) => {
     setSaved(false);
@@ -993,6 +993,16 @@ function SettingsView() {
             <button type="button" aria-pressed={!s.partyQueue} onClick={() => save({ partyQueue: false })}>Replace</button>
             <button type="button" aria-pressed={!!s.partyQueue} onClick={() => save({ partyQueue: true })}>Queue</button>
           </div>
+        </div>
+
+        <div className="tap-setting">
+          <div className="tap-setting__text"><strong>Tap volume</strong><span>{s.tapVolume == null ? "Taps don't change the speaker volume." : `Every tap normalizes the speaker to ${s.tapVolume}% (a tag can override its own).`}</span></div>
+          <label className="tap-vol">
+            <select aria-label="Tap volume" value={s.tapVolume == null ? "" : s.tapVolume} onChange={(e) => save({ tapVolume: e.target.value === "" ? null : Number(e.target.value) })}>
+              <option value="">Don't change</option>
+              {[30, 40, 50, 60, 65, 70, 75, 80, 90, 100].map((v) => <option key={v} value={v}>{v}%</option>)}
+            </select>
+          </label>
         </div>
 
         <div className="tap-setting">
