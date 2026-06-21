@@ -23,6 +23,11 @@ const ARCHIVE_DIR = resolveArchiveDir();
 const QUEUE_FILE = path.join(ARCHIVE_DIR, "queue.json");
 const CACHE_DIR = path.join(ARCHIVE_DIR, ".spotty-cache");
 const CONFIG_DIR = process.env.LMS_CONFIG_DIR || "/config";
+// Instant-tap cache: each tag's FIRST song kept as a local FLAC in a SEPARATE
+// folder, so a tap plays it immediately (no librespot buffer) while the rest of
+// the album streams. Bounded — this is a small hot cache, not an archive.
+const TAP_CACHE_DIR = process.env.TAP_CACHE_DIR || path.join(ARCHIVE_DIR, "tap-cache");
+const TAP_CACHE_MAX = Number(process.env.TAP_CACHE_MAX) || 40;
 
 // Rate limits — conservative by design. Override via env if ever needed.
 const COOLDOWN_MS = Number(process.env.ARCHIVE_COOLDOWN_MS) || 45000; // gap between downloads
@@ -1044,6 +1049,172 @@ export function startArchiveWatcher(lms) {
   const first = setTimeout(kick, web ? 5000 : 20000);
   first.unref?.();
   const timer = setInterval(kick, SCAN_INTERVAL_MS);
+  timer.unref?.();
+  return { stop: () => { clearTimeout(first); clearInterval(timer); } };
+}
+
+// ---------------------------------------------------------------------------
+// Instant-tap cache: keep each tag's FIRST song as a local FLAC so a tap plays
+// it immediately (served over LAN HTTP, no librespot buffer) while the rest of
+// the album/playlist streams from Spotify behind it. Bounded LRU (TAP_CACHE_MAX).
+// ---------------------------------------------------------------------------
+
+const TAP_MANIFEST_FILE = path.join(TAP_CACHE_DIR, "manifest.json");
+let tapCache = {}; // tagId -> { file, firstUri, restUris, title, artist, at }
+
+function tapCacheStem(track, tagId) {
+  const base = `${sanitize(track.artist || "Unknown Artist")} - ${sanitize(track.title || tagId)}`;
+  return base.slice(0, 150);
+}
+
+export function tapCacheFilePath(name) {
+  return path.join(TAP_CACHE_DIR, path.basename(String(name || "")));
+}
+
+// The first playable track + the remaining track URIs for a tag's playSpec.
+async function resolveTapTracks(lms, pid, tag, playlists) {
+  const spec = tag?.playSpec || {};
+  const kind = spec.kind;
+  if (kind === "discover") return null; // random each tap — nothing fixed to cache
+  if (kind === "track") {
+    const t = spec.track || {};
+    const uri = t.uri || t.id;
+    return uri ? { first: { uri, title: t.title, artist: t.artist }, rest: [] } : null;
+  }
+  let tracks = [];
+  if (kind === "library") {
+    const pl = playlists?.get?.(spec.playlistId);
+    tracks = (pl?.tracks || []).map((t) => ({ uri: t.uri || t.id, title: t.title, artist: t.artist }));
+  } else if (kind === "playlist") {
+    const ch = await lms.spotifyChildren(pid, { uri: spec.playlistUri, kind: "playlist" }, 100).catch(() => []);
+    tracks = (ch || []).map((t) => ({ uri: t.uri || t.id, title: t.title, artist: t.artist }));
+  } else if (kind === "album-from-top" || kind === "album-from-track") {
+    const ch = await lms.spotifyChildren(pid, { uri: spec.albumUri, kind: "album" }, 100).catch(() => []);
+    tracks = (ch || []).map((t) => ({ uri: t.uri || t.id, title: t.title, artist: t.artist }));
+  }
+  tracks = tracks.filter((t) => t.uri && /track[:/]/i.test(String(t.uri)));
+  if (tracks.length === 0) return null;
+  const start = kind === "album-from-track" ? Math.max(0, Math.min(tracks.length - 1, Number(spec.startIndex) || 0)) : 0;
+  return { first: tracks[start], rest: tracks.slice(start + 1) };
+}
+
+// Cache a tag's first song locally (idempotent). Returns true if it's cached.
+export async function cacheTapTag(lms, tag, playlists, playerId) {
+  if (!tag?.tagId) return false;
+  try {
+    const pid = await resolveArchivePlayer(lms, playerId);
+    if (!pid) return false;
+    const plan = await resolveTapTracks(lms, pid, tag, playlists);
+    if (!plan?.first?.uri) return false;
+    const file = `${tapCacheStem(plan.first, tag.tagId)}.flac`;
+    const dest = path.join(TAP_CACHE_DIR, file);
+    if (!existsSync(dest)) {
+      await fs.mkdir(TAP_CACHE_DIR, { recursive: true });
+      const raw = `${dest}.raw`;
+      await fetchAndEncode(plan.first.uri, raw, ["-c:a", "flac", "-f", "flac"], "TapCache");
+      await reencodeFlac(raw, dest, { title: plan.first.title, artist: plan.first.artist });
+      await fs.unlink(raw).catch(() => {});
+    }
+    tapCache[tag.tagId] = {
+      file,
+      firstUri: plan.first.uri,
+      restUris: plan.rest.map((t) => t.uri),
+      title: plan.first.title || "",
+      artist: plan.first.artist || "",
+      at: Date.now()
+    };
+    await saveTapCache();
+    await evictTapCache();
+    return true;
+  } catch (e) {
+    console.warn(`[tap-cache] cache failed for ${tag?.tagId}: ${e?.message || e}`);
+    return false;
+  }
+}
+
+// The instant-play plan for a tag if its first song is cached, else null.
+export function tapCachePlan(tagId) {
+  const c = tapCache[tagId];
+  if (!c || !existsSync(path.join(TAP_CACHE_DIR, c.file))) return null;
+  c.at = Date.now(); // LRU touch
+  return { id: `tapcache:${c.file}`, title: c.title, artist: c.artist, restUris: c.restUris || [] };
+}
+
+export function hasTapCache(tagId) {
+  const c = tapCache[tagId];
+  return Boolean(c && existsSync(path.join(TAP_CACHE_DIR, c.file)));
+}
+
+// Drop a tag's cache (e.g. on re-point/delete) so a stale first song never plays.
+export async function dropTapCache(tagId) {
+  const c = tapCache[tagId];
+  if (!c) return;
+  delete tapCache[tagId];
+  // Only delete the file if no other tag references it.
+  if (!Object.values(tapCache).some((x) => x.file === c.file)) {
+    await fs.unlink(path.join(TAP_CACHE_DIR, c.file)).catch(() => {});
+  }
+  await saveTapCache();
+}
+
+async function evictTapCache() {
+  const entries = Object.entries(tapCache).sort((a, b) => (a[1].at || 0) - (b[1].at || 0));
+  while (entries.length > TAP_CACHE_MAX) {
+    const [tagId, c] = entries.shift();
+    delete tapCache[tagId];
+    if (!Object.values(tapCache).some((x) => x.file === c.file)) {
+      await fs.unlink(path.join(TAP_CACHE_DIR, c.file)).catch(() => {});
+    }
+  }
+  await saveTapCache();
+}
+
+async function loadTapCache() {
+  try { tapCache = JSON.parse(await fs.readFile(TAP_MANIFEST_FILE, "utf8")) || {}; }
+  catch { tapCache = {}; }
+}
+
+let tapSaveTimer = null;
+function saveTapCache() {
+  if (tapSaveTimer) return Promise.resolve();
+  return new Promise((resolve) => {
+    tapSaveTimer = setTimeout(async () => {
+      tapSaveTimer = null;
+      await fs.mkdir(TAP_CACHE_DIR, { recursive: true }).catch(() => {});
+      await fs.writeFile(TAP_MANIFEST_FILE, JSON.stringify(tapCache, null, 2)).catch(() => {});
+      resolve();
+    }, 200);
+    tapSaveTimer.unref?.();
+  });
+}
+
+// Background: ensure every (cacheable) tag's first song is cached, paced gently.
+let tapSweeping = false;
+export async function sweepTapCache(lms, listTags, playlists) {
+  if (tapSweeping) return { swept: 0, skipped: true };
+  tapSweeping = true;
+  let cached = 0;
+  try {
+    const tags = (typeof listTags === "function" ? listTags() : listTags) || [];
+    for (const tag of tags) {
+      if (tag.playSpec?.kind === "discover") continue;
+      if (hasTapCache(tag.tagId)) continue;
+      if (await cacheTapTag(lms, tag, playlists)) {
+        cached += 1;
+        await delay(8000); // pace librespot fetches
+      }
+    }
+  } finally { tapSweeping = false; }
+  return { cached };
+}
+
+// Boot the tap cache: load the manifest, then sweep shortly after start.
+export function startTapCache(lms, listTags, playlists) {
+  loadTapCache();
+  const kick = () => sweepTapCache(lms, listTags, playlists).catch(() => {});
+  const first = setTimeout(kick, 40000); // after the archive watcher settles
+  first.unref?.();
+  const timer = setInterval(kick, 10 * 60 * 1000); // re-sweep for newly-bound tags
   timer.unref?.();
   return { stop: () => { clearTimeout(first); clearInterval(timer); } };
 }

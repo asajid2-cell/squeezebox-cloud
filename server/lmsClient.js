@@ -364,6 +364,18 @@ export class LmsClient {
         title: titleParts || filename.replace(/\.flac$/i, "")
       };
     }
+    // Instant-tap cache: a tag's first song kept as a local FLAC, served over LAN
+    // HTTP so the Boom plays it immediately (no librespot buffer). Same mechanism
+    // as archive: streams above.
+    if (archiveId.startsWith("tapcache:")) {
+      const filename = archiveId.slice("tapcache:".length);
+      const titleParts = [track.artist, track.title].filter(Boolean).join(" - ");
+      return {
+        type: "uri",
+        value: `http://${config.lanLmsHost}:${config.port}/api/tap-cache/file/${encodeURIComponent(filename)}`,
+        title: titleParts || filename.replace(/\.flac$/i, "")
+      };
+    }
     // Harmonizer canon/jukebox live-drive stream (the reverse bridge): an endless
     // HTTP stream served by Cloud Squeeze's own /api/canon-stream proxy (which pulls
     // from Harmonizer). Exempt from the https redirect so LMS can pull it over plain

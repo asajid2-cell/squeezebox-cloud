@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { LmsClient } from "./lmsClient.js";
-import { enqueueNowPlaying, enqueueTrack, getQueueStatus, removeJob, ensureStreamFile, scanWatchedPlaylists, scanWatchedPlaylistsWebApi, spotifyWebConfigured, groupArchiveFiles, getWatchStatus, hasArchiveCover, archiveCoverFile, backfillArchiveCovers } from "./archiveService.js";
+import { enqueueNowPlaying, enqueueTrack, getQueueStatus, removeJob, ensureStreamFile, scanWatchedPlaylists, scanWatchedPlaylistsWebApi, spotifyWebConfigured, groupArchiveFiles, getWatchStatus, hasArchiveCover, archiveCoverFile, backfillArchiveCovers, tapCachePlan, tapCacheFilePath, cacheTapTag, dropTapCache } from "./archiveService.js";
 import {
   addQueueItem,
   addQueueItemNext,
@@ -1952,6 +1952,18 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     }
   });
 
+  // Serve a tag's cached first song so the LMS can play it instantly over LAN HTTP.
+  app.get("/api/tap-cache/file/:name", async (req, res) => {
+    try {
+      const file = tapCacheFilePath(String(req.params.name || ""));
+      if (!file.endsWith(".flac")) { res.status(400).json({ error: "Invalid file" }); return; }
+      await fs.promises.access(file);
+      res.download(file, path.basename(file));
+    } catch {
+      res.status(404).json({ error: "Not cached" });
+    }
+  });
+
   // Fetch covers (via Spotify lookup) for archived files that don't have one yet.
   app.post("/api/archive/covers/backfill", async (_req, res) => {
     try {
@@ -1984,6 +1996,8 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       const tag = tapStore.create({ playSpec, display: body.display || {}, label: body.label || "", policy: body.policy, savePlaylistId });
       const token = tapStore.tokenFor(tag.tagId);
       logEvent("tap.bind", { tagId: tag.tagId, kind: playSpec.kind, source: playSpec.source });
+      // Warm the instant-tap cache for this binding in the background.
+      cacheTapTag(lms, tag, playlists).catch(() => {});
       res.json({ tag, token, tapUrl: tapUrlFor(req, tag.tagId, token), tapPath: `/tap/t/${tag.tagId}` });
     } catch (error) {
       res.status(400).json({ error: error.message });
@@ -2125,6 +2139,10 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       if (body.savePlaylistId !== undefined) patch.savePlaylistId = body.savePlaylistId;
       const tag = tapStore.update(req.params.id, patch);
       logEvent("tap.repoint", { tagId: tag.tagId, kind: tag.playSpec?.kind });
+      // If the target changed, drop the stale cached first song and re-warm.
+      if (body.intent !== undefined) {
+        dropTapCache(tag.tagId).then(() => cacheTapTag(lms, tag, playlists)).catch(() => {});
+      }
       res.json({ tag, token: tapStore.tokenFor(tag.tagId) });
     } catch (error) {
       res.status(400).json({ error: error.message });
@@ -2136,6 +2154,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       res.status(404).json({ error: "Tag not found" });
       return;
     }
+    dropTapCache(req.params.id).catch(() => {});
     res.json({ ok: true });
   });
 
@@ -2255,7 +2274,18 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       // — otherwise tap-queue/discover "defer to the squeezebox" and do nothing.
       stopGeneratedPlayback();
 
-      if (tag.playSpec?.kind === "discover") {
+      // INSTANT TAP: if this tag's first song is cached locally, play it NOW from
+      // disk (no librespot buffer) and stream the rest of the album behind it.
+      // Replace-mode, non-resume, non-discover only. Falls through otherwise.
+      const cachePlan = (!partyQueue && !resumeTo && tag.playSpec?.kind !== "discover") ? tapCachePlan(tagId) : null;
+      if (cachePlan) {
+        await lms.playTrack(playerId, { id: cachePlan.id, title: cachePlan.title, artist: cachePlan.artist }, "play-now");
+        if (cachePlan.restUris.length) {
+          // Append the rest in the background so the tap responds instantly; they
+          // buffer while the local first track plays.
+          (async () => { for (const uri of cachePlan.restUris) await lms.playTrack(playerId, { uri }, "add-queue").catch(() => {}); })();
+        }
+      } else if (tag.playSpec?.kind === "discover") {
         // Lazily give an older Surprise tag (bound before auto-save existed) its
         // dedicated playlist on first tap, so it starts collecting discoveries too.
         let savePlaylistId = tag.savePlaylistId;
@@ -2271,6 +2301,8 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
         await playLibraryTag(lms, playerId, tag.playSpec, { playlists, queue: behavior.playMode === "queue" });
       } else {
         await playTapTarget(lms, playerId, tag.playSpec, behavior);
+        // First tap of an uncached tag: warm the cache so next time is instant.
+        if (!partyQueue && !resumeTo) cacheTapTag(lms, tag, playlists).catch(() => {});
       }
 
       // Track the resume "owner" of the speaker. A non-resume tag (or a queued
@@ -2853,6 +2885,7 @@ function forceHttpsRedirect(req, res, next) {
   // Browsers still reach these over https via the nginx proxy (x-forwarded-proto).
   if (
     req.path.startsWith("/api/archive/file/") ||
+    req.path.startsWith("/api/tap-cache/file/") ||
     req.path.startsWith("/api/local-stream/") ||
     req.path.startsWith("/api/stream/")
   ) {

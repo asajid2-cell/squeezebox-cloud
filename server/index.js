@@ -1,6 +1,8 @@
 import { createApp, prewarmLibraryCaches, prewarmSpotifySearchCaches } from "./app.js";
 import { LmsClient } from "./lmsClient.js";
-import { startArchiveService, startArchiveWatcher } from "./archiveService.js";
+import { startArchiveService, startArchiveWatcher, startTapCache } from "./archiveService.js";
+import { defaultTapStore } from "./tapStore.js";
+import { defaultPlaylistStore } from "./playlists.js";
 import { config } from "./state.js";
 import express from "express";
 import http from "node:http";
@@ -63,6 +65,8 @@ server.listen(config.port, () => {
   startArchiveService();
   // Auto-archiver: watch Spotify playlists named "archive*" and pull in new tracks.
   startArchiveWatcher(lms);
+  // Instant-tap cache: keep each tag's first song local so taps play immediately.
+  startTapCache(lms, () => defaultTapStore.list(), defaultPlaylistStore);
   prewarmSpotifySearchCaches(lms).catch(() => null);
   for (const delayMs of [5000, 20000]) {
     const timer = setTimeout(() => {
