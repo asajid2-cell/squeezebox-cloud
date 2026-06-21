@@ -2024,7 +2024,11 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
   // Public, lightweight now-playing for the tapper's post-play "what's on" screen
   // and the console's "bind what's playing" — just the current track, no auth, no
   // heavy /api/state payload. Registered before /api/tap/:id so "now" isn't an id.
-  app.get("/api/tap/now", (_req, res) => {
+  app.get("/api/tap/now", async (_req, res) => {
+    // Pull a FRESH now-playing (throttled): a tap plays directly on the LMS without
+    // the app's poll, so appState.nowPlaying would otherwise stay on the previous
+    // song and the tapper would show stale title/album/art.
+    await refreshLms(lms, { minAgeMs: 1500, skipTrackInfo: true }).catch(() => {});
     const np = appState.nowPlaying || {};
     res.json({
       nowPlaying: {
@@ -2308,6 +2312,11 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       // Track the resume "owner" of the speaker. A non-resume tag (or a queued
       // append, which doesn't take over) clears ownership.
       activeResumeTagId = !partyQueue && policy.resume && isAlbum ? tagId : null;
+
+      // Refresh now-playing in the background so the tapper's poll reflects the NEW
+      // song (the tap played directly on the LMS, bypassing the app's poll). A short
+      // delay lets the LMS settle on the new track before we read it.
+      setTimeout(() => { refreshLms(lms, { force: true, skipTrackInfo: true }).catch(() => {}); }, 600).unref?.();
 
       tapPlayState.set(tagId, { lastPlayedAt: Date.now() });
       const updated = tapStore.recordTap(tagId);

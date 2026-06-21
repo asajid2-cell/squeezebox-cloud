@@ -87,10 +87,17 @@ export function TapNow({
     try { return new URLSearchParams(window.location.search).get("np") === "1"; } catch { return false; }
   })();
 
-  // Drive the "playing" screen from the LIVE now-playing so it reflects the actual
-  // song (essential for Surprise tags, and tracks queue advances) and keep it
-  // current with a gentle poll. Never replays.
-  const showNowPlaying = (seed?: TapDisplay, where = "your Squeezebox", tapCount?: number, debounced = false) => {
+  // What to show on the "playing" screen. For a bound song/album/playlist the
+  // tag's OWN display is the accurate metadata for what you tapped — use it (the
+  // live LMS now-playing lags a tap and, for a locally-cached first song, is
+  // thinner). Only Surprise tags (and a revisit with no seed) drive from the live
+  // now-playing, since the tag itself has no fixed song.
+  const showNowPlaying = (seed?: TapDisplay, where = "your Squeezebox", tapCount?: number, debounced = false, kind = "") => {
+    const liveDriven = kind === "discover" || !seed?.title;
+    if (!liveDriven) {
+      setState({ phase: "playing", debounced, display: { title: seed!.title, artist: seed?.artist || "", art: seed?.art ?? null }, where, tapCount });
+      return;
+    }
     const render = (np: NowPlaying | null) => setState({
       phase: "playing",
       debounced,
@@ -118,7 +125,7 @@ export function TapNow({
         if (mapped.phase === "playing") {
           // Mark this open as consumed so a refresh won't replay.
           try { window.history.replaceState(null, "", `${window.location.pathname}?np=1`); } catch { /* ignore */ }
-          showNowPlaying(mapped.display, mapped.where, mapped.tapCount, mapped.debounced);
+          showNowPlaying(mapped.display, mapped.where, mapped.tapCount, mapped.debounced, body.tag?.kind);
         } else {
           setState(mapped);
         }
