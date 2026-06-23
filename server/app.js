@@ -2036,7 +2036,8 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
         id: np.id, uri: np.uri, source: np.source, duration: np.duration, elapsed: np.elapsed
       },
       connected: Boolean(appState.player?.connected),
-      name: appState.player?.name || ""
+      name: appState.player?.name || "",
+      volume: Number.isFinite(Number(appState.player?.volume)) ? Math.round(Number(appState.player.volume)) : null
     });
   });
 

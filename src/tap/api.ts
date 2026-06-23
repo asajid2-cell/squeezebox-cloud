@@ -47,7 +47,18 @@ export async function playTap(tagId: string, token: string, auth: TapAuth = {}):
 }
 
 export const pausePlayer = () => fetch("/api/player/pause", { method: "POST" });
+export const resumePlayer = () => fetch("/api/player/play", { method: "POST" });
 export const nextTrack = () => fetch("/api/player/next", { method: "POST" });
+export const prevTrack = () => fetch("/api/player/previous", { method: "POST" });
+export const setTapVolume = (volume: number) =>
+  fetch("/api/player/volume", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ volume }) });
+
+// The speaker's current volume (0-100) for the tapper's volume slider.
+export async function tapVolume(): Promise<number | null> {
+  const body = await asJson(await fetch("/api/tap/now"));
+  const v = Number(body?.volume);
+  return Number.isFinite(v) ? v : null;
+}
 
 // ---- admin console — auth is the hl-auth session cookie, sent automatically
 // on same-origin requests; no bearer tokens. The console gates on getSession().

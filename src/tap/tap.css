@@ -117,6 +117,27 @@ h1, h2, h3, p { margin: 0; }
 .tap-now__where { display: flex; align-items: center; justify-content: center; gap: var(--s2); flex-wrap: wrap; margin-top: var(--s2); }
 
 .tap-now__controls { display: flex; align-items: center; justify-content: center; gap: var(--s3); flex-wrap: wrap; }
+
+.tap-now__volume { display: flex; align-items: center; gap: var(--s3); width: min(100%, 22rem); margin: var(--s2) auto 0; }
+.tap-vol-btn {
+  display: grid; place-items: center; width: 40px; height: 40px; flex-shrink: 0;
+  border-radius: 50%; border: 1px solid var(--line); background: transparent;
+  color: var(--muted); cursor: pointer; transition: color .15s, border-color .15s;
+}
+.tap-vol-btn:hover { color: var(--text); border-color: var(--rose); }
+.tap-now__volume-val { font-size: var(--step-0); color: var(--faint); min-width: 3.5ch; text-align: right; font-variant-numeric: tabular-nums; }
+.tap-now__volume-slider {
+  flex: 1; -webkit-appearance: none; appearance: none; height: 6px; border-radius: 99px; cursor: pointer;
+  background: linear-gradient(to right, var(--rose) 0 var(--vol, 50%), var(--line) var(--vol, 50%) 100%);
+}
+.tap-now__volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--rose); border: 2px solid var(--bg); box-shadow: 0 1px 5px rgba(0, 0, 0, .5); cursor: pointer;
+}
+.tap-now__volume-slider::-moz-range-thumb {
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--rose); border: 2px solid var(--bg); cursor: pointer;
+}
 .tap-now__bottom { display: flex; align-items: center; justify-content: center; gap: var(--s2); color: var(--faint); font-size: var(--step-0); flex-wrap: wrap; }
 
 /* status / empty states share one centered frame */

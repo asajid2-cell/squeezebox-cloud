@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { playTap, pausePlayer, nextTrack, tokenFromHash, artSrc, nowPlayingNow, type TapDisplay, type TapPlayResult, type NowPlaying } from "./api";
+import { playTap, pausePlayer, nextTrack, prevTrack, setTapVolume, tapVolume, tokenFromHash, artSrc, nowPlayingNow, type TapDisplay, type TapPlayResult, type NowPlaying } from "./api";
 
 type TapState =
   | { phase: "loading" }
@@ -58,6 +58,46 @@ function Art({ display, skeleton }: { display?: TapDisplay; skeleton?: boolean }
           <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M9 18V6l10-2v12" /><circle cx="6" cy="18" r="3" /><circle cx="19" cy="16" r="3" /></svg>
         </div>
       )}
+    </div>
+  );
+}
+
+// Speaker volume slider for the now-playing screen — anyone holding the room's
+// phone can nudge it without opening the console. Reads the live volume, sets it
+// optimistically, and re-syncs when idle (so another tapper's change shows up).
+function VolumeControl() {
+  const [vol, setVol] = useState<number | null>(null);
+  const touchedAt = useRef(0);
+  const lastNonZero = useRef(75);
+
+  useEffect(() => {
+    let alive = true;
+    const load = () => tapVolume().then((v) => { if (alive && v != null && Date.now() - touchedAt.current > 4000) { setVol(v); if (v > 0) lastNonZero.current = v; } }, () => {});
+    load();
+    const t = window.setInterval(load, 5000);
+    return () => { alive = false; window.clearInterval(t); };
+  }, []);
+
+  const change = (v: number) => { touchedAt.current = Date.now(); setVol(v); if (v > 0) lastNonZero.current = v; setTapVolume(v).catch(() => {}); };
+  const v = vol ?? 60;
+  const muted = v === 0;
+
+  return (
+    <div className="tap-now__volume">
+      <button type="button" className="tap-vol-btn" aria-label={muted ? "Unmute" : "Mute"} onClick={() => change(muted ? lastNonZero.current : 0)}>
+        {muted ? (
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M11 5 6 9H2v6h4l5 4z" /><path d="m22 9-6 6M16 9l6 6" /></svg>
+        ) : (
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M11 5 6 9H2v6h4l5 4z" /><path d="M15.5 8.5a5 5 0 0 1 0 7" /><path d="M19 5a9 9 0 0 1 0 14" /></svg>
+        )}
+      </button>
+      <input
+        type="range" min={0} max={100} step={1} value={v} aria-label="Volume"
+        className="tap-now__volume-slider"
+        onChange={(e) => change(Number(e.target.value))}
+        style={{ ["--vol" as string]: `${v}%` } as React.CSSProperties}
+      />
+      <span className="tap-now__volume-val">{vol == null ? "—" : `${vol}%`}</span>
     </div>
   );
 }
@@ -210,6 +250,9 @@ export function TapNow({
         </div>
 
         <div className="tap-now__controls">
+          <button className="tap-btn tap-btn--icon" aria-label="Previous" onClick={() => { prevTrack().catch(() => {}); }}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M18 5l-9 7 9 7zM8 5H5v14h3z" /></svg>
+          </button>
           <button
             className="tap-btn tap-btn--icon tap-btn--primary"
             aria-label={paused ? "Resume" : "Pause"}
@@ -225,6 +268,8 @@ export function TapNow({
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5l9 7-9 7zM16 5h3v14h-3z" /></svg>
           </button>
         </div>
+
+        <VolumeControl />
       </section>
 
       <footer className="tap-now__bottom">
