@@ -42,6 +42,29 @@ function normalizePolicy(policy = {}) {
   }
   const out = { playMode, volume, resume };
   if (video !== undefined) out.video = video;
+  // Lighting (per tag, only acts when global lighting is on): omitted -> follow the
+  // auto routine; { enabled:false } -> this tag rests the strip; otherwise an
+  // override (mode/palette/brightness/beatSync) layered on the auto routine.
+  const lighting = normalizeTagLighting(policy?.lighting);
+  if (lighting !== null) out.lighting = lighting;
+  return out;
+}
+
+const LIGHTING_MODES = new Set(["drift", "breathe", "pulse", "scene", "solid"]);
+function normalizeTagLighting(l) {
+  if (l == null) return null;
+  if (l === false || l?.enabled === false) return { enabled: false };
+  const out = { enabled: true };
+  if (typeof l.mode === "string" && LIGHTING_MODES.has(l.mode)) out.mode = l.mode;
+  if (Array.isArray(l.palette)) {
+    const pal = l.palette.map((c) => String(c).replace(/^#/, "").toLowerCase()).filter((c) => /^[0-9a-f]{6}$/.test(c)).slice(0, 6);
+    if (pal.length) out.palette = pal;
+  }
+  if (l.brightness != null && l.brightness !== "") {
+    const b = Math.round(Number(l.brightness));
+    if (Number.isFinite(b)) out.brightness = Math.max(8, Math.min(255, b));
+  }
+  if (l.beatSync != null) out.beatSync = Boolean(l.beatSync);
   return out;
 }
 
@@ -63,7 +86,24 @@ function isImportableTagId(id) {
   return typeof id === "string" && /^[A-Za-z0-9_-]{6,64}$/.test(id) && !RESERVED_TAG_IDS.has(id);
 }
 
-const DEFAULT_SETTINGS = { debounceMs: 3000, partyMode: "open", requirePassword: false, password: "", partyQueue: false, tapVolume: 75, screenVideo: false };
+const DEFAULT_SETTINGS = { debounceMs: 3000, partyMode: "open", requirePassword: false, password: "", partyQueue: false, tapVolume: 75, screenVideo: false, lighting: { enabled: true, brightness: 200, beatSync: true, idle: "off" } };
+
+// Global lighting: master switch for auto-following the now-playing song on the
+// room LED strip, plus the base brightness, beat-sync toggle, and what to do when
+// nothing's playing ("off" | "ambient").
+function normalizeGlobalLighting(l) {
+  const d = DEFAULT_SETTINGS.lighting;
+  const out = { ...d };
+  if (l == null) return out;
+  if (l.enabled != null) out.enabled = Boolean(l.enabled);
+  if (l.beatSync != null) out.beatSync = Boolean(l.beatSync);
+  if (l.idle === "ambient" || l.idle === "off") out.idle = l.idle;
+  if (l.brightness != null && l.brightness !== "") {
+    const b = Math.round(Number(l.brightness));
+    if (Number.isFinite(b)) out.brightness = Math.max(8, Math.min(255, b));
+  }
+  return out;
+}
 
 // Runtime Tap settings (clamped + defaulted). The password is never echoed back
 // in plain form by the API — callers expose only `hasPassword`.
@@ -90,7 +130,9 @@ function normalizeSettings(s = {}) {
     tapVolume,
     // Screen video master switch: when on, taps also play a video on the VPS
     // panel (per-tag URL, else auto-find). Off = taps never touch the screen.
-    screenVideo: Boolean(s?.screenVideo)
+    screenVideo: Boolean(s?.screenVideo),
+    // Room LED strip: auto-follow the now-playing song with AI routines + beat-sync.
+    lighting: normalizeGlobalLighting(s?.lighting)
   };
 }
 
@@ -275,7 +317,7 @@ export function createTapStore({ file = defaultFile(), persist: persistEnabled =
 
     // Safe settings for the admin API — never echoes the password back.
     publicSettings() {
-      return { debounceMs: settings.debounceMs, partyMode: settings.partyMode, requirePassword: settings.requirePassword, hasPassword: Boolean(settings.password), partyQueue: settings.partyQueue, tapVolume: settings.tapVolume, screenVideo: settings.screenVideo };
+      return { debounceMs: settings.debounceMs, partyMode: settings.partyMode, requirePassword: settings.requirePassword, hasPassword: Boolean(settings.password), partyQueue: settings.partyQueue, tapVolume: settings.tapVolume, screenVideo: settings.screenVideo, lighting: settings.lighting };
     },
 
     setSettings(patch = {}) {
