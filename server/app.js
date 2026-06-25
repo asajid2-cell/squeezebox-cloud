@@ -31,6 +31,7 @@ import { defaultCurationStore, CurationError } from "./curation.js";
 import { defaultListenerTasteStore } from "./listenerTaste.js";
 import { rankRecommendationCandidates, recommendationSeedArtists } from "./recommender.js";
 import { defaultTapStore } from "./tapStore.js";
+import { onTrack as lightingOnTrack, onIdle as lightingOnIdle } from "./lighting/director.js";
 import { buildPlaySpec } from "./tapPlaySpec.js";
 import { playTapTarget } from "./tapPlayback.js";
 import { verifySun } from "./tapSun.js";
@@ -4208,6 +4209,30 @@ function isGeneratedQueueItem(item) {
 // specific URL, "off" to opt out, or empty to auto-find the official video for
 // its artist+title. Album/track tags carry both; generic tags (discover,
 // playlist) have no good auto-query and are skipped unless given a URL.
+// ---- Room LED strip follows the music (Tap lighting) ----
+// On each track change the director resolves an AI routine for the song and pushes
+// it to the device-hub → phone → BLE strip. A tapped tag may override the look
+// (policy.lighting); the global on/off + brightness live in settings.lighting.
+// Best-effort throughout — lighting must never disturb playback.
+let activeTagLighting = null;
+function maybePlayTapLighting(tag) {
+  // Remember the tapped tag's lighting override; the post-tap refresh pushes it on
+  // the resulting track change. { enabled:false } rests the strip for this tag.
+  activeTagLighting = tag?.policy?.lighting || null;
+}
+function maybeLightingFollow(track) {
+  try {
+    const lighting = tapStore.settings()?.lighting;
+    if (!lighting?.enabled) return;                                  // master off
+    if (!track || track.id === "idle" || !track.title) { lightingOnIdle(lighting).catch(() => {}); return; }
+    const policy = activeTagLighting;
+    if (policy && policy.enabled === false) { lightingOnIdle(lighting).catch(() => {}); return; }  // tag opts out
+    const t = { title: track.title, artist: track.artist, album: track.album, year: track.year, uri: track.url || track.id, id: track.id };
+    const posMs = Math.max(0, Math.round((Number(track.elapsed) || 0) * 1000));
+    lightingOnTrack(t, { posMs, settings: lighting, policy }).catch(() => {});
+  } catch { /* lighting is best-effort */ }
+}
+
 function maybePlayTapVideo(tag, settings) {
   try {
     if (visualOn) return;            // visual watcher owns the screen — let it follow
@@ -4253,12 +4278,14 @@ async function syncVisualNow(lms, { force = false } = {}) {
     return { mirroring: true, title: np.title, artist: np.artist };
   }
 
-  // Nothing meaningful playing — idle the panel but keep the watcher armed.
-  if (!np.title || mode === "stop") {
+  // Nothing meaningful to mirror — idle the panel but keep the watcher armed.
+  // (Includes non-music audio like alarm tones, whose "title" is a bare URL.)
+  const titleIsUrl = /^https?:\/\//i.test(np.title || "");
+  if (!np.title || titleIsUrl || mode === "stop") {
     visualTrackKey = "";
     visualMode = mode;
     await stopScreenVideo().catch(() => {});
-    return { mirroring: false, note: "nothing playing" };
+    return { mirroring: false, note: "nothing to mirror" };
   }
 
   // New song (or first sync) — match a fresh video to it and sync to its point.
@@ -4268,6 +4295,7 @@ async function syncVisualNow(lms, { force = false } = {}) {
   const duration = pos && pos.durationMs ? Math.round(pos.durationMs / 1000) : (Number(np.duration) || 0);
   const query = `${[np.artist, np.title].filter(Boolean).join(" ")} official video`;
   if (!visualOn) return { mirroring: false }; // turned off while we were resolving — don't load
+  console.log(`[visual] following -> ${np.artist || "?"} - ${np.title} @${seek}s (${duration || "?"}s)`);
   await playScreenVideo({ query, matchDuration: duration || undefined, seek, loop: true }).catch(() => {});
   return { mirroring: true, title: np.title, artist: np.artist, seek, duration };
 }
