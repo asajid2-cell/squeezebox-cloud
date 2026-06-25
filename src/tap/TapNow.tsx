@@ -24,14 +24,15 @@ function mapResult(status: number, body: TapPlayResult, opts: { passwordTried?: 
     // Visual toggle tag: no song — report the screen state instead.
     if (body.visual) {
       const v = body.visual;
+      const onMsg = v.flow === "fixed"
+        ? "Looping your video"
+        : v.mirroring ? `Mirroring ${v.title || "what's playing"}` : (v.note || "Play something, then tap again");
       return {
         phase: "playing",
         debounced: Boolean(body.debounced),
         display: {
           title: v.on ? "Visuals on" : "Visuals off",
-          artist: v.on
-            ? (v.mirroring ? `Mirroring ${v.title || "what's playing"}` : (v.note || "Play something, then tap again"))
-            : "Tap again to turn visuals back on",
+          artist: v.on ? onMsg : "Tap again to turn visuals back on",
           art: null
         },
         where: "the VPS screen",

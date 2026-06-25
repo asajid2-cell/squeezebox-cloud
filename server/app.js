@@ -93,7 +93,9 @@ let activeResumeTagId = null;
 // watcher follows the Boom — re-syncing the screen to each new song and
 // mirroring play/pause. All runtime-only (the panel idles on restart).
 let visualOn = false;
-let visualTimer = null;     // the watcher's poll interval
+let visualTagId = "";       // which visual tag currently owns the screen
+let visualFlow = "";        // the active flow ("mirror", "fixed", …)
+let visualTimer = null;     // the mirror watcher's poll interval
 let visualSyncing = false;  // guard so a slow re-sync tick can't overlap the next
 let visualTrackKey = "";    // last-synced "title|artist" — detects track changes
 let visualMode = "";        // last-seen play/pause mode — mirrors it without reloading
@@ -487,6 +489,16 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       refreshLms(lms, { force: true, skipTrackInfo: true, taste }).catch(() => null);
     }, 250);
     startupRefresh.unref?.();
+    // Lighting follow loop: keep the strip on the now-playing song even with no
+    // browser open and no app-managed queue. refreshLms() runs the lighting hook
+    // internally; minAgeMs dedups with the frontend's polling, and the director
+    // dedups by track so a steady song costs nothing.
+    const lightingMonitor = setInterval(() => {
+      if (tapStore.settings()?.lighting?.enabled) {
+        refreshLms(lms, { minAgeMs: 4000, skipTrackInfo: true, taste }).catch(() => null);
+      }
+    }, 5000);
+    lightingMonitor.unref?.();
   }
 
   app.get("/api/health", (_req, res) => {
@@ -2242,6 +2254,23 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       return;
     }
 
+    // VISUAL TAG: an on/off switch for a screen "flow" (mirror what's playing, a
+    // fixed loop, …). It never touches the Boom, so it runs BEFORE the player
+    // resolution — a fixed-loop tag works even when the speaker's offline.
+    if (tag.playSpec?.kind === "visual") {
+      try {
+        const visual = await toggleVisualMode(lms, tag);
+        tapPlayState.set(tagId, { lastPlayedAt: Date.now() });
+        const updated = tapStore.recordTap(tagId);
+        logEvent("tap.play.ok", { tagId, kind: "visual", flow: tag.playSpec.flow || "mirror", visualOn: visual.on });
+        res.json({ ok: true, played: true, visual, tag: publicTapTag(updated) });
+      } catch {
+        logEvent("tap.play.fail", { tagId, reason: "visual_error" });
+        res.status(500).json({ ok: false, reason: "lms_error", message: "Couldn't switch the screen." });
+      }
+      return;
+    }
+
     let playerId;
     try {
       playerId = await hotPlayerId(lms);
@@ -2252,18 +2281,6 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     }
 
     try {
-      // VISUAL TOGGLE TAG: never touches the Boom. It flips the VPS screen
-      // between mirroring what's playing (synced + looped, length-matched) and
-      // off — so it short-circuits before any of the audio/volume/cache logic.
-      if (tag.playSpec?.kind === "visual") {
-        const visual = await toggleVisualMode(lms, playerId);
-        tapPlayState.set(tagId, { lastPlayedAt: Date.now() });
-        const updated = tapStore.recordTap(tagId);
-        logEvent("tap.play.ok", { tagId, kind: "visual", visualOn: visual.on });
-        res.json({ ok: true, played: true, visual, tag: publicTapTag(updated) });
-        return;
-      }
-
       const policy = tag.policy || {};
       // Normalize loudness: a tag's own volume wins; otherwise fall back to the
       // global tap volume (default 75%) so taps don't blast or whisper at whatever
@@ -2338,6 +2355,8 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       // set, else auto-find "<artist> <title> official video". The Boom owns
       // audio; the panel is muted. Never blocks or fails the tap.
       maybePlayTapVideo(tag, settings);
+      // Room LED strip: apply this tag's lighting override (pushed on the track change).
+      maybePlayTapLighting(tag);
 
       // Track the resume "owner" of the speaker. A non-resume tag (or a queued
       // append, which doesn't take over) clears ownership.
@@ -3268,6 +3287,10 @@ async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force =
           (key !== refreshState.trackKey || Date.now() - refreshState.trackInfoAt > trackInfoRefreshMs);
         const observedTrackChanged = rememberObservedTrackTransition(track);
         updateNowPlaying(preserveKnownNowPlayingMetadata(track));
+        // Strip follows the playing song. Called every poll (not just on change) so
+        // it also catches a song already playing when lighting is enabled/restarted;
+        // the director dedups cheaply by track key before any LLM/network work.
+        maybeLightingFollow(track);
         if (shouldRefreshTrackInfo) {
           refreshTrackInfoInBackground(track, key);
         }
@@ -4222,7 +4245,7 @@ function maybePlayTapLighting(tag) {
 }
 function maybeLightingFollow(track) {
   try {
-    const lighting = tapStore.settings()?.lighting;
+    const lighting = defaultTapStore.settings()?.lighting;
     if (!lighting?.enabled) return;                                  // master off
     if (!track || track.id === "idle" || !track.title) { lightingOnIdle(lighting).catch(() => {}); return; }
     const policy = activeTagLighting;
@@ -4258,7 +4281,7 @@ const visualTrackKeyOf = (np) => `${np?.title || ""}|${np?.artist || ""}`.trim()
 //   - nothing playing             -> idle the panel but stay armed
 // Best-effort throughout; returns a small summary for the tap response.
 async function syncVisualNow(lms, { force = false } = {}) {
-  if (!visualOn) return { mirroring: false };
+  if (!visualOn || visualFlow !== "mirror") return { mirroring: false };
   let playerId;
   try { playerId = await hotPlayerId(lms); } catch { return { mirroring: false, note: "no speaker" }; }
   let np = {};
@@ -4316,19 +4339,42 @@ function stopVisualWatcher() {
   visualMode = "";
 }
 
-// Visual toggle tag: an ON/OFF switch for the "mirror what's playing" mode. ON
-// syncs the screen now and starts a watcher that follows every song change (and
-// play/pause) until it's turned OFF. Plays NO audio — the Boom keeps the sound.
-async function toggleVisualMode(lms, playerId) {
-  visualOn = !visualOn;
-  if (!visualOn) {
+// Visual tag = an ON/OFF switch for a screen "flow". Tapping the tag that owns
+// the screen turns it off; tapping any visual tag while off (or a different one)
+// switches the screen to THAT tag's flow. Plays NO audio. Flows:
+//   "mirror" — follow what's playing (synced, looping, length-matched) + watch
+//   "fixed"  — loop one specific video (its playSpec.url)
+// New flows slot in here: add a buildPlaySpec branch, a case below, a picker option.
+async function toggleVisualMode(lms, tag) {
+  const tagId = tag?.tagId;
+  const flow = tag?.playSpec?.flow || "mirror";
+
+  // Tapping the tag that's currently on → turn the screen off.
+  if (visualOn && visualTagId === tagId) {
+    visualOn = false;
+    visualTagId = "";
+    visualFlow = "";
     stopVisualWatcher();
     await stopScreenVideo().catch(() => {});
     return { on: false };
   }
+
+  // Otherwise turn on (or switch to) this tag's flow.
+  stopVisualWatcher();
+  visualOn = true;
+  visualTagId = tagId;
+  visualFlow = flow;
+
+  if (flow === "fixed") {
+    const url = tag?.playSpec?.url;
+    if (url) await playScreenVideo({ url, loop: true }).catch(() => {});
+    return { on: true, flow: "fixed" };
+  }
+
+  // Default: mirror what's playing, then follow it.
   const synced = await syncVisualNow(lms, { force: true }).catch(() => ({ mirroring: false }));
   startVisualWatcher(lms);
-  return { on: true, ...synced };
+  return { on: true, flow: "mirror", ...synced };
 }
 
 function stopGeneratedPlayback() {

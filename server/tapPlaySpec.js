@@ -61,10 +61,12 @@ const playSpecSchema = z.union([
   // A tag bound to one of OUR app-managed (library) playlists — plays its saved
   // tracks. The playlist is editable in the Library, so the tag follows it.
   z.object({ kind: z.literal("library"), playlistId: libraryPlaylistId }),
-  // A "visual" toggle tag: plays no audio. Tapping it flips the VPS screen
-  // between mirroring whatever's playing (synced + looped) and off. Stores no
-  // target — the video is chosen live from the current song at tap time.
-  z.object({ kind: z.literal("visual") })
+  // A "visual" toggle tag: plays no audio, an on/off switch for a screen "flow".
+  //   mirror — follow what's playing (video chosen live at tap time)
+  //   fixed  — loop one specific video (url)
+  // A bare {kind:"visual"} (no flow) is treated as "mirror" for back-compat.
+  z.object({ kind: z.literal("visual"), flow: z.literal("mirror").optional() }),
+  z.object({ kind: z.literal("visual"), flow: z.literal("fixed"), url: z.string().url() })
 ]);
 
 export function validatePlaySpec(spec) {
@@ -110,7 +112,13 @@ export function buildPlaySpec(input = {}) {
   }
 
   if (intent === "visual") {
-    return { kind: "visual" };
+    const flow = input.flow === "fixed" ? "fixed" : "mirror";
+    if (flow === "fixed") {
+      const url = String(input.url || "").trim();
+      if (!/^https?:\/\//i.test(url)) throw new Error("A fixed-loop visual needs a video URL");
+      return { kind: "visual", flow: "fixed", url };
+    }
+    return { kind: "visual", flow: "mirror" };
   }
 
   if (intent === "album-from-top" || intent === "album-from-track") {

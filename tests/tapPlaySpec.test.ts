@@ -97,9 +97,19 @@ describe("Tap PlaySpec validation (round-trip)", () => {
     }
   });
 
-  it("builds + validates a target-less visual toggle spec", () => {
-    expect(buildPlaySpec({ intent: "visual" })).toEqual({ kind: "visual" });
+  it("builds visual flows (defaults to mirror) and validates them", () => {
+    expect(buildPlaySpec({ intent: "visual" })).toEqual({ kind: "visual", flow: "mirror" });
+    expect(buildPlaySpec({ intent: "visual", flow: "mirror" })).toEqual({ kind: "visual", flow: "mirror" });
+    expect(buildPlaySpec({ intent: "visual", flow: "fixed", url: "https://youtube.com/watch?v=abc" }))
+      .toEqual({ kind: "visual", flow: "fixed", url: "https://youtube.com/watch?v=abc" });
+    // bare {kind:visual} (no flow) stays valid for back-compat
     expect(validatePlaySpec({ kind: "visual" }).ok).toBe(true);
+    expect(validatePlaySpec({ kind: "visual", flow: "fixed", url: "https://x.test/v" }).ok).toBe(true);
+  });
+
+  it("rejects a fixed visual flow without a URL", () => {
+    expect(() => buildPlaySpec({ intent: "visual", flow: "fixed" })).toThrow(/url/i);
+    expect(validatePlaySpec({ kind: "visual", flow: "fixed" }).ok).toBe(false);
   });
 
   it("rejects garbage that did not come from buildPlaySpec", () => {

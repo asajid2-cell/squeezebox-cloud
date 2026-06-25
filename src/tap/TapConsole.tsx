@@ -982,12 +982,20 @@ function LibraryView({ onRefreshTags }: { onRefreshTags: () => void }) {
 }
 
 // ---------- visual ----------
-// "Visual" tags are toggles: tap to mirror what's playing on the VPS screen
-// (synced + looping, length-matched), tap again to switch it off. They bind no
-// album — the video is chosen live from the current song each time.
+// "Visual" tags are on/off switches for a screen "flow". Today's flows: mirror
+// what's playing, or loop a fixed video. The flow is chosen at creation; adding
+// a new one later = a new entry here + a buildPlaySpec branch + a handler case.
+const VISUAL_FLOWS = [
+  { id: "mirror", label: "Mirror what's playing", blurb: "Follows the music — a length-matched video, synced to the song and looping, re-syncing as songs change and pausing when you pause." },
+  { id: "fixed", label: "Fixed video loop", blurb: "Loops one specific video the whole time it's on. Good for ambient or a set visual — no music needed." }
+] as const;
+type VisualFlow = (typeof VISUAL_FLOWS)[number]["id"];
+
 function VisualView() {
   const [made, setMade] = useState<{ display: SearchItem; tagId: string; token: string } | null>(null);
   const [tags, setTags] = useState<TapTag[] | null>(null);
+  const [flow, setFlow] = useState<VisualFlow>("mirror");
+  const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -998,8 +1006,12 @@ function VisualView() {
 
   const create = async () => {
     setBusy(true); setError("");
-    const display: SearchItem = { title: "Visuals", artist: "Tap to mirror what's playing", art: null };
-    const res = await createTag({ intent: "visual", display, label: "Visual toggle" });
+    const display: SearchItem = flow === "fixed"
+      ? { title: "Visual loop", artist: "Loops a fixed video", art: null }
+      : { title: "Visuals", artist: "Mirrors what's playing", art: null };
+    const payload: Record<string, unknown> = { intent: "visual", flow, display, label: flow === "fixed" ? "Visual loop" : "Visual mirror" };
+    if (flow === "fixed") payload.url = url.trim();
+    const res = await createTag(payload);
     setBusy(false);
     if (res.status >= 200 && res.status < 300 && res.body?.tag) {
       setMade({ display, tagId: res.body.tag.tagId, token: res.body.token });
@@ -1017,16 +1029,26 @@ function VisualView() {
       <header className="tap-head">
         <span className="tap-head__eyebrow">Visual</span>
         <h1 className="tap-head__title">Screen visuals</h1>
-        <p className="tap-head__sub">A visuals tag is an <strong>on/off switch</strong> for screen mirroring. Tap it once and the VPS screen follows whatever's playing — a length-matched music video, synced to the song's spot and looping — and <strong>keeps following</strong> as songs change (and pauses when you pause). Tap again to switch it off. It plays no audio; your Boom keeps the sound.</p>
+        <p className="tap-head__sub">A visuals tag is an <strong>on/off switch</strong> for the VPS screen. Pick a <strong>flow</strong>, write the tag, and tap to turn it on — tap again to turn it off. It plays no audio; your Boom keeps the sound.</p>
       </header>
 
       <div className="tap-card" style={{ maxWidth: "40rem", display: "grid", gap: 12 }}>
-        <div className="tap-setting__text">
-          <strong>Make a visuals tag</strong>
-          <span>Stick it anywhere. One tap turns the watcher on — it re-syncs the screen to every new song until you tap again. No binding; it always follows whatever's playing.</span>
+        <div className="tap-setting__text"><strong>Make a visuals tag</strong><span>Choose what this tag does when tapped.</span></div>
+        <div role="radiogroup" aria-label="Visual flow" style={{ display: "grid", gap: 8 }}>
+          {VISUAL_FLOWS.map((f) => (
+            <button key={f.id} type="button" role="radio" aria-checked={flow === f.id} onClick={() => setFlow(f.id)}
+              style={{ textAlign: "left", display: "grid", gap: 2, padding: "10px 12px", borderRadius: 10, cursor: "pointer",
+                border: `1px solid ${flow === f.id ? "var(--rose, #e0a96d)" : "var(--line, #333)"}`, background: flow === f.id ? "rgba(224,169,109,0.08)" : "transparent", color: "inherit" }}>
+              <strong>{f.label}{flow === f.id ? " ✓" : ""}</strong>
+              <span className="tap-card__sub">{f.blurb}</span>
+            </button>
+          ))}
         </div>
+        {flow === "fixed" ? (
+          <div className="tap-field"><input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://youtube.com/watch?v=… (the video to loop)" aria-label="Fixed loop video URL" /></div>
+        ) : null}
         <div>
-          <button className="tap-btn tap-btn--primary" onClick={create} disabled={busy}>{busy ? "Creating…" : "Create a visuals tag"}</button>
+          <button className="tap-btn tap-btn--primary" onClick={create} disabled={busy || (flow === "fixed" && !url.trim())}>{busy ? "Creating…" : "Create a visuals tag"}</button>
         </div>
         {error ? <div role="alert" style={{ color: "var(--amber, #e0a96d)" }}>{error}</div> : null}
       </div>
@@ -1039,7 +1061,7 @@ function VisualView() {
               <div className="tap-card" key={t.tagId}>
                 <div className="tap-card__text">
                   <span className="tap-card__title">{t.display?.title || "Visuals"}</span>
-                  <span className="tap-card__sub">Visual toggle · tapped {t.tapCount ?? 0}×</span>
+                  <span className="tap-card__sub">{t.playSpec?.flow === "fixed" ? "Fixed loop" : "Mirror what's playing"} · tapped {t.tapCount ?? 0}×</span>
                 </div>
                 <div className="tap-card__actions">
                   <button className="tap-btn" onClick={() => { if (t.token) navigator.clipboard?.writeText(tapUrlFor(t.tagId, t.token)).catch(() => {}); }}>Copy link</button>

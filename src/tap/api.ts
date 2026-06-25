@@ -8,7 +8,7 @@ export type TapTag = {
   label?: string;
   tapCount?: number;
   lastTappedAt?: string | null;
-  playSpec?: { kind?: string; source?: string; albumUri?: string; playlistUri?: string; startIndex?: number; seed?: string };
+  playSpec?: { kind?: string; source?: string; albumUri?: string; playlistUri?: string; startIndex?: number; seed?: string; flow?: string; url?: string };
   policy?: { playMode?: "replace" | "queue"; volume?: number | null; resume?: boolean; video?: string };
   resumeState?: { index: number; seconds: number; savedAt?: string } | null;
   token?: string;
@@ -22,7 +22,7 @@ export type TapPlayResult = {
   tag?: { tagId: string; display?: TapDisplay; tapCount?: number; kind?: string };
   nowPlaying?: { title?: string; artist?: string; art?: string | null; name?: string };
   // Present when a "visual" toggle tag was tapped (screen on/off, not audio).
-  visual?: { on: boolean; mirroring?: boolean; title?: string; artist?: string; seek?: number; duration?: number; note?: string };
+  visual?: { on: boolean; flow?: string; mirroring?: boolean; title?: string; artist?: string; seek?: number; duration?: number; note?: string };
 };
 
 async function asJson(res: Response) {
