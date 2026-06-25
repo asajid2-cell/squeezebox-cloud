@@ -34,10 +34,17 @@ async function call(path, { method = "POST", body } = {}) {
 }
 
 // Play a video on the panel. Pass { url } for a specific video (any mpv/yt-dlp
-// source) or { query } to youtube-search and play the first hit.
-export function playVideo({ url, query } = {}) {
+// source) or { query } to youtube-search and play the first hit. Options:
+//   seek          start the video this many seconds in (sync to a song)
+//   loop          repeat the video forever
+//   matchDuration with { query }, prefer a result of ~this length (seconds)
+export function playVideo({ url, query, seek, loop, matchDuration } = {}) {
   if (!url && !query) return Promise.resolve({ ok: false, error: "no target" });
-  return call("/play", { body: url ? { url } : { query } });
+  const body = url ? { url } : { query };
+  if (Number.isFinite(seek) && seek > 0) body.seek = Math.floor(seek);
+  if (loop) body.loop = true;
+  if (Number.isFinite(matchDuration) && matchDuration > 0) body.matchDuration = Math.round(matchDuration);
+  return call("/play", { body });
 }
 
 export function stopVideo() {

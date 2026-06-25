@@ -21,6 +21,8 @@ export type TapPlayResult = {
   message?: string;
   tag?: { tagId: string; display?: TapDisplay; tapCount?: number; kind?: string };
   nowPlaying?: { title?: string; artist?: string; art?: string | null; name?: string };
+  // Present when a "visual" toggle tag was tapped (screen on/off, not audio).
+  visual?: { on: boolean; mirroring?: boolean; title?: string; artist?: string; seek?: number; duration?: number; note?: string };
 };
 
 async function asJson(res: Response) {

@@ -89,11 +89,17 @@ describe("Tap PlaySpec validation (round-trip)", () => {
       buildPlaySpec({ intent: "playlist", source: "spotify", playlistUri: "spotify:playlist:abc123" }),
       buildPlaySpec({ intent: "discover", source: "spotify" }),
       buildPlaySpec({ intent: "discover", source: "spotify", seed: "mitski" }),
-      buildPlaySpec({ intent: "library", playlistId: "pl-abc123" })
+      buildPlaySpec({ intent: "library", playlistId: "pl-abc123" }),
+      buildPlaySpec({ intent: "visual" })
     ];
     for (const spec of specs) {
       expect(validatePlaySpec(spec).ok).toBe(true);
     }
+  });
+
+  it("builds + validates a target-less visual toggle spec", () => {
+    expect(buildPlaySpec({ intent: "visual" })).toEqual({ kind: "visual" });
+    expect(validatePlaySpec({ kind: "visual" }).ok).toBe(true);
   });
 
   it("rejects garbage that did not come from buildPlaySpec", () => {

@@ -60,7 +60,11 @@ const playSpecSchema = z.union([
   z.object({ kind: z.literal("discover"), source: z.literal("spotify"), seed: discoverSeed }),
   // A tag bound to one of OUR app-managed (library) playlists — plays its saved
   // tracks. The playlist is editable in the Library, so the tag follows it.
-  z.object({ kind: z.literal("library"), playlistId: libraryPlaylistId })
+  z.object({ kind: z.literal("library"), playlistId: libraryPlaylistId }),
+  // A "visual" toggle tag: plays no audio. Tapping it flips the VPS screen
+  // between mirroring whatever's playing (synced + looped) and off. Stores no
+  // target — the video is chosen live from the current song at tap time.
+  z.object({ kind: z.literal("visual") })
 ]);
 
 export function validatePlaySpec(spec) {
@@ -103,6 +107,10 @@ export function buildPlaySpec(input = {}) {
     const playlistId = String(input.playlistId || "").trim();
     if (!playlistId) throw new Error("A library playlist binding needs a playlistId");
     return { kind: "library", playlistId };
+  }
+
+  if (intent === "visual") {
+    return { kind: "visual" };
   }
 
   if (intent === "album-from-top" || intent === "album-from-track") {

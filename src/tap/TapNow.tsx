@@ -21,6 +21,23 @@ const ERRORS: Record<string, { title: string; body: string; offerConsole?: boole
 
 function mapResult(status: number, body: TapPlayResult, opts: { passwordTried?: boolean } = {}): TapState {
   if (status >= 200 && status < 300 && body.ok) {
+    // Visual toggle tag: no song — report the screen state instead.
+    if (body.visual) {
+      const v = body.visual;
+      return {
+        phase: "playing",
+        debounced: Boolean(body.debounced),
+        display: {
+          title: v.on ? "Visuals on" : "Visuals off",
+          artist: v.on
+            ? (v.mirroring ? `Mirroring ${v.title || "what's playing"}` : (v.note || "Play something, then tap again"))
+            : "Tap again to turn visuals back on",
+          art: null
+        },
+        where: "the VPS screen",
+        tapCount: body.tag?.tapCount
+      };
+    }
     const display = body.tag?.display ?? {};
     return {
       phase: "playing",

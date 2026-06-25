@@ -34,7 +34,7 @@ import { defaultTapStore } from "./tapStore.js";
 import { buildPlaySpec } from "./tapPlaySpec.js";
 import { playTapTarget } from "./tapPlayback.js";
 import { verifySun } from "./tapSun.js";
-import { playVideo as playScreenVideo } from "./screenClient.js";
+import { playVideo as playScreenVideo, stopVideo as stopScreenVideo } from "./screenClient.js";
 import { checkAccess } from "./requireAccess.js";
 
 // Squeezebox Tap is its OWN app (a sister of the jukebox), so it gates on its OWN
@@ -88,6 +88,9 @@ const TAP_DEBOUNCE_MS = Number(process.env.TAP_DEBOUNCE_MS || 3000);
 // right now. When a DIFFERENT tag is tapped we bookmark this one's position
 // first, so it can be picked up later — the "vinyl bookmark" behavior.
 let activeResumeTagId = null;
+// "Visual" mode: whether the VPS screen is currently mirroring what's playing.
+// A visual toggle tag flips this; it's runtime-only (the panel idles on restart).
+let visualOn = false;
 
 const requiredText = z.string().trim().min(1);
 const optionalText = z.preprocess(
@@ -2242,6 +2245,18 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     }
 
     try {
+      // VISUAL TOGGLE TAG: never touches the Boom. It flips the VPS screen
+      // between mirroring what's playing (synced + looped, length-matched) and
+      // off — so it short-circuits before any of the audio/volume/cache logic.
+      if (tag.playSpec?.kind === "visual") {
+        const visual = await toggleVisualMode(lms, playerId);
+        tapPlayState.set(tagId, { lastPlayedAt: Date.now() });
+        const updated = tapStore.recordTap(tagId);
+        logEvent("tap.play.ok", { tagId, kind: "visual", visualOn: visual.on });
+        res.json({ ok: true, played: true, visual, tag: publicTapTag(updated) });
+        return;
+      }
+
       const policy = tag.policy || {};
       // Normalize loudness: a tag's own volume wins; otherwise fall back to the
       // global tap volume (default 75%) so taps don't blast or whisper at whatever
@@ -4200,6 +4215,40 @@ function maybePlayTapVideo(tag, settings) {
     const title = tag?.display?.title;
     if (artist && title) playScreenVideo({ query: `${artist} ${title} official video` }).catch(() => {});
   } catch { /* the screen is best-effort — never let it disturb a tap */ }
+}
+
+// Visual toggle tag: flip the VPS screen between "mirror what's playing" and off.
+// Plays NO audio (the Boom keeps the sound). Turning ON reads the current song —
+// title/artist for a length-matched video search, and live position so the video
+// can start at the song's current point and loop in sync. Best-effort throughout.
+async function toggleVisualMode(lms, playerId) {
+  visualOn = !visualOn;
+  if (!visualOn) {
+    await stopScreenVideo().catch(() => {});
+    return { on: false };
+  }
+  let np = {};
+  try { await refreshLms(lms, { force: true, skipTrackInfo: true }); np = appState.nowPlaying || {}; } catch { /* read what we can */ }
+  let elapsed = 0;
+  let duration = Number(np.duration) || 0;
+  let playing = false;
+  try {
+    const pos = await lms.livePosition(playerId);
+    if (pos) {
+      elapsed = Math.max(0, Math.floor((pos.positionMs || 0) / 1000));
+      duration = Math.round((pos.durationMs || 0) / 1000) || duration;
+      playing = pos.mode === "play";
+    }
+  } catch { /* couldn't read position — fall back to sync-from-0 */ }
+  if (!np.title || !playing) {
+    // Visuals are armed but nothing's playing to mirror — leave the panel idle;
+    // tap again once music is on and it'll sync.
+    await stopScreenVideo().catch(() => {});
+    return { on: true, mirroring: false, note: "play something to mirror" };
+  }
+  const query = `${[np.artist, np.title].filter(Boolean).join(" ")} official video`;
+  await playScreenVideo({ query, matchDuration: duration || undefined, seek: elapsed, loop: true }).catch(() => {});
+  return { on: true, mirroring: true, title: np.title, artist: np.artist, seek: elapsed, duration };
 }
 
 function stopGeneratedPlayback() {

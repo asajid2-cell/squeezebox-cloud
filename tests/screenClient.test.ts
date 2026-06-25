@@ -40,6 +40,18 @@ describe("screenClient", () => {
     expect(JSON.parse(calls[0].init.body)).toEqual({ url: "https://u" });
   });
 
+  it("forwards seek/loop/matchDuration (for the visual sync mode)", async () => {
+    mockFetch(() => okJson());
+    await playVideo({ query: "artist title official video", seek: 45, loop: true, matchDuration: 200 });
+    expect(JSON.parse(calls[0].init.body)).toEqual({ query: "artist title official video", seek: 45, loop: true, matchDuration: 200 });
+  });
+
+  it("omits no-op options (seek 0 / loop false) from the body", async () => {
+    mockFetch(() => okJson());
+    await playVideo({ url: "https://x", seek: 0, loop: false });
+    expect(JSON.parse(calls[0].init.body)).toEqual({ url: "https://x" });
+  });
+
   it("does not call the daemon when there's no target", async () => {
     mockFetch(() => okJson());
     const res = await playVideo({});

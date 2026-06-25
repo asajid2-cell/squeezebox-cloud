@@ -649,11 +649,15 @@ function TagsView({ refreshKey, onRebind }: { refreshKey: number; onRebind: (t: 
                   : t.playSpec?.kind === "playlist" ? "Playlist"
                   : t.playSpec?.kind === "library" ? "Library playlist"
                   : t.playSpec?.kind === "discover" ? "Surprise"
+                  : t.playSpec?.kind === "visual" ? "Visual toggle"
                   : "Single song"}</span>
                 <span>Tapped {t.tapCount ?? 0}×</span>
                 {!t.enabled ? <span style={{ color: "var(--amber)" }}>Off</span> : null}
               </div>
               <div className="tap-card__behavior">
+                {t.playSpec?.kind === "visual" ? (
+                  <span className="tap-card__sub">Toggle · mirrors what's playing</span>
+                ) : null}
                 {t.playSpec?.kind === "track" ? (
                   <div className="tap-toggle" role="group" aria-label="Play mode">
                     <button type="button" aria-pressed={(t.policy?.playMode || "replace") === "replace"} onClick={() => setPolicy(t, { playMode: "replace" })} disabled={busyId === t.tagId}>Play</button>
@@ -668,6 +672,7 @@ function TagsView({ refreshKey, onRebind }: { refreshKey: number; onRebind: (t: 
                     </div>
                   </label>
                 ) : null}
+                {t.playSpec?.kind !== "visual" ? (
                 <label className="tap-vol">Vol
                   <select value={t.policy?.volume ?? ""} aria-label={`Volume for ${t.display?.title || "tag"}`} disabled={busyId === t.tagId}
                     onChange={(e) => setPolicy(t, { volume: e.target.value === "" ? null : Number(e.target.value) })}>
@@ -675,6 +680,7 @@ function TagsView({ refreshKey, onRebind }: { refreshKey: number; onRebind: (t: 
                     {[20, 30, 40, 50, 60, 70, 75, 80, 90, 100].map((v) => <option key={v} value={v}>{v}</option>)}
                   </select>
                 </label>
+                ) : null}
               </div>
               <div className="tap-card__actions">
                 <button className="tap-btn" onClick={() => onRebind(t)}>Re-bind</button>
@@ -975,6 +981,76 @@ function LibraryView({ onRefreshTags }: { onRefreshTags: () => void }) {
   );
 }
 
+// ---------- visual ----------
+// "Visual" tags are toggles: tap to mirror what's playing on the VPS screen
+// (synced + looping, length-matched), tap again to switch it off. They bind no
+// album — the video is chosen live from the current song each time.
+function VisualView() {
+  const [made, setMade] = useState<{ display: SearchItem; tagId: string; token: string } | null>(null);
+  const [tags, setTags] = useState<TapTag[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const load = useCallback(async () => {
+    setTags((await listTags()).filter((t) => t.playSpec?.kind === "visual"));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const create = async () => {
+    setBusy(true); setError("");
+    const display: SearchItem = { title: "Visuals", artist: "Tap to mirror what's playing", art: null };
+    const res = await createTag({ intent: "visual", display, label: "Visual toggle" });
+    setBusy(false);
+    if (res.status >= 200 && res.status < 300 && res.body?.tag) {
+      setMade({ display, tagId: res.body.tag.tagId, token: res.body.token });
+    } else {
+      setError(res.body?.error || "Couldn't create the visual tag.");
+    }
+  };
+
+  if (made) {
+    return <WrittenTagCard display={made.display} tagId={made.tagId} token={made.token} title="A visuals tag" backLabel="Back to visuals" onBack={() => { setMade(null); load(); }} />;
+  }
+
+  return (
+    <section className="tap-main" aria-label="Visual">
+      <header className="tap-head">
+        <span className="tap-head__eyebrow">Visual</span>
+        <h1 className="tap-head__title">Screen visuals</h1>
+        <p className="tap-head__sub">A visuals tag is a <strong>toggle</strong>. Tap it and the VPS screen mirrors whatever's playing — a length-matched music video, started at the song's current spot and looping. Tap again to switch the screen off. It plays no audio; your Boom keeps the sound.</p>
+      </header>
+
+      <div className="tap-card" style={{ maxWidth: "40rem", display: "grid", gap: 12 }}>
+        <div className="tap-setting__text">
+          <strong>Make a visuals tag</strong>
+          <span>Stick it anywhere. One tap starts visuals synced to the song; the next tap stops them. No binding — it always follows what's playing right now.</span>
+        </div>
+        <div>
+          <button className="tap-btn tap-btn--primary" onClick={create} disabled={busy}>{busy ? "Creating…" : "Create a visuals tag"}</button>
+        </div>
+        {error ? <div role="alert" style={{ color: "var(--amber, #e0a96d)" }}>{error}</div> : null}
+      </div>
+
+      <div style={{ marginTop: 18 }}>
+        <h2 className="tap-head__title" style={{ fontSize: "1.1rem" }}>Your visuals tags</h2>
+        {tags === null ? <div className="tap-card__meta"><span className="tap-spinner" aria-hidden="true" /> Loading…</div>
+          : tags.length === 0 ? <div className="tap-empty"><strong>None yet.</strong><span>Create one above, then write it to a tag.</span></div>
+          : <div className="tap-grid">{tags.map((t) => (
+              <div className="tap-card" key={t.tagId}>
+                <div className="tap-card__text">
+                  <span className="tap-card__title">{t.display?.title || "Visuals"}</span>
+                  <span className="tap-card__sub">Visual toggle · tapped {t.tapCount ?? 0}×</span>
+                </div>
+                <div className="tap-card__actions">
+                  <button className="tap-btn" onClick={() => { if (t.token) navigator.clipboard?.writeText(tapUrlFor(t.tagId, t.token)).catch(() => {}); }}>Copy link</button>
+                </div>
+              </div>
+            ))}</div>}
+      </div>
+    </section>
+  );
+}
+
 // ---------- settings ----------
 function SettingsView() {
   const [s, setS] = useState<TapSettings | null>(null);
@@ -1113,7 +1189,7 @@ function BackupSection() {
 // ---------- shell ----------
 export function TapConsole() {
   const [session, setSession] = useState<TapSession | "loading">("loading");
-  const [view, setView] = useState<"tags" | "write" | "library" | "analytics" | "print" | "settings">("tags");
+  const [view, setView] = useState<"tags" | "write" | "library" | "visual" | "analytics" | "print" | "settings">("tags");
   const [refreshKey, setRefreshKey] = useState(0);
   // When set, the Write view operates in re-point mode against this tag.
   const [rebindTarget, setRebindTarget] = useState<{ tagId: string; title?: string } | null>(null);
@@ -1142,7 +1218,7 @@ export function TapConsole() {
   };
   // Navigating the nav always clears any in-progress re-point so "Write a tag"
   // starts a fresh binding, not a re-point of the last tag.
-  const navItem = (key: "tags" | "write" | "library" | "analytics" | "print" | "settings", label: string) => (
+  const navItem = (key: "tags" | "write" | "library" | "visual" | "analytics" | "print" | "settings", label: string) => (
     <a className="tap-nav__item" href={`#${key}`} aria-current={view === key ? "page" : undefined} onClick={(e) => { e.preventDefault(); setRebindTarget(null); setView(key); }}>{label}</a>
   );
 
@@ -1153,6 +1229,7 @@ export function TapConsole() {
         {navItem("tags", "Tags")}
         {navItem("write", "Write a tag")}
         {navItem("library", "Library")}
+        {navItem("visual", "Visual")}
         {navItem("analytics", "Analytics")}
         {navItem("print", "Print labels")}
         {navItem("settings", "Settings")}
@@ -1162,6 +1239,7 @@ export function TapConsole() {
       </nav>
       {view === "tags" ? <TagsView refreshKey={refreshKey} onRebind={(tag) => { setRebindTarget({ tagId: tag.tagId, title: tag.display?.title }); setView("write"); }} />
         : view === "library" ? <LibraryView onRefreshTags={() => setRefreshKey((k) => k + 1)} />
+        : view === "visual" ? <VisualView />
         : view === "analytics" ? <AnalyticsView />
         : view === "print" ? <PrintLabelsView />
         : view === "settings" ? <SettingsView />
