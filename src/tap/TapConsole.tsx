@@ -533,11 +533,19 @@ function TagEditForm({ tag, onSaved, onCancel }: { tag: TapTag; onSaved: () => v
   const [artist, setArtist] = useState(tag.display?.artist || "");
   const [label, setLabel] = useState(tag.label || "");
   const [art, setArt] = useState(tag.display?.art || "");
+  // Screen video: "" = auto-find, "off" = never, anything else = a specific URL.
+  const [video, setVideo] = useState(tag.policy?.video || "");
+  const videoMode: "auto" | "off" | "url" = video === "" ? "auto" : video === "off" ? "off" : "url";
   const [busy, setBusy] = useState(false);
 
   const save = async () => {
     setBusy(true);
-    await updateTag(tag.tagId, { display: { ...tag.display, title: title.trim(), artist: artist.trim(), art: art.trim() || null }, label: label.trim() });
+    await updateTag(tag.tagId, {
+      display: { ...tag.display, title: title.trim(), artist: artist.trim(), art: art.trim() || null },
+      label: label.trim(),
+      // Carry forward the existing play behavior; only video changes here.
+      policy: { playMode: tag.policy?.playMode || "replace", volume: tag.policy?.volume ?? null, resume: tag.policy?.resume ?? false, video: video.trim() },
+    });
     setBusy(false);
     onSaved();
   };
@@ -555,6 +563,17 @@ function TagEditForm({ tag, onSaved, onCancel }: { tag: TapTag; onSaved: () => v
       {field("Artist", artist, setArtist)}
       {field("Label (your note)", label, setLabel)}
       {field("Cover image URL", art, setArt, "https://… (blank = icon)")}
+      <label className="tap-signin__field">
+        <span className="tap-signin__label">Screen video <span style={{ opacity: 0.6, fontWeight: 400 }}>(when “Screen video” is on in Settings)</span></span>
+        <div className="tap-toggle" role="group" aria-label="Screen video">
+          <button type="button" aria-pressed={videoMode === "auto"} onClick={() => setVideo("")}>Auto-find</button>
+          <button type="button" aria-pressed={videoMode === "off"} onClick={() => setVideo("off")}>Off</button>
+          <button type="button" aria-pressed={videoMode === "url"} onClick={() => setVideo(videoMode === "url" ? video : "https://")}>Set URL</button>
+        </div>
+      </label>
+      {videoMode === "url" ? (
+        <div className="tap-field"><input value={video} onChange={(e) => setVideo(e.target.value)} placeholder="https://youtube.com/watch?v=…" aria-label="Screen video URL" /></div>
+      ) : null}
       <div className="tap-card__actions">
         <button className="tap-btn tap-btn--primary" onClick={save} disabled={busy}>Save</button>
         <button className="tap-btn tap-btn--ghost" onClick={onCancel} disabled={busy}>Cancel</button>
@@ -583,9 +602,12 @@ function TagsView({ refreshKey, onRebind }: { refreshKey: number; onRebind: (t: 
   const toggle = async (t: TapTag) => { setBusyId(t.tagId); await updateTag(t.tagId, { enabled: !t.enabled }); await load(); setBusyId(""); };
   const remove = async (t: TapTag) => { if (!confirm(`Delete the tag for "${t.display?.title || t.tagId}"?`)) return; setBusyId(t.tagId); await deleteTag(t.tagId); await load(); setBusyId(""); };
   const copy = (t: TapTag) => { if (t.token) navigator.clipboard?.writeText(tapUrlFor(t.tagId, t.token)).catch(() => {}); };
-  const setPolicy = async (t: TapTag, patch: { playMode?: "replace" | "queue"; volume?: number | null; resume?: boolean }) => {
+  const setPolicy = async (t: TapTag, patch: { playMode?: "replace" | "queue"; volume?: number | null; resume?: boolean; video?: string }) => {
     setBusyId(t.tagId);
-    await updateTag(t.tagId, { policy: { playMode: t.policy?.playMode || "replace", volume: t.policy?.volume ?? null, resume: t.policy?.resume ?? false, ...patch } });
+    const policy: { playMode: "replace" | "queue"; volume: number | null; resume: boolean; video?: string } =
+      { playMode: t.policy?.playMode || "replace", volume: t.policy?.volume ?? null, resume: t.policy?.resume ?? false };
+    if (t.policy?.video !== undefined) policy.video = t.policy.video; // don't drop a tag's video on a volume/resume change
+    await updateTag(t.tagId, { policy: { ...policy, ...patch } });
     await load();
     setBusyId("");
   };
@@ -992,6 +1014,14 @@ function SettingsView() {
           <div className="tap-toggle" role="group" aria-label="Party queue">
             <button type="button" aria-pressed={!s.partyQueue} onClick={() => save({ partyQueue: false })}>Replace</button>
             <button type="button" aria-pressed={!!s.partyQueue} onClick={() => save({ partyQueue: true })}>Queue</button>
+          </div>
+        </div>
+
+        <div className="tap-setting">
+          <div className="tap-setting__text"><strong>Screen video</strong><span>{s.screenVideo ? "Taps also play a video on the VPS screen — a tag's own URL, else auto-found." : "Taps never touch the screen."}</span></div>
+          <div className="tap-toggle" role="group" aria-label="Screen video">
+            <button type="button" aria-pressed={!s.screenVideo} onClick={() => save({ screenVideo: false })}>Off</button>
+            <button type="button" aria-pressed={!!s.screenVideo} onClick={() => save({ screenVideo: true })}>On</button>
           </div>
         </div>
 

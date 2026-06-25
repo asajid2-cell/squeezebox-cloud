@@ -151,3 +151,39 @@ describe("Tap store — QoL: party queue, smart resume", () => {
     expect(cleared.savePlaylistId).toBeUndefined();
   });
 });
+
+describe("Tap store — screen video (screend)", () => {
+  it("defaults the global screen-video switch OFF and round-trips it", () => {
+    const store = createTapStore({ file });
+    expect(store.publicSettings().screenVideo).toBe(false);
+    expect(store.setSettings({ screenVideo: true }).screenVideo).toBe(true);
+    expect(store.settings().screenVideo).toBe(true);
+    expect(createTapStore({ file }).publicSettings().screenVideo).toBe(true); // persisted
+  });
+
+  it("omits policy.video by default (= auto-find) and stores 'off' or a URL", () => {
+    const store = createTapStore({ file });
+    const tag = store.create({ playSpec: spec(), display });
+    expect(tag.policy.video).toBeUndefined(); // auto-find by default
+
+    const off = store.update(tag.tagId, { policy: { video: "off" } });
+    expect(off.policy.video).toBe("off");
+
+    const url = store.update(tag.tagId, { policy: { video: "https://youtube.com/watch?v=abc" } });
+    expect(url.policy.video).toBe("https://youtube.com/watch?v=abc");
+
+    // Empty string clears it back to auto-find (field omitted).
+    const auto = store.update(tag.tagId, { policy: { video: "" } });
+    expect(auto.policy.video).toBeUndefined();
+  });
+
+  it("keeps the video setting when other policy bits change, and persists it", () => {
+    const store = createTapStore({ file });
+    const tag = store.create({ playSpec: spec(), display, policy: { video: "off" } });
+    // Changing volume should re-normalize the whole policy with video carried in.
+    const updated = store.update(tag.tagId, { policy: { volume: 60, video: "off" } });
+    expect(updated.policy.video).toBe("off");
+    expect(updated.policy.volume).toBe(60);
+    expect(createTapStore({ file }).get(tag.tagId)?.policy.video).toBe("off"); // persisted
+  });
+});

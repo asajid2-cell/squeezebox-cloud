@@ -31,7 +31,18 @@ function normalizePolicy(policy = {}) {
   // Smart resume (opt-in per tag): an album tag remembers where it left off and
   // picks back up there on the next tap, instead of always restarting from top.
   const resume = Boolean(policy?.resume);
-  return { playMode, volume, resume };
+  // Screen video (per tag, only acts when the global screenVideo switch is on):
+  //   undefined/"" -> auto-find "<artist> <title> official video" (default)
+  //   a URL string -> play that exact video
+  //   "off"        -> this tag never touches the screen
+  let video;
+  if (typeof policy?.video === "string") {
+    const v = policy.video.trim();
+    if (v) video = v;
+  }
+  const out = { playMode, volume, resume };
+  if (video !== undefined) out.video = video;
+  return out;
 }
 
 // A saved playback bookmark for a resume-enabled tag. Clamped to sane values.
@@ -52,7 +63,7 @@ function isImportableTagId(id) {
   return typeof id === "string" && /^[A-Za-z0-9_-]{6,64}$/.test(id) && !RESERVED_TAG_IDS.has(id);
 }
 
-const DEFAULT_SETTINGS = { debounceMs: 3000, partyMode: "open", requirePassword: false, password: "", partyQueue: false, tapVolume: 75 };
+const DEFAULT_SETTINGS = { debounceMs: 3000, partyMode: "open", requirePassword: false, password: "", partyQueue: false, tapVolume: 75, screenVideo: false };
 
 // Runtime Tap settings (clamped + defaulted). The password is never echoed back
 // in plain form by the API — callers expose only `hasPassword`.
@@ -76,7 +87,10 @@ function normalizeSettings(s = {}) {
     // playback — so a room full of people can stack records without cutting
     // each other off. A global flip, independent of each tag's own playMode.
     partyQueue: Boolean(s?.partyQueue),
-    tapVolume
+    tapVolume,
+    // Screen video master switch: when on, taps also play a video on the VPS
+    // panel (per-tag URL, else auto-find). Off = taps never touch the screen.
+    screenVideo: Boolean(s?.screenVideo)
   };
 }
 
@@ -261,7 +275,7 @@ export function createTapStore({ file = defaultFile(), persist: persistEnabled =
 
     // Safe settings for the admin API — never echoes the password back.
     publicSettings() {
-      return { debounceMs: settings.debounceMs, partyMode: settings.partyMode, requirePassword: settings.requirePassword, hasPassword: Boolean(settings.password), partyQueue: settings.partyQueue, tapVolume: settings.tapVolume };
+      return { debounceMs: settings.debounceMs, partyMode: settings.partyMode, requirePassword: settings.requirePassword, hasPassword: Boolean(settings.password), partyQueue: settings.partyQueue, tapVolume: settings.tapVolume, screenVideo: settings.screenVideo };
     },
 
     setSettings(patch = {}) {

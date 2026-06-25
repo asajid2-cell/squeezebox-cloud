@@ -9,7 +9,7 @@ export type TapTag = {
   tapCount?: number;
   lastTappedAt?: string | null;
   playSpec?: { kind?: string; source?: string; albumUri?: string; playlistUri?: string; startIndex?: number; seed?: string };
-  policy?: { playMode?: "replace" | "queue"; volume?: number | null; resume?: boolean };
+  policy?: { playMode?: "replace" | "queue"; volume?: number | null; resume?: boolean; video?: string };
   resumeState?: { index: number; seconds: number; savedAt?: string } | null;
   token?: string;
 };
@@ -170,7 +170,7 @@ export async function getAnalytics(): Promise<TapAnalytics> {
   return (await asJson(res)) as TapAnalytics;
 }
 
-export type TapSettings = { debounceMs: number; partyMode: "open" | "closed"; requirePassword: boolean; hasPassword: boolean; partyQueue?: boolean; tapVolume?: number | null };
+export type TapSettings = { debounceMs: number; partyMode: "open" | "closed"; requirePassword: boolean; hasPassword: boolean; partyQueue?: boolean; tapVolume?: number | null; screenVideo?: boolean };
 
 // The Squeezebox's current now-playing, used to bind "what's playing right now"
 // straight onto a tag.

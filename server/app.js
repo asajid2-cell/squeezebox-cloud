@@ -34,6 +34,7 @@ import { defaultTapStore } from "./tapStore.js";
 import { buildPlaySpec } from "./tapPlaySpec.js";
 import { playTapTarget } from "./tapPlayback.js";
 import { verifySun } from "./tapSun.js";
+import { playVideo as playScreenVideo } from "./screenClient.js";
 import { checkAccess } from "./requireAccess.js";
 
 // Squeezebox Tap is its OWN app (a sister of the jukebox), so it gates on its OWN
@@ -2310,6 +2311,12 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
         if (!partyQueue && !resumeTo) cacheTapTag(lms, tag, playlists).catch(() => {});
       }
 
+      // Screen video (optional, fire-and-forget): when the global switch is on,
+      // also play a video on the VPS panel via screend — the tag's own URL if
+      // set, else auto-find "<artist> <title> official video". The Boom owns
+      // audio; the panel is muted. Never blocks or fails the tap.
+      maybePlayTapVideo(tag, settings);
+
       // Track the resume "owner" of the speaker. A non-resume tag (or a queued
       // append, which doesn't take over) clears ownership.
       activeResumeTagId = !partyQueue && policy.resume && isAlbum ? tagId : null;
@@ -4173,6 +4180,26 @@ function removeGeneratedQueueItems() {
 
 function isGeneratedQueueItem(item) {
   return item?.requestedBy === "smart shuffle" || item?.requestedBy === "shuffle";
+}
+
+// Screen video for a tap (best-effort, via the host screend daemon). Only acts
+// when the global screenVideo switch is on. A tag's policy.video can be a
+// specific URL, "off" to opt out, or empty to auto-find the official video for
+// its artist+title. Album/track tags carry both; generic tags (discover,
+// playlist) have no good auto-query and are skipped unless given a URL.
+function maybePlayTapVideo(tag, settings) {
+  try {
+    if (!settings?.screenVideo) return;
+    const video = tag?.policy?.video;
+    if (video === "off") return;
+    if (typeof video === "string" && /^https?:\/\//i.test(video)) {
+      playScreenVideo({ url: video }).catch(() => {});
+      return;
+    }
+    const artist = tag?.display?.artist;
+    const title = tag?.display?.title;
+    if (artist && title) playScreenVideo({ query: `${artist} ${title} official video` }).catch(() => {});
+  } catch { /* the screen is best-effort — never let it disturb a tap */ }
 }
 
 function stopGeneratedPlayback() {
