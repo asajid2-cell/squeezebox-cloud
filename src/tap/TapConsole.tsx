@@ -1017,13 +1017,13 @@ function VisualView() {
       <header className="tap-head">
         <span className="tap-head__eyebrow">Visual</span>
         <h1 className="tap-head__title">Screen visuals</h1>
-        <p className="tap-head__sub">A visuals tag is a <strong>toggle</strong>. Tap it and the VPS screen mirrors whatever's playing — a length-matched music video, started at the song's current spot and looping. Tap again to switch the screen off. It plays no audio; your Boom keeps the sound.</p>
+        <p className="tap-head__sub">A visuals tag is an <strong>on/off switch</strong> for screen mirroring. Tap it once and the VPS screen follows whatever's playing — a length-matched music video, synced to the song's spot and looping — and <strong>keeps following</strong> as songs change (and pauses when you pause). Tap again to switch it off. It plays no audio; your Boom keeps the sound.</p>
       </header>
 
       <div className="tap-card" style={{ maxWidth: "40rem", display: "grid", gap: 12 }}>
         <div className="tap-setting__text">
           <strong>Make a visuals tag</strong>
-          <span>Stick it anywhere. One tap starts visuals synced to the song; the next tap stops them. No binding — it always follows what's playing right now.</span>
+          <span>Stick it anywhere. One tap turns the watcher on — it re-syncs the screen to every new song until you tap again. No binding; it always follows whatever's playing.</span>
         </div>
         <div>
           <button className="tap-btn tap-btn--primary" onClick={create} disabled={busy}>{busy ? "Creating…" : "Create a visuals tag"}</button>

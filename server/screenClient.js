@@ -51,6 +51,14 @@ export function stopVideo() {
   return call("/stop", { body: {} });
 }
 
+export function pauseVideo() {
+  return call("/pause", { body: {} });
+}
+
+export function resumeVideo() {
+  return call("/resume", { body: {} });
+}
+
 export function screenStatus() {
   return call("/status", { method: "GET" });
 }

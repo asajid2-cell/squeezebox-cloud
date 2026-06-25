@@ -34,7 +34,7 @@ import { defaultTapStore } from "./tapStore.js";
 import { buildPlaySpec } from "./tapPlaySpec.js";
 import { playTapTarget } from "./tapPlayback.js";
 import { verifySun } from "./tapSun.js";
-import { playVideo as playScreenVideo, stopVideo as stopScreenVideo } from "./screenClient.js";
+import { playVideo as playScreenVideo, stopVideo as stopScreenVideo, pauseVideo as pauseScreenVideo, resumeVideo as resumeScreenVideo } from "./screenClient.js";
 import { checkAccess } from "./requireAccess.js";
 
 // Squeezebox Tap is its OWN app (a sister of the jukebox), so it gates on its OWN
@@ -88,9 +88,15 @@ const TAP_DEBOUNCE_MS = Number(process.env.TAP_DEBOUNCE_MS || 3000);
 // right now. When a DIFFERENT tag is tapped we bookmark this one's position
 // first, so it can be picked up later — the "vinyl bookmark" behavior.
 let activeResumeTagId = null;
-// "Visual" mode: whether the VPS screen is currently mirroring what's playing.
-// A visual toggle tag flips this; it's runtime-only (the panel idles on restart).
+// "Visual" mode: a tapped visual tag flips this ON/OFF. While ON, a background
+// watcher follows the Boom — re-syncing the screen to each new song and
+// mirroring play/pause. All runtime-only (the panel idles on restart).
 let visualOn = false;
+let visualTimer = null;     // the watcher's poll interval
+let visualSyncing = false;  // guard so a slow re-sync tick can't overlap the next
+let visualTrackKey = "";    // last-synced "title|artist" — detects track changes
+let visualMode = "";        // last-seen play/pause mode — mirrors it without reloading
+const VISUAL_POLL_MS = Number(process.env.VISUAL_POLL_MS) || 5000;
 
 const requiredText = z.string().trim().min(1);
 const optionalText = z.preprocess(
@@ -4204,6 +4210,7 @@ function isGeneratedQueueItem(item) {
 // playlist) have no good auto-query and are skipped unless given a URL.
 function maybePlayTapVideo(tag, settings) {
   try {
+    if (visualOn) return;            // visual watcher owns the screen — let it follow
     if (!settings?.screenVideo) return;
     const video = tag?.policy?.video;
     if (video === "off") return;
@@ -4217,38 +4224,83 @@ function maybePlayTapVideo(tag, settings) {
   } catch { /* the screen is best-effort — never let it disturb a tap */ }
 }
 
-// Visual toggle tag: flip the VPS screen between "mirror what's playing" and off.
-// Plays NO audio (the Boom keeps the sound). Turning ON reads the current song —
-// title/artist for a length-matched video search, and live position so the video
-// can start at the song's current point and loop in sync. Best-effort throughout.
+const visualTrackKeyOf = (np) => `${np?.title || ""}|${np?.artist || ""}`.trim().toLowerCase();
+
+// One follow step. Reads what's on the Boom and keeps the screen matched to it:
+//   - track changed (or forced)  -> load a fresh length-matched video, seeked to
+//                                    the song's position, looping
+//   - same track, play/pause flip -> mirror it (no reload)
+//   - nothing playing             -> idle the panel but stay armed
+// Best-effort throughout; returns a small summary for the tap response.
+async function syncVisualNow(lms, { force = false } = {}) {
+  if (!visualOn) return { mirroring: false };
+  let playerId;
+  try { playerId = await hotPlayerId(lms); } catch { return { mirroring: false, note: "no speaker" }; }
+  let np = {};
+  try { await refreshLms(lms, { force, minAgeMs: force ? 0 : 2000, skipTrackInfo: true }); np = appState.nowPlaying || {}; } catch { /* read what we can */ }
+  let pos = null;
+  try { pos = await lms.livePosition(playerId); } catch { /* couldn't read position */ }
+  const mode = pos?.mode || "stop";
+  const key = visualTrackKeyOf(np);
+
+  // Same track still on — just keep play/pause in step, don't reload the video.
+  if (!force && key && key === visualTrackKey) {
+    if (mode !== visualMode) {
+      visualMode = mode;
+      if (mode === "pause") await pauseScreenVideo().catch(() => {});
+      else if (mode === "play") await resumeScreenVideo().catch(() => {});
+    }
+    return { mirroring: true, title: np.title, artist: np.artist };
+  }
+
+  // Nothing meaningful playing — idle the panel but keep the watcher armed.
+  if (!np.title || mode === "stop") {
+    visualTrackKey = "";
+    visualMode = mode;
+    await stopScreenVideo().catch(() => {});
+    return { mirroring: false, note: "nothing playing" };
+  }
+
+  // New song (or first sync) — match a fresh video to it and sync to its point.
+  visualTrackKey = key;
+  visualMode = mode;
+  const seek = pos ? Math.max(0, Math.floor((pos.positionMs || 0) / 1000)) : 0;
+  const duration = pos && pos.durationMs ? Math.round(pos.durationMs / 1000) : (Number(np.duration) || 0);
+  const query = `${[np.artist, np.title].filter(Boolean).join(" ")} official video`;
+  if (!visualOn) return { mirroring: false }; // turned off while we were resolving — don't load
+  await playScreenVideo({ query, matchDuration: duration || undefined, seek, loop: true }).catch(() => {});
+  return { mirroring: true, title: np.title, artist: np.artist, seek, duration };
+}
+
+function startVisualWatcher(lms) {
+  if (visualTimer) return;
+  visualTimer = setInterval(() => {
+    if (visualSyncing || !visualOn) return; // skip if a slow re-sync is still running
+    visualSyncing = true;
+    Promise.resolve(syncVisualNow(lms)).catch(() => {}).finally(() => { visualSyncing = false; });
+  }, VISUAL_POLL_MS);
+  visualTimer.unref?.();
+}
+
+function stopVisualWatcher() {
+  if (visualTimer) { clearInterval(visualTimer); visualTimer = null; }
+  visualTrackKey = "";
+  visualMode = "";
+}
+
+// Visual toggle tag: an ON/OFF switch for the "mirror what's playing" mode. ON
+// syncs the screen now and starts a watcher that follows every song change (and
+// play/pause) until it's turned OFF. Plays NO audio — the Boom keeps the sound.
 async function toggleVisualMode(lms, playerId) {
   visualOn = !visualOn;
   if (!visualOn) {
+    stopVisualWatcher();
     await stopScreenVideo().catch(() => {});
     return { on: false };
   }
-  let np = {};
-  try { await refreshLms(lms, { force: true, skipTrackInfo: true }); np = appState.nowPlaying || {}; } catch { /* read what we can */ }
-  let elapsed = 0;
-  let duration = Number(np.duration) || 0;
-  let playing = false;
-  try {
-    const pos = await lms.livePosition(playerId);
-    if (pos) {
-      elapsed = Math.max(0, Math.floor((pos.positionMs || 0) / 1000));
-      duration = Math.round((pos.durationMs || 0) / 1000) || duration;
-      playing = pos.mode === "play";
-    }
-  } catch { /* couldn't read position — fall back to sync-from-0 */ }
-  if (!np.title || !playing) {
-    // Visuals are armed but nothing's playing to mirror — leave the panel idle;
-    // tap again once music is on and it'll sync.
-    await stopScreenVideo().catch(() => {});
-    return { on: true, mirroring: false, note: "play something to mirror" };
-  }
-  const query = `${[np.artist, np.title].filter(Boolean).join(" ")} official video`;
-  await playScreenVideo({ query, matchDuration: duration || undefined, seek: elapsed, loop: true }).catch(() => {});
-  return { on: true, mirroring: true, title: np.title, artist: np.artist, seek: elapsed, duration };
+  const synced = await syncVisualNow(lms, { force: true }).catch(() => ({ mirroring: false }));
+  startVisualWatcher(lms);
+  return { on: true, ...synced };
 }
 
 function stopGeneratedPlayback() {
