@@ -26,6 +26,7 @@ function mapResult(status: number, body: TapPlayResult, opts: { passwordTried?: 
       const v = body.visual;
       const onMsg = v.flow === "fixed"
         ? "Looping your video"
+        : v.flow === "room" ? `Casting room ${v.room || ""} — synced to you`.trim()
         : v.mirroring ? `Mirroring ${v.title || "what's playing"}` : (v.note || "Play something, then tap again");
       return {
         phase: "playing",

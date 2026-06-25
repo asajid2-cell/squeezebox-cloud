@@ -64,9 +64,13 @@ const playSpecSchema = z.union([
   // A "visual" toggle tag: plays no audio, an on/off switch for a screen "flow".
   //   mirror — follow what's playing (video chosen live at tap time)
   //   fixed  — loop one specific video (url)
+  //   room   — cast a Watch Together room to the screen, synced to the host
+  //            (rooms = the room code(s) this tag may cast, so it never grabs a
+  //            stranger's stream)
   // A bare {kind:"visual"} (no flow) is treated as "mirror" for back-compat.
   z.object({ kind: z.literal("visual"), flow: z.literal("mirror").optional() }),
-  z.object({ kind: z.literal("visual"), flow: z.literal("fixed"), url: z.string().url() })
+  z.object({ kind: z.literal("visual"), flow: z.literal("fixed"), url: z.string().url() }),
+  z.object({ kind: z.literal("visual"), flow: z.literal("room"), rooms: z.array(z.string().min(1).max(80)).min(1).max(10) })
 ]);
 
 export function validatePlaySpec(spec) {
@@ -112,11 +116,17 @@ export function buildPlaySpec(input = {}) {
   }
 
   if (intent === "visual") {
-    const flow = input.flow === "fixed" ? "fixed" : "mirror";
+    const flow = input.flow === "fixed" ? "fixed" : input.flow === "room" ? "room" : "mirror";
     if (flow === "fixed") {
       const url = String(input.url || "").trim();
       if (!/^https?:\/\//i.test(url)) throw new Error("A fixed-loop visual needs a video URL");
       return { kind: "visual", flow: "fixed", url };
+    }
+    if (flow === "room") {
+      const raw = Array.isArray(input.rooms) ? input.rooms : String(input.rooms || "").split(/[,\s]+/);
+      const rooms = raw.map((r) => String(r).trim()).filter(Boolean).slice(0, 10);
+      if (!rooms.length) throw new Error("A room-cast visual needs at least one room code");
+      return { kind: "visual", flow: "room", rooms };
     }
     return { kind: "visual", flow: "mirror" };
   }

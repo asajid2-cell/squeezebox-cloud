@@ -987,7 +987,8 @@ function LibraryView({ onRefreshTags }: { onRefreshTags: () => void }) {
 // a new one later = a new entry here + a buildPlaySpec branch + a handler case.
 const VISUAL_FLOWS = [
   { id: "mirror", label: "Mirror what's playing", blurb: "Follows the music — a length-matched video, synced to the song and looping, re-syncing as songs change and pausing when you pause." },
-  { id: "fixed", label: "Fixed video loop", blurb: "Loops one specific video the whole time it's on. Good for ambient or a set visual — no music needed." }
+  { id: "fixed", label: "Fixed video loop", blurb: "Loops one specific video the whole time it's on. Good for ambient or a set visual — no music needed." },
+  { id: "room", label: "Cast a Watch Together room", blurb: "Joins one of your Watch Together rooms and plays it on the VPS screen, synced live to you — play, pause and seek all follow the host. Set which room code(s) it may cast so it only ever moves your own room to the screen." }
 ] as const;
 type VisualFlow = (typeof VISUAL_FLOWS)[number]["id"];
 
@@ -996,6 +997,7 @@ function VisualView() {
   const [tags, setTags] = useState<TapTag[] | null>(null);
   const [flow, setFlow] = useState<VisualFlow>("mirror");
   const [url, setUrl] = useState("");
+  const [rooms, setRooms] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -1006,11 +1008,14 @@ function VisualView() {
 
   const create = async () => {
     setBusy(true); setError("");
-    const display: SearchItem = flow === "fixed"
-      ? { title: "Visual loop", artist: "Loops a fixed video", art: null }
+    const display: SearchItem =
+      flow === "fixed" ? { title: "Visual loop", artist: "Loops a fixed video", art: null }
+      : flow === "room" ? { title: "Cast room", artist: `Casts room ${rooms.trim() || "…"}`, art: null }
       : { title: "Visuals", artist: "Mirrors what's playing", art: null };
-    const payload: Record<string, unknown> = { intent: "visual", flow, display, label: flow === "fixed" ? "Visual loop" : "Visual mirror" };
+    const label = flow === "fixed" ? "Visual loop" : flow === "room" ? "Cast room" : "Visual mirror";
+    const payload: Record<string, unknown> = { intent: "visual", flow, display, label };
     if (flow === "fixed") payload.url = url.trim();
+    if (flow === "room") payload.rooms = rooms.trim();
     const res = await createTag(payload);
     setBusy(false);
     if (res.status >= 200 && res.status < 300 && res.body?.tag) {
@@ -1047,8 +1052,14 @@ function VisualView() {
         {flow === "fixed" ? (
           <div className="tap-field"><input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://youtube.com/watch?v=… (the video to loop)" aria-label="Fixed loop video URL" /></div>
         ) : null}
+        {flow === "room" ? (
+          <label className="tap-signin__field">
+            <span className="tap-signin__label">Room code(s) <span style={{ opacity: 0.6, fontWeight: 400 }}>— only these rooms cast (comma-separated)</span></span>
+            <div className="tap-field"><input value={rooms} onChange={(e) => setRooms(e.target.value)} placeholder="tv" aria-label="Watch Together room codes" /></div>
+          </label>
+        ) : null}
         <div>
-          <button className="tap-btn tap-btn--primary" onClick={create} disabled={busy || (flow === "fixed" && !url.trim())}>{busy ? "Creating…" : "Create a visuals tag"}</button>
+          <button className="tap-btn tap-btn--primary" onClick={create} disabled={busy || (flow === "fixed" && !url.trim()) || (flow === "room" && !rooms.trim())}>{busy ? "Creating…" : "Create a visuals tag"}</button>
         </div>
         {error ? <div role="alert" style={{ color: "var(--amber, #e0a96d)" }}>{error}</div> : null}
       </div>
@@ -1061,7 +1072,7 @@ function VisualView() {
               <div className="tap-card" key={t.tagId}>
                 <div className="tap-card__text">
                   <span className="tap-card__title">{t.display?.title || "Visuals"}</span>
-                  <span className="tap-card__sub">{t.playSpec?.flow === "fixed" ? "Fixed loop" : "Mirror what's playing"} · tapped {t.tapCount ?? 0}×</span>
+                  <span className="tap-card__sub">{t.playSpec?.flow === "fixed" ? "Fixed loop" : t.playSpec?.flow === "room" ? `Cast room ${(t.playSpec?.rooms || []).join(", ")}` : "Mirror what's playing"} · tapped {t.tapCount ?? 0}×</span>
                 </div>
                 <div className="tap-card__actions">
                   <button className="tap-btn" onClick={() => { if (t.token) navigator.clipboard?.writeText(tapUrlFor(t.tagId, t.token)).catch(() => {}); }}>Copy link</button>

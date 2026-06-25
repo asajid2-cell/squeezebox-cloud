@@ -112,6 +112,19 @@ describe("Tap PlaySpec validation (round-trip)", () => {
     expect(validatePlaySpec({ kind: "visual", flow: "fixed" }).ok).toBe(false);
   });
 
+  it("builds a room-cast visual flow from a code string or array", () => {
+    expect(buildPlaySpec({ intent: "visual", flow: "room", rooms: "tv" })).toEqual({ kind: "visual", flow: "room", rooms: ["tv"] });
+    expect(buildPlaySpec({ intent: "visual", flow: "room", rooms: "tv, lounge bedroom" }).rooms).toEqual(["tv", "lounge", "bedroom"]);
+    expect(buildPlaySpec({ intent: "visual", flow: "room", rooms: ["tv"] })).toEqual({ kind: "visual", flow: "room", rooms: ["tv"] });
+    expect(validatePlaySpec({ kind: "visual", flow: "room", rooms: ["tv"] }).ok).toBe(true);
+  });
+
+  it("rejects a room-cast flow with no room codes", () => {
+    expect(() => buildPlaySpec({ intent: "visual", flow: "room", rooms: "" })).toThrow(/room code/i);
+    expect(validatePlaySpec({ kind: "visual", flow: "room", rooms: [] }).ok).toBe(false);
+    expect(validatePlaySpec({ kind: "visual", flow: "room" }).ok).toBe(false);
+  });
+
   it("rejects garbage that did not come from buildPlaySpec", () => {
     expect(validatePlaySpec({ kind: "album-from-top" }).ok).toBe(false);
     expect(validatePlaySpec({ kind: "nope" }).ok).toBe(false);

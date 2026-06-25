@@ -59,6 +59,10 @@ export function resumeVideo() {
   return call("/resume", { body: {} });
 }
 
+export function seekVideo(pos) {
+  return call("/seek", { body: { pos } });
+}
+
 export function screenStatus() {
   return call("/status", { method: "GET" });
 }

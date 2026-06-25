@@ -36,6 +36,7 @@ import { buildPlaySpec } from "./tapPlaySpec.js";
 import { playTapTarget } from "./tapPlayback.js";
 import { verifySun } from "./tapSun.js";
 import { playVideo as playScreenVideo, stopVideo as stopScreenVideo, pauseVideo as pauseScreenVideo, resumeVideo as resumeScreenVideo } from "./screenClient.js";
+import { startRoomCast, stopRoomCast } from "./roomCast.js";
 import { checkAccess } from "./requireAccess.js";
 
 // Squeezebox Tap is its OWN app (a sister of the jukebox), so it gates on its OWN
@@ -4355,12 +4356,14 @@ async function toggleVisualMode(lms, tag) {
     visualTagId = "";
     visualFlow = "";
     stopVisualWatcher();
+    stopRoomCast();
     await stopScreenVideo().catch(() => {});
     return { on: false };
   }
 
-  // Otherwise turn on (or switch to) this tag's flow.
+  // Otherwise turn on (or switch to) this tag's flow. Tear down any prior flow.
   stopVisualWatcher();
+  stopRoomCast();
   visualOn = true;
   visualTagId = tagId;
   visualFlow = flow;
@@ -4369,6 +4372,15 @@ async function toggleVisualMode(lms, tag) {
     const url = tag?.playSpec?.url;
     if (url) await playScreenVideo({ url, loop: true }).catch(() => {});
     return { on: true, flow: "fixed" };
+  }
+
+  if (flow === "room") {
+    // Cast a Watch Together room — join it and follow the host. Only this tag's
+    // configured code(s) are ever cast (gating); v1 follows the first.
+    const codes = Array.isArray(tag?.playSpec?.rooms) ? tag.playSpec.rooms.filter(Boolean) : [];
+    const code = codes[0];
+    if (code) startRoomCast(code);
+    return { on: true, flow: "room", room: code || null };
   }
 
   // Default: mirror what's playing, then follow it.
