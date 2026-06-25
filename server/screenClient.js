@@ -38,12 +38,14 @@ async function call(path, { method = "POST", body } = {}) {
 //   seek          start the video this many seconds in (sync to a song)
 //   loop          repeat the video forever
 //   matchDuration with { query }, prefer a result of ~this length (seconds)
-export function playVideo({ url, query, seek, loop, matchDuration } = {}) {
+export function playVideo({ url, query, seek, loop, matchDuration, video, audio = false } = {}) {
   if (!url && !query) return Promise.resolve({ ok: false, error: "no target" });
   const body = url ? { url } : { query };
   if (Number.isFinite(seek) && seek > 0) body.seek = Math.floor(seek);
   if (loop) body.loop = true;
   if (Number.isFinite(matchDuration) && matchDuration > 0) body.matchDuration = Math.round(matchDuration);
+  if (video === false) body.video = false;
+  body.audio = audio; // the Boom/host owns audio for these flows — muted on the TV unless told otherwise
   return call("/play", { body });
 }
 
