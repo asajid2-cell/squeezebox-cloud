@@ -539,6 +539,45 @@ describe("Cloud Squeeze UI", () => {
     expect(within(untimedRow).queryByText("3:33")).not.toBeInTheDocument();
   });
 
+  it("re-runs a Spotify search automatically once Spotify finishes initializing (the cold-boot fix)", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const defaultFetch = fetchMock.getMockImplementation();
+    let stateCalls = 0;
+    fetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (url.includes("/api/state")) {
+        stateCalls += 1;
+        const ready = stateCalls > 1; // first poll: "Not checked yet"; later polls: ready
+        return jsonResponse({
+          player: { id: "p1", name: "Test Speaker", connected: true, online: true, mode: "play", volume: 68 },
+          nowPlaying: { id: "t1", title: "X", artist: "Y", album: "", source: "Spotify", duration: 100, elapsed: 0, canSeek: true },
+          queue: [], recentPicks: [],
+          schedule: { current: { name: "Open Queue", until: "10:00 PM", requestsPaused: false }, next: { name: "Quiet", time: "", requestsPaused: false } },
+          rules: [],
+          services: {
+            spotify: { configured: ready, reachable: ready, detail: ready ? "ok" : "Not checked yet" },
+            localLibrary: { root: "Downloads", reachable: true, trackCount: 2 },
+            musicInfo: { configured: false, reachable: false, detail: "" }
+          },
+          trackInfo: { artistBio: "", albumReview: "", lyrics: "" },
+          admin: { publicRequests: true, maxQueuePerUser: 3, moderation: "basic", scheduleEnabled: true }
+        });
+      }
+      if (url.includes("/api/spotify/search")) {
+        const track = { id: "s-cold", title: "Cold Start Hit", artist: "Tester", source: "Spotify", uri: "spotify:track:0123456789abcdefghijAB", kind: "track" };
+        return jsonResponse({ results: [track], groups: { tracks: [track], artists: [], albums: [], playlists: [] } });
+      }
+      return defaultFetch?.(url, options) ?? jsonResponse({ ok: true });
+    });
+    // The default source IS Spotify, so on a cold load the app is searching Spotify
+    // while it's still initializing — exactly the bug. Type a query in that window.
+    render(<App />);
+    await userEvent.type(await screen.findByLabelText("Search music"), "hit");
+    // The first state poll reports Spotify not-yet-ready, so the search returns nothing.
+    // A later poll flips it ready; the search effect depends on that readiness, so it
+    // re-runs on its own and the result appears WITHOUT the user retyping or refreshing.
+    expect(await screen.findByText("Cold Start Hit", {}, { timeout: 5000 })).toBeInTheDocument();
+  });
+
   it("surfaces failed library searches instead of rendering empty results", async () => {
     const fetchMock = vi.mocked(fetch);
     const defaultFetch = fetchMock.getMockImplementation();
