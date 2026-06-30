@@ -44,7 +44,7 @@ async function loadSpotifyDurationCache() {
 }
 loadSpotifyDurationCache();
 
-function rememberSpotifyDuration(uri, seconds) {
+export function rememberSpotifyDuration(uri, seconds) {
   const key = spotifyDurationKey(uri);
   const value = Math.round(Number(seconds) || 0);
   if (!key || value <= 0 || spotifyDurationCache.get(key) === value) return;

@@ -18,6 +18,7 @@ import fs from "node:fs/promises";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { rememberSpotifyDuration } from "./lmsClient.js";
 
 const ARCHIVE_DIR = resolveArchiveDir();
 const QUEUE_FILE = path.join(ARCHIVE_DIR, "queue.json");
@@ -960,7 +961,11 @@ export async function spotifyAlbumTracksWebApi(albumUri) {
     while (url && out.length < 100) {
       const j = await spotifyGet(url, token);
       for (const t of j.items || []) {
-        if (t?.uri) out.push({ uri: t.uri, title: t.name || "", artist: (t.artists || []).map((a) => a.name).filter(Boolean).join(", ") });
+        if (!t?.uri) continue;
+        out.push({ uri: t.uri, title: t.name || "", artist: (t.artists || []).map((a) => a.name).filter(Boolean).join(", ") });
+        // The album endpoint also carries duration_ms — bank every track's real length
+        // so search/browse rows for any song on a tapped album show its time, not blank.
+        if (t.duration_ms) rememberSpotifyDuration(t.uri, t.duration_ms / 1000);
       }
       url = j.next;
     }
