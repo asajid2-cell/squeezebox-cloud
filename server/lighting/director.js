@@ -18,7 +18,9 @@ import { requestBeats } from "./beats.js";
 const state = {
   key: "",          // track currently expressed on the strip
   busy: false,      // a resolve/push is in flight
+  idle: false,      // strip is currently resting (idle pushed) — so we don't re-push every poll
   lastSpec: null,
+  lastMeta: null,   // { track, source } of the last scene, for the beat-sync re-push + status
   posMs0: 0,        // playback position at the stage-1 push...
   anchorMs: 0       // ...captured at this wall-clock, to extrapolate "now" for stage 2
 };
@@ -59,14 +61,19 @@ export async function onTrack(track, { posMs = 0, policy = null, settings = null
     if (!(await deviceOnline())) return { ok: false, skipped: "device-offline" };
     const base = await resolveRoutine(track);
     const spec = mergeOverrides(base, policy, settings);
+    // meta rides along on the scene so the hub (and the /led control page) can show
+    // "what program is running" — the song + how the routine was chosen. The phone's
+    // scene engine ignores unknown fields.
+    const meta = { track: `${track.artist ? track.artist + " — " : ""}${track.title}`.trim(), source: base.source };
     const scene = {
       mode: spec.mode, palette: spec.palette, bpm: spec.bpm,
       speed: spec.speed, energy: spec.energy, brightness: spec.brightness,
-      posMs: Math.max(0, Math.round(posMs))
+      posMs: Math.max(0, Math.round(posMs)), meta
     };
     const res = await pushScene(scene);
     if (res && res.ok) {
-      state.key = key; state.lastSpec = spec; state.posMs0 = scene.posMs; state.anchorMs = Date.now();
+      state.key = key; state.idle = false; state.lastSpec = spec; state.lastMeta = meta;
+      state.posMs0 = scene.posMs; state.anchorMs = Date.now();
       // Stage 2: upgrade to phase-locked beat-sync once the real grid is ready.
       const beatSync = !(policy && policy.beatSync === false) && !(settings && settings.beatSync === false);
       if (beatSync) requestBeats(track, (grid) => applyBeats(key, spec, grid));
@@ -91,18 +98,25 @@ async function applyBeats(key, spec, grid) {
     brightness: spec.brightness,
     beats: grid.beats,
     sections: grid.sections || [],
-    posMs
+    posMs,
+    meta: { ...(state.lastMeta || {}), beatSync: true }
   });
 }
 
-/** Nothing playing: rest the strip per the global idle setting. */
-export async function onIdle(settings = null) {
-  state.key = "";
-  if (!lightingOn(null, settings)) return;
+/**
+ * Nothing playing: rest the strip per the global idle setting. Deduped — once the
+ * strip is resting we DON'T re-push every poll (that re-fired the ambient scene each
+ * 5s tick = lights "tripping" with nothing playing). Pass force to re-assert.
+ */
+export async function onIdle(settings = null, force = false) {
+  if (!lightingOn(null, settings)) { state.key = ""; state.idle = true; return; }
+  if (state.idle && !force) { state.key = ""; return; }   // already resting — leave it be
+  state.key = ""; state.idle = true; state.lastMeta = null;
   const idle = settings && settings.idle;
   if (idle === "ambient") {
     await pushScene({ mode: "breathe", palette: ["ffb46b"], bpm: 0, speed: 0.3,
-      brightness: Math.max(8, Math.min(255, (settings && settings.brightness) || 120)), posMs: 0 });
+      brightness: Math.max(8, Math.min(255, (settings && settings.brightness) || 120)), posMs: 0,
+      meta: { idle: true, source: "ambient" } });
   } else {
     await ledOff();
   }

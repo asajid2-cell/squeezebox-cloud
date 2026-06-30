@@ -39,7 +39,9 @@ export function ledStop() {
 
 export async function deviceOnline() {
   try {
-    const res = await fetch(`${HUB_URL}/device/status`, {
+    // Multi-device hub: ask specifically whether the BLE device that handles led.*
+    // is online (the camera-only Echo Show being up doesn't help lighting).
+    const res = await fetch(`${HUB_URL}/device/status?for=led.color`, {
       headers: HUB_TOKEN ? { "x-hub-token": HUB_TOKEN } : {},
       signal: AbortSignal.timeout(4000)
     });

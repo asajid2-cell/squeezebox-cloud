@@ -3291,7 +3291,7 @@ async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force =
         // Strip follows the playing song. Called every poll (not just on change) so
         // it also catches a song already playing when lighting is enabled/restarted;
         // the director dedups cheaply by track key before any LLM/network work.
-        maybeLightingFollow(track);
+        maybeLightingFollow(track, status);
         if (shouldRefreshTrackInfo) {
           refreshTrackInfoInBackground(track, key);
         }
@@ -4244,11 +4244,17 @@ function maybePlayTapLighting(tag) {
   // the resulting track change. { enabled:false } rests the strip for this tag.
   activeTagLighting = tag?.policy?.lighting || null;
 }
-function maybeLightingFollow(track) {
+function maybeLightingFollow(track, status) {
   try {
     const lighting = defaultTapStore.settings()?.lighting;
     if (!lighting?.enabled) return;                                  // master off
-    if (!track || track.id === "idle" || !track.title) { lightingOnIdle(lighting).catch(() => {}); return; }
+    // Only a PLAYING track drives the strip. The old code keyed off the track alone,
+    // so a PAUSE (LMS still reports the track, mode "pause") left the last scene frozen
+    // on the strip — and a STOP re-ran onIdle every 5s poll (no dedup) which re-fired
+    // an ambient scene each tick = the "lights trip with nothing playing" symptom.
+    const mode = String(status?.mode || "").toLowerCase();
+    const playing = mode === "play";
+    if (!playing || !track || track.id === "idle" || !track.title) { lightingOnIdle(lighting).catch(() => {}); return; }
     const policy = activeTagLighting;
     if (policy && policy.enabled === false) { lightingOnIdle(lighting).catch(() => {}); return; }  // tag opts out
     const t = { title: track.title, artist: track.artist, album: track.album, year: track.year, uri: track.url || track.id, id: track.id };
