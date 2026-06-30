@@ -942,6 +942,34 @@ async function spotifyMyPlaylists(token) {
   return out;
 }
 
+// An album's tracks (in order) from the Web API. Unlike /v1/tracks and the playlist
+// tracks endpoint (both 403 for restricted apps), /v1/albums/{id}/tracks IS allowed.
+// This is how the tap cache resolves an album cold: Spotty's browse needs an internal
+// browse-id that only exists in memory after the album's been browsed, so after a
+// restart it returns nothing — the Web API has no such dependency. Returns an ordered
+// [{uri,title,artist}] or null if unavailable.
+export async function spotifyAlbumTracksWebApi(albumUri) {
+  if (!spotifyWebConfigured()) return null;
+  const match = String(albumUri || "").match(/album[:/]+([A-Za-z0-9]{22})/);
+  if (!match) return null;
+  try {
+    const token = await spotifyAccessToken();
+    if (!token) return null;
+    const out = [];
+    let url = `https://api.spotify.com/v1/albums/${match[1]}/tracks?limit=50`;
+    while (url && out.length < 100) {
+      const j = await spotifyGet(url, token);
+      for (const t of j.items || []) {
+        if (t?.uri) out.push({ uri: t.uri, title: t.name || "", artist: (t.artists || []).map((a) => a.name).filter(Boolean).join(", ") });
+      }
+      url = j.next;
+    }
+    return out.length ? out : null;
+  } catch {
+    return null;
+  }
+}
+
 // A playlist's tracks via the Web API, normalized to the archive track shape.
 // NOTE: the dedicated /playlists/{id}/tracks endpoint is 403 for new apps, but the
 // playlist OBJECT returns the first 100 tracks inline (200) — plenty for these
@@ -1089,8 +1117,14 @@ async function resolveTapTracks(lms, pid, tag, playlists) {
     const ch = await lms.spotifyChildren(pid, { uri: spec.playlistUri, kind: "playlist" }, 100).catch(() => []);
     tracks = (ch || []).map((t) => ({ uri: t.uri || t.id, title: t.title, artist: t.artist }));
   } else if (kind === "album-from-top" || kind === "album-from-track") {
-    const ch = await lms.spotifyChildren(pid, { uri: spec.albumUri, kind: "album" }, 100).catch(() => []);
-    tracks = (ch || []).map((t) => ({ uri: t.uri || t.id, title: t.title, artist: t.artist }));
+    // Web API first — it resolves album tracks cold (no browse-id needed), which is
+    // exactly what the post-restart sweep needs. Fall back to Spotty's browse only if
+    // the Web API isn't configured or has nothing.
+    tracks = await spotifyAlbumTracksWebApi(spec.albumUri);
+    if (!tracks || tracks.length === 0) {
+      const ch = await lms.spotifyChildren(pid, { uri: spec.albumUri, kind: "album" }, 100).catch(() => []);
+      tracks = (ch || []).map((t) => ({ uri: t.uri || t.id, title: t.title, artist: t.artist }));
+    }
   }
   tracks = tracks.filter((t) => t.uri && /track[:/]/i.test(String(t.uri)));
   if (tracks.length === 0) return null;
@@ -1105,7 +1139,10 @@ export async function cacheTapTag(lms, tag, playlists, playerId) {
     const pid = await resolveArchivePlayer(lms, playerId);
     if (!pid) return false;
     const plan = await resolveTapTracks(lms, pid, tag, playlists);
-    if (!plan?.first?.uri) return false;
+    if (!plan?.first?.uri) {
+      console.warn(`[tap-cache] no playable first track for ${tag.tagId} (${tag.playSpec?.kind || "?"})`);
+      return false;
+    }
     const file = `${tapCacheStem(plan.first, tag.tagId)}.flac`;
     const dest = path.join(TAP_CACHE_DIR, file);
     if (!existsSync(dest)) {
@@ -1194,6 +1231,7 @@ export async function sweepTapCache(lms, listTags, playlists) {
   if (tapSweeping) return { swept: 0, skipped: true };
   tapSweeping = true;
   let cached = 0;
+  let failed = 0;
   try {
     const tags = (typeof listTags === "function" ? listTags() : listTags) || [];
     for (const tag of tags) {
@@ -1202,10 +1240,13 @@ export async function sweepTapCache(lms, listTags, playlists) {
       if (await cacheTapTag(lms, tag, playlists)) {
         cached += 1;
         await delay(8000); // pace librespot fetches
+      } else {
+        failed += 1;
       }
     }
   } finally { tapSweeping = false; }
-  return { cached };
+  if (cached > 0 || failed > 0) console.log(`[tap-cache] sweep done: cached ${cached}, unresolved ${failed}`);
+  return { cached, failed };
 }
 
 // Boot the tap cache: load the manifest, then sweep shortly after start.
