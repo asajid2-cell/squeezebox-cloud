@@ -20,6 +20,12 @@ const spotifySearchCategoryDeadlineMs = Number(process.env.SPOTIFY_SEARCH_CATEGO
 // search/browse row for a track that's been played shows its real time instead of a
 // blank. Grows progressively, never blocks, survives restarts.
 const spotifyDurationCacheFile = path.join(config.musicSourceDir, "cloud-squeeze", "spotify-durations.json");
+// Spotty browse needs an internal browse-id (item_id) to open an album/playlist/artist;
+// raw spotify: URIs return nothing. Those ids are learned from searches/browses and kept
+// in an in-memory map — which is EMPTY after a restart, so a cold browse of anything not
+// yet searched fails (this is what broke album tap-caching). Persist the map so cold
+// browse works straight after a restart.
+const spotifyBrowseIdsFile = path.join(config.musicSourceDir, "cloud-squeeze", "spotify-browse-ids.json");
 const spotifyDurationCache = new Map();   // "spotify:track:<id>" -> seconds
 let spotifyDurationCacheDirty = false;
 let spotifyDurationPersistTimer = null;
@@ -78,6 +84,35 @@ export class LmsClient {
     this.cache = new Map();
     this.inflight = new Map();
     this.spotifyBrowseIds = new Map();
+    this.browseIdSaveTimer = null;
+    this.loadBrowseIds();
+  }
+
+  async loadBrowseIds() {
+    try {
+      const obj = JSON.parse(await fs.readFile(spotifyBrowseIdsFile, "utf8"));
+      if (obj && typeof obj === "object") {
+        for (const [uri, browseId] of Object.entries(obj)) {
+          if (uri && browseId && !this.spotifyBrowseIds.has(uri)) this.spotifyBrowseIds.set(uri, String(browseId));
+        }
+      }
+    } catch {
+      // no cache yet — fills in as the user searches/browses
+    }
+  }
+
+  scheduleBrowseIdSave() {
+    if (this.browseIdSaveTimer) return;
+    this.browseIdSaveTimer = setTimeout(async () => {
+      this.browseIdSaveTimer = null;
+      try {
+        await fs.mkdir(path.dirname(spotifyBrowseIdsFile), { recursive: true });
+        await fs.writeFile(spotifyBrowseIdsFile, JSON.stringify(Object.fromEntries(this.spotifyBrowseIds)), "utf8");
+      } catch {
+        // best effort — a missed save just means the next cold browse relearns it
+      }
+    }, 5000);
+    this.browseIdSaveTimer.unref?.();
   }
 
   command(command) {
@@ -956,13 +991,16 @@ export class LmsClient {
   }
 
   rememberSpotifyBrowseIds(tracks = []) {
+    let added = false;
     for (const track of tracks || []) {
       const uri = normalizedSpotifyUri(track?.uri);
       const browseId = String(track?.browseId || "");
       if (!uri || !browseId || browseId === track?.uri) continue;
       if (!/^spotify:(playlist|album|artist):/i.test(uri)) continue;
+      if (this.spotifyBrowseIds.get(uri) !== browseId) added = true;
       this.spotifyBrowseIds.set(uri, browseId);
     }
+    if (added) this.scheduleBrowseIdSave();
     if (this.spotifyBrowseIds.size > 1000) {
       for (const key of this.spotifyBrowseIds.keys()) {
         this.spotifyBrowseIds.delete(key);
