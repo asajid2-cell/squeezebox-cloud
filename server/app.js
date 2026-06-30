@@ -24,7 +24,7 @@ import {
   updateMusicInfoStatus,
   updatePlayback
 } from "./state.js";
-import { clearLibraryCaches, getCollections, getCollectionTracks, saveUploadedTrack, scanLibrary, searchLibrary } from "./library.js";
+import { clearLibraryCaches, getCollections, getCollectionTracks, saveUploadedTrack, scanLibrary, searchLibrary, fillLocalDurations } from "./library.js";
 import { enrichTrackArtwork, enrichTrackInfo } from "./trackInfo.js";
 import { defaultPlaylistStore, PlaylistError } from "./playlists.js";
 import { defaultCurationStore, CurationError } from "./curation.js";
@@ -370,6 +370,11 @@ const localSearchFallbackArtworkBudgetMs = Number(process.env.LOCAL_SEARCH_FALLB
 const localFallbackArtworkLimit = Number(process.env.LOCAL_FALLBACK_ARTWORK_LIMIT || 24);
 const uploadedArtworkBudgetMs = Number(process.env.UPLOADED_ARTWORK_BUDGET_MS || 900);
 const uploadedArtworkLimit = Number(process.env.UPLOADED_ARTWORK_LIMIT || 8);
+// Lazy ffprobe-duration enrichment budgets (cache hits are free; only cold files cost).
+// A collection (album/folder) view shows fewer rows of the same place, so resolve them
+// all on first open; search shows a longer list where a moderate budget is plenty.
+const localSearchDurationBudgetMs = Number(process.env.LOCAL_SEARCH_DURATION_BUDGET_MS || 1200);
+const localCollectionDurationBudgetMs = Number(process.env.LOCAL_COLLECTION_DURATION_BUDGET_MS || 2500);
 const spotifySearchPrewarmTerms = ["drake", "juice wrld", "the weeknd", "travis scott"];
 const transportActionPaths = new Set([
   "/api/player/play",
@@ -956,7 +961,8 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     const cacheKey = enrichedLibraryResponseCacheKey("search", { query, limit, source });
     const results = await cachedEnrichedLibraryResults(cacheKey, async () => {
       const libraryResults = await searchLibrary(query, undefined, limit, source);
-      return enrichLibraryArtwork(lms, libraryResults, { fallbackBudgetMs: localSearchFallbackArtworkBudgetMs });
+      const withArt = await enrichLibraryArtwork(lms, libraryResults, { fallbackBudgetMs: localSearchFallbackArtworkBudgetMs });
+      return fillLocalDurations(withArt, { budgetMs: localSearchDurationBudgetMs });
     });
     res.json({ results: filterHiddenResults(results, curation) });
   });
@@ -1255,7 +1261,8 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
         limit,
         offset
       });
-      return enrichLibraryArtwork(lms, collectionResults);
+      const withArt = await enrichLibraryArtwork(lms, collectionResults);
+      return fillLocalDurations(withArt, { budgetMs: localCollectionDurationBudgetMs });
     });
     res.json({ results: filterHiddenResults(results, curation) });
   });

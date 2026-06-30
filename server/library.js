@@ -155,6 +155,99 @@ export function fileToTrack(filePath, tags = {}) {
   };
 }
 
+// ---- Local track durations (lazy ffprobe enrich + persistent cache) ----------
+// Durations are intentionally NOT captured during the library scan: an ffprobe per
+// file would make a multi-thousand-track scan crawl. Instead we resolve them lazily
+// for the handful of rows a search / album view actually shows, cache the answer
+// persistently (path -> seconds), and reuse it forever. The first view of a folder
+// pays a small budgeted cost; every later view (and every restart) is instant.
+const durationCacheFile = path.join(config.musicSourceDir, "cloud-squeeze", "library-durations.json");
+let durationCache = null;          // Map<path, seconds>
+let durationCacheDirty = false;
+let durationPersistTimer = null;
+
+async function loadDurationCache() {
+  if (durationCache) return durationCache;
+  durationCache = new Map();
+  try {
+    const obj = JSON.parse(await fs.readFile(durationCacheFile, "utf8"));
+    if (obj && typeof obj === "object") {
+      for (const [key, value] of Object.entries(obj)) {
+        const seconds = Number(value);
+        if (Number.isFinite(seconds) && seconds > 0) durationCache.set(key, seconds);
+      }
+    }
+  } catch {
+    // no cache yet — starts empty and fills in as views are opened
+  }
+  return durationCache;
+}
+
+function scheduleDurationPersist() {
+  if (durationPersistTimer) return;
+  durationPersistTimer = setTimeout(async () => {
+    durationPersistTimer = null;
+    if (!durationCacheDirty || !durationCache) return;
+    durationCacheDirty = false;
+    try {
+      await fs.mkdir(path.dirname(durationCacheFile), { recursive: true });
+      await fs.writeFile(durationCacheFile, JSON.stringify(Object.fromEntries(durationCache)), "utf8");
+    } catch {
+      durationCacheDirty = true; // retry on the next change
+    }
+  }, 2000);
+  durationPersistTimer.unref?.();
+}
+
+async function probeDurationSeconds(filePath) {
+  try {
+    const { stdout } = await execFileAsync("ffprobe", [
+      "-v", "error", "-show_entries", "format=duration", "-of", "json", filePath
+    ], { timeout: 4000, windowsHide: true });
+    const seconds = Number(JSON.parse(stdout || "{}")?.format?.duration);
+    return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fill in `duration` (seconds) for local/uploaded tracks that don't have it yet.
+ * Cache hits are applied to every pending track; misses are ffprobed under a
+ * concurrency cap and an overall time budget so a cold search never blocks long.
+ * Tracks unresolved within the budget stay null (rare after warmup) and resolve
+ * from the persistent cache on the next view. Mutates + returns the same array.
+ */
+export async function fillLocalDurations(tracks, { budgetMs = 1500, concurrency = 6 } = {}) {
+  if (!Array.isArray(tracks) || tracks.length === 0) return tracks;
+  const pending = tracks.filter((track) => track && (track.duration == null || track.duration === 0) && track.path);
+  if (pending.length === 0) return tracks;
+  const cache = await loadDurationCache();
+  const toProbe = [];
+  for (const track of pending) {
+    const cached = cache.get(track.path);
+    if (cached) track.duration = cached;
+    else toProbe.push(track);
+  }
+  if (toProbe.length === 0) return tracks;
+  const deadline = Date.now() + budgetMs;
+  let index = 0;
+  const worker = async () => {
+    while (index < toProbe.length && Date.now() < deadline) {
+      const track = toProbe[index++];
+      const seconds = await probeDurationSeconds(track.path);
+      if (seconds) {
+        track.duration = seconds;
+        cache.set(track.path, seconds);
+        durationCacheDirty = true;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, toProbe.length) }, worker));
+  if (durationCacheDirty) scheduleDurationPersist();
+  return tracks;
+}
+
 function nestedUploadIgnore(root, isUploadRoot) {
   if (isUploadRoot) return [];
   const relative = path.relative(path.resolve(root), path.resolve(config.uploadDir));
