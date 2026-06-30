@@ -25,31 +25,40 @@ describe("screenClient", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toMatch(/\/play$/);
     expect(calls[0].init.method).toBe("POST");
-    expect(JSON.parse(calls[0].init.body)).toEqual({ url: "https://youtube.com/watch?v=abc" });
+    expect(JSON.parse(calls[0].init.body)).toEqual({ url: "https://youtube.com/watch?v=abc", audio: false });
   });
 
   it("POSTs a { query } body to /play for auto-find", async () => {
     mockFetch(() => okJson());
     await playVideo({ query: "Tame Impala official video" });
-    expect(JSON.parse(calls[0].init.body)).toEqual({ query: "Tame Impala official video" });
+    expect(JSON.parse(calls[0].init.body)).toEqual({ query: "Tame Impala official video", audio: false });
   });
 
   it("prefers url over query when both are given", async () => {
     mockFetch(() => okJson());
     await playVideo({ url: "https://u", query: "q" } as any);
-    expect(JSON.parse(calls[0].init.body)).toEqual({ url: "https://u" });
+    expect(JSON.parse(calls[0].init.body)).toEqual({ url: "https://u", audio: false });
   });
 
   it("forwards seek/loop/matchDuration (for the visual sync mode)", async () => {
     mockFetch(() => okJson());
     await playVideo({ query: "artist title official video", seek: 45, loop: true, matchDuration: 200 });
-    expect(JSON.parse(calls[0].init.body)).toEqual({ query: "artist title official video", seek: 45, loop: true, matchDuration: 200 });
+    expect(JSON.parse(calls[0].init.body)).toEqual({ query: "artist title official video", seek: 45, loop: true, matchDuration: 200, audio: false });
   });
 
   it("omits no-op options (seek 0 / loop false) from the body", async () => {
     mockFetch(() => okJson());
     await playVideo({ url: "https://x", seek: 0, loop: false });
-    expect(JSON.parse(calls[0].init.body)).toEqual({ url: "https://x" });
+    expect(JSON.parse(calls[0].init.body)).toEqual({ url: "https://x", audio: false });
+  });
+
+  it("mutes the panel by default (Boom owns audio) and can be told to play audio", async () => {
+    mockFetch(() => okJson());
+    await playVideo({ url: "https://x" });
+    expect(JSON.parse(calls[0].init.body).audio).toBe(false);
+    calls.length = 0;
+    await playVideo({ url: "https://x", audio: true });
+    expect(JSON.parse(calls[0].init.body).audio).toBe(true);
   });
 
   it("does not call the daemon when there's no target", async () => {

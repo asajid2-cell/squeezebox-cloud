@@ -6672,7 +6672,10 @@ describe("Tap resolver golden cases", () => {
     const res = await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token }).expect(200);
     expect(res.body.ok).toBe(true);
     expect(lms.calls.filter((c) => c.m === "loadAlbum")).toHaveLength(1);
-    expect(lms.calls[0].args[1]).toMatchObject({ source: "spotify", albumUri: "spotify:album:xyz789" });
+    // A tap normalizes volume first (lms.control("volume", ...)), so the album load is
+    // no longer guaranteed to be calls[0] — find it by method instead of by position.
+    const loadAlbumCall = lms.calls.find((c) => c.m === "loadAlbum");
+    expect(loadAlbumCall?.args[1]).toMatchObject({ source: "spotify", albumUri: "spotify:album:xyz789" });
     expect(tapStore.get(tag.tagId)?.tapCount).toBe(1);
   });
 

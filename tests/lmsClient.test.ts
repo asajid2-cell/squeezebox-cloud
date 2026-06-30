@@ -293,7 +293,9 @@ describe("LMS client parsing", () => {
     client.jsonRequest = async (params: unknown) => {
       const request = JSON.stringify(params);
       if (request.includes("Slow%20Art")) {
-        await new Promise((resolve) => setTimeout(resolve, 40));
+        // Far slower than the deadline so load jitter under the full parallel suite
+        // can't flip the outcome (was 40ms vs a 15ms deadline — too tight, flaky).
+        await new Promise((resolve) => setTimeout(resolve, 500));
         return { result: { titles_loop: [{ url: "file:///music/test/Slow%20Art.mp3", coverid: "slow-cover" }] } };
       }
       return { result: { titles_loop: [{ url: "file:///music/test/Fast%20Art.mp3", coverid: "fast-cover" }] } };
@@ -304,7 +306,7 @@ describe("LMS client parsing", () => {
         { title: "Fast Art", path: "/music/test/Fast Art.mp3", source: "Local library" },
         { title: "Slow Art", path: "/music/test/Slow Art.mp3", source: "Local library" }
       ],
-      { limit: 2, concurrency: 1, deadlineMs: 15 }
+      { limit: 2, concurrency: 1, deadlineMs: 80 }
     );
 
     expect(rows[0]).toMatchObject({ title: "Fast Art", art: "api/artwork/fast-cover" });
@@ -670,9 +672,9 @@ describe("LMS client parsing", () => {
       return "ok";
     };
 
-    await client.playTrack("player-1", { title: "Punisher", uri: "spotify:track:abc123" }, "play-next");
+    await client.playTrack("player-1", { title: "Punisher", uri: "spotify:track:0123456789abcdefghijAB" }, "play-next");
 
-    expect(commands.at(-1)).toBe("player-1 playlist insert spotify://track:abc123");
+    expect(commands.at(-1)).toBe("player-1 playlist insert spotify://track:0123456789abcdefghijAB");
   });
 
   it("loads Spotify tracks through LMS playlist commands for Spotty", async () => {
@@ -683,9 +685,9 @@ describe("LMS client parsing", () => {
       return "ok";
     };
 
-    await client.playTrack("player-1", { title: "Headlines", uri: "spotify:track:abc123" }, "play-now");
+    await client.playTrack("player-1", { title: "Headlines", uri: "spotify:track:0123456789abcdefghijAB" }, "play-now");
 
-    expect(commands).toContain("player-1 playlist play spotify://track:abc123");
+    expect(commands).toContain("player-1 playlist play spotify://track:0123456789abcdefghijAB");
     expect(commands).toContain("player-1 play");
   });
 

@@ -267,23 +267,50 @@ describe("Cloud Squeeze UI", () => {
 
     const row = screen.getByText("Local Test").closest(".result-row");
     expect(row).toBeTruthy();
-    await userEvent.click(within(row as HTMLElement).getByRole("button", { name: "Queue" }));
+    await userEvent.click(within(row as HTMLElement).getByRole("button", { name: /More actions/ }));
+    await userEvent.click(within(row as HTMLElement).getByRole("button", { name: "Add to queue" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("That song is already in the queue");
   });
 
   it("does not send requester ownership when editing queue metadata", async () => {
     const fetchMock = vi.mocked(fetch);
+    const defaultFetch = fetchMock.getMockImplementation();
+    // Editing is only offered for LOCAL queue items (you don't own a Spotify track's
+    // metadata) — so seed an editable local item rather than the default Spotify one.
+    fetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (url.includes("/api/state")) {
+        return jsonResponse({
+          player: { id: "p1", name: "Test Speaker", connected: true, online: true, mode: "play", volume: 68 },
+          nowPlaying: { id: "t1", title: "Midnight City", artist: "M83", album: "Hurry Up", source: "Spotify", duration: 243, elapsed: 151, canSeek: true },
+          queue: [{ id: "q1", title: "Awake", artist: "Tycho", source: "Local library", path: "/music/Awake.mp3", requestedBy: "alex", etaMinutes: 7 }],
+          recentPicks: [],
+          schedule: { current: { name: "Open Queue", until: "10:00 PM", requestsPaused: false }, next: { name: "Quiet Hours", time: "10:00 PM - 8:00 AM", requestsPaused: true } },
+          rules: [],
+          services: {
+            spotify: { configured: true, reachable: true, detail: "ok" },
+            localLibrary: { root: "Downloads", reachable: true, trackCount: 2 },
+            musicInfo: { configured: true, reachable: true, detail: "Plugin ready" }
+          },
+          trackInfo: { artistBio: "", albumReview: "", lyrics: "" },
+          admin: { publicRequests: true, maxQueuePerUser: 3, moderation: "basic", scheduleEnabled: true }
+        });
+      }
+      return defaultFetch?.(url, options) ?? jsonResponse({ ok: true });
+    });
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Queue" }));
-    await userEvent.click(await screen.findByRole("button", { name: "Edit Awake" }));
+    const row = (await screen.findByText("Awake")).closest(".queue-row") as HTMLElement;
+    await userEvent.click(within(row).getByRole("button", { name: /More queue actions/ }));
+    await userEvent.click(within(row).getByRole("button", { name: "Edit details" }));
 
     expect(screen.queryByLabelText("Requested by")).not.toBeInTheDocument();
     await userEvent.clear(screen.getByLabelText("Queue title"));
     await userEvent.type(screen.getByLabelText("Queue title"), "Edited Awake");
     await userEvent.clear(screen.getByLabelText("Queue artist"));
     await userEvent.type(screen.getByLabelText("Queue artist"), "Edited Tycho");
-    await userEvent.click(screen.getByRole("button", { name: "Save Awake" }));
+    await userEvent.click(within(row).getByRole("button", { name: /More queue actions/ }));
+    await userEvent.click(within(row).getByRole("button", { name: "Save edits" }));
 
     await waitFor(() => {
       const patchCall = fetchMock.mock.calls.find(([url, options]) => String(url).includes("/api/queue/") && options?.method === "PATCH");
@@ -319,9 +346,10 @@ describe("Cloud Squeeze UI", () => {
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Queue" }));
 
-    expect(await screen.findByText("Awake")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Edit Awake" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Remove Awake" })).toBeInTheDocument();
+    const row = (await screen.findByText("Awake")).closest(".queue-row") as HTMLElement;
+    await userEvent.click(within(row).getByRole("button", { name: /More queue actions/ }));
+    expect(within(row).queryByRole("button", { name: "Edit details" })).not.toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Remove" })).toBeInTheDocument();
   });
 
   it("disables public track actions when requests are paused", async () => {
@@ -357,12 +385,13 @@ describe("Cloud Squeeze UI", () => {
     await userEvent.type(screen.getByLabelText("Search music"), "shabang");
 
     expect(await screen.findByText("Shabang")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Play now" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Play next" })).toBeDisabled();
-    const queueButton = screen.getAllByRole("button", { name: "Queue" }).at(-1);
-    expect(queueButton).toBeTruthy();
+    const row = screen.getByText("Shabang").closest(".result-row") as HTMLElement;
+    expect(within(row).getByRole("button", { name: /^Play( here)?$/ })).toBeDisabled();
+    await userEvent.click(within(row).getByRole("button", { name: /More actions/ }));
+    expect(within(row).getByRole("button", { name: "Play next" })).toBeDisabled();
+    const queueButton = within(row).getByRole("button", { name: "Add to queue" });
     expect(queueButton).toBeDisabled();
-    await userEvent.click(queueButton!);
+    await userEvent.click(queueButton);
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/player/track"))).toBe(false);
   });
 
@@ -477,8 +506,11 @@ describe("Cloud Squeeze UI", () => {
     await userEvent.click(screen.getByRole("button", { name: "VPS library" }));
     await userEvent.type(await screen.findByLabelText("Search music"), "local");
     await waitFor(() => expect(screen.getByText("Local Test")).toBeInTheDocument());
-    expect(screen.getByRole("button", { name: "Play now" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Play next" })).toBeInTheDocument();
+    const row = screen.getByText("Local Test").closest(".result-row") as HTMLElement;
+    expect(within(row).getByRole("button", { name: /^Play( here)?$/ })).toBeInTheDocument();
+    await userEvent.click(within(row).getByRole("button", { name: /More actions/ }));
+    expect(within(row).getByRole("button", { name: "Play next" })).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Add to queue" })).toBeInTheDocument();
   });
 
   it("surfaces failed library searches instead of rendering empty results", async () => {
@@ -592,7 +624,8 @@ describe("Cloud Squeeze UI", () => {
 
     const row = screen.getAllByText("Saved Track").find((element) => element.closest(".result-row"))?.closest(".result-row");
     expect(row).toBeTruthy();
-    await userEvent.click(within(row as HTMLElement).getByRole("button", { name: "Queue" }));
+    await userEvent.click(within(row as HTMLElement).getByRole("button", { name: /More actions/ }));
+    await userEvent.click(within(row as HTMLElement).getByRole("button", { name: "Add to queue" }));
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([url, options]) => String(url).includes("/api/player/track") && options?.method === "POST")).toBe(true);
@@ -628,6 +661,7 @@ describe("Cloud Squeeze UI", () => {
     await userEvent.type(screen.getByLabelText("Search music"), "drake");
     await waitFor(() => expect(screen.getByText("Headlines")).toBeInTheDocument());
     const row = screen.getByText("Headlines").closest(".result-row");
+    await userEvent.click(within(row as HTMLElement).getByRole("button", { name: /More actions/ }));
     await userEvent.click(within(row as HTMLElement).getByRole("button", { name: /Save/ }));
     await userEvent.click(await screen.findByText("Late Nights"));
     await waitFor(() => {
@@ -646,6 +680,7 @@ describe("Cloud Squeeze UI", () => {
 
     const row = screen.getByText("Headlines").closest(".result-row");
     expect(row).toBeTruthy();
+    await userEvent.click(within(row as HTMLElement).getByRole("button", { name: /More actions/ }));
     await userEvent.click(within(row as HTMLElement).getByRole("button", { name: "Hide" }));
 
     await waitFor(() => {
