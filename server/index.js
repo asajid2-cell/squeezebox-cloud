@@ -11,7 +11,6 @@ import { fileURLToPath } from "node:url";
 import { handleCastUpgrade, hasSession as hasCastSession, serveCast, handleCanonPlay } from "./boomRelay.js";
 
 const lms = new LmsClient();
-await prewarmLibraryCaches(lms).catch(() => null);
 const app = createApp({ lms });
 
 // Live Squeezebox cast (the reverse bridge): serve the browser's relayed audio to
@@ -62,6 +61,12 @@ if (process.env.NODE_ENV === "production") {
 
 server.listen(config.port, () => {
   console.log(`Squeezebox Cloud API listening on http://127.0.0.1:${config.port}`);
+  // Warm the library caches in the BACKGROUND. This used to be an `await` before
+  // listen(), which made the whole app unreachable for several seconds after every
+  // restart/deploy while a full multi-thousand-file scan ran — it looked like the
+  // server had "disconnected". Now we listen immediately and warm behind it; the
+  // first library view still triggers (and caches) the scan on demand.
+  prewarmLibraryCaches(lms).catch(() => null);
   startArchiveService();
   // Auto-archiver: watch Spotify playlists named "archive*" and pull in new tracks.
   startArchiveWatcher(lms);
