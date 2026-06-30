@@ -355,7 +355,13 @@ function AppShell() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [query, sourceFilter, state?.curation?.revision]);
+    // Re-run when Spotify finishes initializing, not just on query/source change.
+    // On a cold boot the service status is "Not checked yet" (configured:false) for
+    // a few seconds, during which a Spotify search returns empty. Without these deps
+    // the effect never re-fires once Spotify becomes ready, so the user is stuck on
+    // the empty cold result until they retype or refresh the page — the long-standing
+    // "I have to refresh before search works" bug. Depending on readiness fixes it.
+  }, [query, sourceFilter, state?.curation?.revision, state?.services?.spotify?.configured, state?.services?.spotify?.reachable]);
 
   if (!state) return <div className="boot">Squeezebox Cloud</div>;
 
@@ -1523,7 +1529,7 @@ function SearchResultRow({ track, requestsOpen, onRefresh, onAction, siblingTrac
           {track.folder ? ` / ${track.folder}` : ""}
         </small>
       </div>
-      <span>{track.kind && track.kind !== "track" ? track.kind : track.duration ? formatTime(track.duration) : "--:--"}</span>
+      <span>{trackDurationLabel(track)}</span>
       <div className="track-actions">
         {playable && <button className="primary-small row-play" disabled={disabled} onClick={() => run("play-now")}><Play size={14} />{isLocal ? "Play here" : "Play"}</button>}
         <RowMenu label={`More actions for ${track.title}`}>
@@ -2189,7 +2195,7 @@ function AppPlaylistDetail({
               <strong>{track.title}</strong>
               <small>{track.artist} - {track.album || track.source}</small>
             </div>
-            <span>{track.duration ? formatTime(track.duration) : "--:--"}</span>
+            <span>{trackDurationLabel(track)}</span>
             <div className="track-actions">
               <button className="primary-small row-play" disabled={isLocal ? !localStreamUrl(track) : !requestsOpen} onClick={() => playRow(track, index)}><Play size={14} />{isLocal ? "Play here" : "Play"}</button>
               <RowMenu label={`More actions for ${track.title}`}>
@@ -2633,6 +2639,16 @@ function EmptyState({ title, detail }: { title: string; detail: string }) {
 function formatTime(seconds: number) {
   const safe = Math.max(0, Math.round(seconds || 0));
   return `${Math.floor(safe / 60)}:${String(safe % 60).padStart(2, "0")}`;
+}
+
+// What to show in a track row's trailing cell. Non-track rows (album/playlist/artist)
+// show their kind. A known duration shows the time. A genuinely-unknown duration
+// (e.g. a Spotify search result LMS hasn't cached a length for) shows nothing rather
+// than a broken "--:--" — honest and far less ugly in a long list.
+function trackDurationLabel(track: Track): string {
+  if (track.kind && track.kind !== "track") return track.kind;
+  if (track.duration && track.duration > 0) return formatTime(track.duration);
+  return "";
 }
 
 function publicRequestsOpen(state: AppState) {
