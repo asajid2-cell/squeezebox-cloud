@@ -513,6 +513,32 @@ describe("Cloud Squeeze UI", () => {
     expect(within(row).getByRole("button", { name: "Add to queue" })).toBeInTheDocument();
   });
 
+  it("shows a real time when a duration is known and a blank (never --:--) when it isn't", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const defaultFetch = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (url.includes("/api/library/search")) {
+        return jsonResponse({ results: [
+          { id: "d1", title: "Timed Track", artist: "Tester", source: "Local library", path: "/music/timed.mp3", duration: 213 },
+          { id: "d2", title: "Untimed Track", artist: "Tester", source: "Local library", path: "/music/untimed.mp3", duration: null }
+        ] });
+      }
+      return defaultFetch?.(url, options) ?? jsonResponse({ ok: true });
+    });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Library" }));
+    await userEvent.click(screen.getByRole("button", { name: "VPS library" }));
+    await userEvent.type(await screen.findByLabelText("Search music"), "track");
+    await waitFor(() => expect(screen.getByText("Timed Track")).toBeInTheDocument());
+
+    const timedRow = screen.getByText("Timed Track").closest(".result-row") as HTMLElement;
+    expect(within(timedRow).getByText("3:33")).toBeInTheDocument();
+
+    const untimedRow = screen.getByText("Untimed Track").closest(".result-row") as HTMLElement;
+    expect(within(untimedRow).queryByText("--:--")).not.toBeInTheDocument();
+    expect(within(untimedRow).queryByText("3:33")).not.toBeInTheDocument();
+  });
+
   it("surfaces failed library searches instead of rendering empty results", async () => {
     const fetchMock = vi.mocked(fetch);
     const defaultFetch = fetchMock.getMockImplementation();

@@ -24,7 +24,7 @@ const spotifyDurationCache = new Map();   // "spotify:track:<id>" -> seconds
 let spotifyDurationCacheDirty = false;
 let spotifyDurationPersistTimer = null;
 
-function spotifyDurationKey(uri) {
+export function spotifyDurationKey(uri) {
   const raw = String(uri || "").replace(/^spotify:\/\/track:/i, "spotify:track:").toLowerCase();
   return /^spotify:track:[a-z0-9]{22}$/.test(raw) ? raw : "";
 }

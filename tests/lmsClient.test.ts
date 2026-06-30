@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import net from "node:net";
 import path from "node:path";
-import { LmsClient, isCommandPayload, lastToken } from "../server/lmsClient.js";
+import { LmsClient, isCommandPayload, lastToken, spotifyDurationKey } from "../server/lmsClient.js";
 import { config } from "../server/state.js";
 
 describe("LMS client parsing", () => {
@@ -689,6 +689,24 @@ describe("LMS client parsing", () => {
 
     expect(commands).toContain("player-1 playlist play spotify://track:0123456789abcdefghijAB");
     expect(commands).toContain("player-1 play");
+  });
+
+  // Backs the progressive Spotify-duration cache: a track played as spotify://track:id
+  // (now-playing form) and later searched as spotify:track:id (search form) must hit
+  // the SAME cache key, or its banked duration would never surface in search.
+  it("normalizes both Spotify track URI forms to one duration-cache key", () => {
+    const id = "0123456789abcdefghijab";
+    expect(spotifyDurationKey(`spotify:track:${id}`)).toBe(`spotify:track:${id}`);
+    expect(spotifyDurationKey(`spotify://track:${id}`)).toBe(`spotify:track:${id}`);
+    expect(spotifyDurationKey(`SPOTIFY://TRACK:${id.toUpperCase()}`)).toBe(`spotify:track:${id}`);
+  });
+
+  it("rejects non-track or malformed URIs from the duration cache key", () => {
+    expect(spotifyDurationKey("spotify:track:tooshort")).toBe("");
+    expect(spotifyDurationKey("spotify:album:0123456789abcdefghijab")).toBe("");
+    expect(spotifyDurationKey("https://example.com/track")).toBe("");
+    expect(spotifyDurationKey("")).toBe("");
+    expect(spotifyDurationKey(null as unknown as string)).toBe("");
   });
 
   // --- Squeezebox Tap loop 1: album-load primitive (whole album from the top) ---
