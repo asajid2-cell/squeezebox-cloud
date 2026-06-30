@@ -1232,6 +1232,7 @@ function saveTapCache() {
 
 // Background: ensure every (cacheable) tag's first song is cached, paced gently.
 let tapSweeping = false;
+const albumDurationsWarmed = new Set(); // albumUri -> already duration-resolved this run
 export async function sweepTapCache(lms, listTags, playlists) {
   if (tapSweeping) return { swept: 0, skipped: true };
   tapSweeping = true;
@@ -1241,6 +1242,15 @@ export async function sweepTapCache(lms, listTags, playlists) {
     const tags = (typeof listTags === "function" ? listTags() : listTags) || [];
     for (const tag of tags) {
       if (tag.playSpec?.kind === "discover") continue;
+      // Warm each album's track durations once (cheap Web API metadata). An album that's
+      // already FLAC-cached for instant play would otherwise skip the resolve below and
+      // never backfill its song lengths — this fills them in for search without a
+      // re-download. Uncached albums get resolved by cacheTapTag, so only warm here.
+      const albumUri = tag.playSpec?.albumUri;
+      if (albumUri && !albumDurationsWarmed.has(albumUri)) {
+        albumDurationsWarmed.add(albumUri);
+        if (hasTapCache(tag.tagId)) await spotifyAlbumTracksWebApi(albumUri).catch(() => {});
+      }
       if (hasTapCache(tag.tagId)) continue;
       if (await cacheTapTag(lms, tag, playlists)) {
         cached += 1;
