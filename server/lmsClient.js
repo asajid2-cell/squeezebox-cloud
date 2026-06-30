@@ -12,6 +12,64 @@ const spotifyColdBrowseDeadlineMs = Number(process.env.SPOTIFY_COLD_BROWSE_DEADL
 const spotifyChildrenColdBrowseDeadlineMs = Number(process.env.SPOTIFY_CHILDREN_COLD_BROWSE_DEADLINE_MS || 4000);
 const spotifySearchCategoryDeadlineMs = Number(process.env.SPOTIFY_SEARCH_CATEGORY_DEADLINE_MS || 650);
 
+// ---- Spotify track durations (progressive uri -> seconds cache) ---------------
+// Spotty's search/browse never carries a track length and the Web API is in
+// restricted mode (403), so a Spotify search row has no duration to show. But the
+// moment a Spotify track PLAYS, LMS reports its real length in the now-playing
+// status. We capture that here keyed by track URI and persist it, so any later
+// search/browse row for a track that's been played shows its real time instead of a
+// blank. Grows progressively, never blocks, survives restarts.
+const spotifyDurationCacheFile = path.join(config.musicSourceDir, "cloud-squeeze", "spotify-durations.json");
+const spotifyDurationCache = new Map();   // "spotify:track:<id>" -> seconds
+let spotifyDurationCacheDirty = false;
+let spotifyDurationPersistTimer = null;
+
+function spotifyDurationKey(uri) {
+  const raw = String(uri || "").replace(/^spotify:\/\/track:/i, "spotify:track:").toLowerCase();
+  return /^spotify:track:[a-z0-9]{22}$/.test(raw) ? raw : "";
+}
+
+async function loadSpotifyDurationCache() {
+  try {
+    const obj = JSON.parse(await fs.readFile(spotifyDurationCacheFile, "utf8"));
+    if (obj && typeof obj === "object") {
+      for (const [key, value] of Object.entries(obj)) {
+        const seconds = Number(value);
+        if (Number.isFinite(seconds) && seconds > 0) spotifyDurationCache.set(key, seconds);
+      }
+    }
+  } catch {
+    // no cache yet — fills in as Spotify tracks play
+  }
+}
+loadSpotifyDurationCache();
+
+function rememberSpotifyDuration(uri, seconds) {
+  const key = spotifyDurationKey(uri);
+  const value = Math.round(Number(seconds) || 0);
+  if (!key || value <= 0 || spotifyDurationCache.get(key) === value) return;
+  spotifyDurationCache.set(key, value);
+  spotifyDurationCacheDirty = true;
+  if (spotifyDurationPersistTimer) return;
+  spotifyDurationPersistTimer = setTimeout(async () => {
+    spotifyDurationPersistTimer = null;
+    if (!spotifyDurationCacheDirty) return;
+    spotifyDurationCacheDirty = false;
+    try {
+      await fs.mkdir(path.dirname(spotifyDurationCacheFile), { recursive: true });
+      await fs.writeFile(spotifyDurationCacheFile, JSON.stringify(Object.fromEntries(spotifyDurationCache)), "utf8");
+    } catch {
+      spotifyDurationCacheDirty = true;
+    }
+  }, 3000);
+  spotifyDurationPersistTimer.unref?.();
+}
+
+function spotifyDurationFor(uri) {
+  const key = spotifyDurationKey(uri);
+  return key ? (spotifyDurationCache.get(key) || null) : null;
+}
+
 export class LmsClient {
   constructor(options = {}) {
     this.host = options.host || config.lmsHost;
@@ -144,12 +202,16 @@ export class LmsClient {
     const decodedTitle = firstSafeDisplayValue([statusTrack?.title, status.current_title], "Unknown title");
     const streamTrack = trackFromStreamUrl(statusTrack?.url || statusTrack?.id || decodedTitle);
     const spotifyTrack = spotifyTrackFromStatusValue(statusTrack?.url || statusTrack?.id);
+    const duration = Number(statusTrack?.duration) || Number(status.duration) || 0;
+    // A Spotify track that's actually playing is the one place LMS hands us a real
+    // length — bank it so search/browse rows for it stop showing a blank duration.
+    if (spotifyTrack?.uri && duration > 0) rememberSpotifyDuration(spotifyTrack.uri, duration);
     return {
       id: streamTrack?.id || spotifyTrack?.id || statusTrack?.url || statusTrack?.id || `lms:${decodedTitle}`,
       title: streamTrack?.title || decodedTitle,
       artist: streamTrack?.artist || firstSafeDisplayValue([statusTrack?.artist, status.remoteMeta?.artist], "Unknown artist"),
       album: streamTrack?.album || firstSafeDisplayValue([statusTrack?.album, status.remoteMeta?.album], ""),
-      duration: Number(statusTrack?.duration) || Number(status.duration) || 0,
+      duration,
       elapsed: Number(status.time) || 0,
       canSeek: Boolean(status.can_seek),
       art: streamTrack?.art || (artworkUrl ? proxiedArtworkUrl(artworkUrl) : safeCoverId ? `api/artwork/${encodeURIComponent(safeCoverId)}` : null),
@@ -1206,7 +1268,9 @@ function spotifyItemToTrack(item) {
     uri,
     browseId: item.actions?.go?.params?.item_id || item.presetParams.item_id || item.params?.item_id || uri,
     art: spotifyArtworkUrl(item.presetParams.icon || item.icon),
-    duration: null,
+    // Real length if this track has played before (banked in the progressive cache);
+    // otherwise null, which the UI renders as blank rather than "--:--".
+    duration: kind === "track" ? spotifyDurationFor(uri) : null,
     kind
   };
 }
