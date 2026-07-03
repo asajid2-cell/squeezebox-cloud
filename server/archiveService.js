@@ -621,6 +621,22 @@ export const __archiveServiceTestHooks = {
     streamFetchTimeoutMs = parsePositiveInteger(process.env.STREAM_FETCH_TIMEOUT_MS, DEFAULT_STREAM_FETCH_TIMEOUT_MS);
     fetchAndEncodeImpl = fetchAndEncode;
     streamInflight.clear();
+  },
+  setSpotifyWebTimeoutMs(timeoutMs) {
+    spotifyWebTimeoutMs = parsePositiveInteger(timeoutMs, DEFAULT_SPOTIFY_WEB_TIMEOUT_MS);
+  },
+  setSpotifyWebMaxRetries(maxRetries) {
+    spotifyWebMaxRetries = parseNonNegativeInteger(maxRetries, DEFAULT_SPOTIFY_WEB_MAX_RETRIES);
+  },
+  resetSpotifyWebForTests() {
+    spotifyToken = { value: "", exp: 0 };
+    spotifyWebTimeoutMs = parsePositiveInteger(process.env.SPOTIFY_WEB_TIMEOUT_MS, DEFAULT_SPOTIFY_WEB_TIMEOUT_MS);
+    spotifyWebMaxRetries = parseNonNegativeInteger(process.env.SPOTIFY_WEB_MAX_RETRIES, DEFAULT_SPOTIFY_WEB_MAX_RETRIES);
+    spotifyWebBackoffUntil = 0;
+    spotifyWebBackoffReason = "";
+    watchedPlaylists = [];
+    lastScanAt = null;
+    scanning = false;
   }
 };
 
@@ -663,6 +679,12 @@ function normalizeUri(u) {
 function parsePositiveInteger(value, fallback) {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1) return fallback;
+  return parsed;
+}
+
+function parseNonNegativeInteger(value, fallback) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) return fallback;
   return parsed;
 }
 
@@ -747,6 +769,9 @@ function saveQueue() {
 // "archive" → archive-only; "easw" → the EASW<email> convention (archive + email).
 const WATCH_PREFIXES = (process.env.ARCHIVE_WATCH_PREFIX || "archive,easw").toLowerCase().split(",").map((s) => s.trim()).filter(Boolean);
 const SCAN_INTERVAL_MS = Number(process.env.ARCHIVE_SCAN_INTERVAL_MS) || 30 * 1000;
+const DEFAULT_SPOTIFY_WEB_TIMEOUT_MS = 8000;
+const DEFAULT_SPOTIFY_WEB_MAX_RETRIES = 0;
+const DEFAULT_SPOTIFY_WEB_429_BACKOFF_MS = 15 * 60 * 1000;
 
 function isWatchedTitle(title) {
   const t = String(title || "").trim().toLowerCase();
@@ -908,16 +933,24 @@ async function saveWatchSnapshot() {
 // ---------------------------------------------------------------------------
 
 let spotifyToken = { value: "", exp: 0 };
+let spotifyWebTimeoutMs = parsePositiveInteger(process.env.SPOTIFY_WEB_TIMEOUT_MS, DEFAULT_SPOTIFY_WEB_TIMEOUT_MS);
+let spotifyWebMaxRetries = parseNonNegativeInteger(process.env.SPOTIFY_WEB_MAX_RETRIES, DEFAULT_SPOTIFY_WEB_MAX_RETRIES);
+let spotifyWebBackoffUntil = 0;
+let spotifyWebBackoffReason = "";
 
 export function spotifyWebConfigured() {
   return Boolean(process.env.SPOTIFY_REFRESH_TOKEN && process.env.SPOTIFY_CLIENT_ID && process.env.SPOTIFY_CLIENT_SECRET);
+}
+
+export function spotifyWebBackoffActive() {
+  return spotifyWebBackoffUntil > Date.now();
 }
 
 async function spotifyAccessToken() {
   if (!spotifyWebConfigured()) return "";
   if (spotifyToken.value && spotifyToken.exp > Date.now()) return spotifyToken.value;
   const auth = Buffer.from(`${process.env.SPOTIFY_CLIENT_ID}:${process.env.SPOTIFY_CLIENT_SECRET}`).toString("base64");
-  const res = await fetch("https://accounts.spotify.com/api/token", {
+  const res = await spotifyFetch("https://accounts.spotify.com/api/token", {
     method: "POST",
     headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: process.env.SPOTIFY_REFRESH_TOKEN })
@@ -928,11 +961,53 @@ async function spotifyAccessToken() {
   return spotifyToken.value;
 }
 
-async function spotifyGet(url, token) {
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (res.status === 429) { await delay((Number(res.headers.get("retry-after")) || 2) * 1000); return spotifyGet(url, token); }
+async function spotifyGet(url, token, attempt = 0) {
+  const res = await spotifyFetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (res.status === 429) {
+    if (attempt >= spotifyWebMaxRetries) {
+      markSpotifyWebBackoff(`spotify GET 429 ${url}`, res.headers);
+      throw new Error(`spotify GET 429 ${url}`);
+    }
+    await delay(Math.min((Number(res.headers.get("retry-after")) || 2) * 1000, spotifyWebTimeoutMs));
+    return spotifyGet(url, token, attempt + 1);
+  }
   if (!res.ok) throw new Error(`spotify GET ${res.status} ${url}`);
   return res.json();
+}
+
+function markSpotifyWebBackoff(reason, headers) {
+  const retryAfterMs = Number(headers?.get?.("retry-after")) * 1000;
+  const backoffMs = Number.isFinite(retryAfterMs) && retryAfterMs > 0
+    ? Math.max(retryAfterMs, DEFAULT_SPOTIFY_WEB_429_BACKOFF_MS)
+    : DEFAULT_SPOTIFY_WEB_429_BACKOFF_MS;
+  spotifyWebBackoffUntil = Date.now() + backoffMs;
+  spotifyWebBackoffReason = reason;
+}
+
+async function spotifyFetch(url, init = {}) {
+  const controller = new AbortController();
+  const message = `spotify web fetch timeout after ${spotifyWebTimeoutMs}ms ${url}`;
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error(message));
+    }, spotifyWebTimeoutMs);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([
+      fetch(url, { ...init, signal: controller.signal }),
+      timeout
+    ]);
+  } catch (error) {
+    if (error?.name === "AbortError" || error?.name === "TimeoutError") {
+      throw new Error(message);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // All of the user's playlists (paginated), with id/name/snapshot_id/uri.
@@ -986,6 +1061,10 @@ export async function spotifyAlbumTracksWebApi(albumUri) {
 // call, zero Spotty calls.
 export async function scanWatchedPlaylistsWebApi(lms) {
   if (scanning) return { scanning: true, queued: 0, playlists: watchedPlaylists.length };
+  if (spotifyWebBackoffActive()) {
+    const seconds = Math.ceil((spotifyWebBackoffUntil - Date.now()) / 1000);
+    throw new Error(`spotify web backoff active for ${seconds}s after ${spotifyWebBackoffReason || "rate limit"}`);
+  }
   scanning = true;
   let queued = 0;
   let emailedNow = 0;
@@ -1076,12 +1155,23 @@ export async function scanWatchedPlaylistsWebApi(lms) {
 export function startArchiveWatcher(lms) {
   loadWatchSnapshot();
   const web = spotifyWebConfigured();
-  const kick = () => (web ? scanWatchedPlaylistsWebApi(lms) : scanWatchedPlaylists(lms))
-    .catch((e) => console.warn(`[archive] scan failed: ${e?.message || e}`));
+  const kick = async () => {
+    if (!web || spotifyWebBackoffActive()) {
+      await scanWatchedPlaylists(lms);
+      return;
+    }
+    try {
+      await scanWatchedPlaylistsWebApi(lms);
+    } catch (e) {
+      console.warn(`[archive] web scan failed: ${e?.message || e}; falling back to Spotty browse`);
+      await scanWatchedPlaylists(lms);
+    }
+  };
+  const guardedKick = () => kick().catch((e) => console.warn(`[archive] scan failed: ${e?.message || e}`));
   console.log(`[archive] watcher using ${web ? "Spotify Web API" : "Spotty browse"} (interval ${SCAN_INTERVAL_MS}ms).`);
-  const first = setTimeout(kick, web ? 5000 : 20000);
+  const first = setTimeout(guardedKick, web ? 5000 : 20000);
   first.unref?.();
-  const timer = setInterval(kick, SCAN_INTERVAL_MS);
+  const timer = setInterval(guardedKick, SCAN_INTERVAL_MS);
   timer.unref?.();
   return { stop: () => { clearTimeout(first); clearInterval(timer); } };
 }

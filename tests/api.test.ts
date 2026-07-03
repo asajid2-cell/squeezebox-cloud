@@ -10,6 +10,7 @@ import { createPlaylistStore } from "../server/playlists.js";
 import { createCurationStore } from "../server/curation.js";
 import { createTapStore } from "../server/tapStore.js";
 import { verifyTag } from "../server/tapToken.js";
+import { __archiveServiceTestHooks } from "../server/archiveService.js";
 import crypto from "node:crypto";
 
 const tinyMp3 = Buffer.from(
@@ -81,6 +82,67 @@ describe("Cloud Squeeze API", () => {
     const response = await request(createApp({ lms: mockLms })).get("/api/state").expect(200);
     expect(response.body.player.connected).toBe(true);
     expect(response.body.nowPlaying.title).toBe("Test Song");
+  });
+
+  it("falls back to Spotty browse when archive Web API scan is rate-limited", async () => {
+    const spotifyEnvKeys = ["SPOTIFY_REFRESH_TOKEN", "SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET", "SPOTIFY_WEB_MAX_RETRIES"] as const;
+    const originalEnv = Object.fromEntries(spotifyEnvKeys.map((key) => [key, process.env[key]]));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    process.env.SPOTIFY_REFRESH_TOKEN = "refresh-token";
+    process.env.SPOTIFY_CLIENT_ID = "client-id";
+    process.env.SPOTIFY_CLIENT_SECRET = "client-secret";
+    process.env.SPOTIFY_WEB_MAX_RETRIES = "0";
+    __archiveServiceTestHooks.resetSpotifyWebForTests();
+    const lms = {
+      ...mockLms,
+      async spotifyLibrary(_playerId: string, type: string) {
+        return type === "playlists"
+          ? [{ title: "Archive", uri: "spotify:playlist:archive", browseId: "8.0", kind: "playlist" }]
+          : [];
+      },
+      async spotifyChildren() {
+        return [];
+      }
+    };
+    vi.stubGlobal("fetch", vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ access_token: "access-token", expires_in: 3600 })
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        headers: { get: () => "60" },
+        text: async () => "Too many requests",
+        json: async () => ({ error: "rate limited" })
+      }));
+
+    try {
+      const response = await request(createApp({ lms })).post("/api/archive/scan").expect(200);
+
+      expect(response.body).toMatchObject({ ok: true, scanning: false, queued: 0, playlists: 1 });
+      expect(response.body.scan.scanning).toBe(false);
+      expect(response.body.scan.watching).toEqual([expect.objectContaining({ name: "Archive", trackCount: 0 })]);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("falling back to Spotty browse"));
+      expect(fetch).toHaveBeenCalledTimes(2);
+
+      const second = await request(createApp({ lms })).post("/api/archive/scan").expect(200);
+
+      expect(second.body).toMatchObject({ ok: true, scanning: false, queued: 0, playlists: 1 });
+      expect(second.body.scan.scanning).toBe(false);
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+      for (const key of spotifyEnvKeys) {
+        const original = originalEnv[key];
+        if (original === undefined) delete process.env[key];
+        else process.env[key] = original;
+      }
+      __archiveServiceTestHooks.resetSpotifyWebForTests();
+    }
   });
 
   it("accepts the full local search limit used by typed library searches", async () => {

@@ -1,8 +1,21 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { __archiveServiceTestHooks, ensureStreamFile } from "../server/archiveService.js";
+import { __archiveServiceTestHooks, ensureStreamFile, scanWatchedPlaylistsWebApi } from "../server/archiveService.js";
+
+const spotifyEnvKeys = ["SPOTIFY_REFRESH_TOKEN", "SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET", "SPOTIFY_WEB_TIMEOUT_MS", "SPOTIFY_WEB_MAX_RETRIES"] as const;
+const originalSpotifyEnv = Object.fromEntries(spotifyEnvKeys.map((key) => [key, process.env[key]]));
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  for (const key of spotifyEnvKeys) {
+    const original = originalSpotifyEnv[key];
+    if (original === undefined) delete process.env[key];
+    else process.env[key] = original;
+  }
+  __archiveServiceTestHooks.resetSpotifyWebForTests();
+});
 
 describe("archive stream cache", () => {
   let tempDirs: string[] = [];
@@ -100,6 +113,58 @@ describe("archive grouping (watched playlists)", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0].name).toBe("Manual");
     expect(groups[0].count).toBe(1);
+  });
+});
+
+describe("Spotify Web archive scanning", () => {
+  it("times out hung Web API requests so the caller can fall back", async () => {
+    process.env.SPOTIFY_REFRESH_TOKEN = "refresh-token";
+    process.env.SPOTIFY_CLIENT_ID = "client-id";
+    process.env.SPOTIFY_CLIENT_SECRET = "client-secret";
+    __archiveServiceTestHooks.setSpotifyWebTimeoutMs(5);
+
+    const fetchMock = vi.fn((_input: string | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => {
+        const error = new Error("aborted");
+        error.name = "AbortError";
+        reject(error);
+      });
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(scanWatchedPlaylistsWebApi({} as any)).rejects.toThrow(/spotify web fetch timeout after 5ms/);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not retry Spotify 429s forever", async () => {
+    process.env.SPOTIFY_REFRESH_TOKEN = "refresh-token";
+    process.env.SPOTIFY_CLIENT_ID = "client-id";
+    process.env.SPOTIFY_CLIENT_SECRET = "client-secret";
+    __archiveServiceTestHooks.setSpotifyWebMaxRetries(0);
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ access_token: "access-token", expires_in: 3600 })
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        headers: { get: () => "30" },
+        json: async () => ({ error: "rate limited" }),
+        text: async () => "Too many requests"
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(scanWatchedPlaylistsWebApi({} as any)).rejects.toThrow(
+      "spotify GET 429 https://api.spotify.com/v1/me/playlists?limit=50"
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await expect(scanWatchedPlaylistsWebApi({} as any)).rejects.toThrow(/spotify web backoff active/);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
 

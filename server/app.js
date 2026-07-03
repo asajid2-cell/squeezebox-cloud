@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { LmsClient } from "./lmsClient.js";
-import { enqueueNowPlaying, enqueueTrack, getQueueStatus, removeJob, ensureStreamFile, scanWatchedPlaylists, scanWatchedPlaylistsWebApi, spotifyWebConfigured, groupArchiveFiles, getWatchStatus, hasArchiveCover, archiveCoverFile, backfillArchiveCovers, tapCachePlan, tapCacheFilePath, cacheTapTag, dropTapCache } from "./archiveService.js";
+import { enqueueNowPlaying, enqueueTrack, getQueueStatus, removeJob, ensureStreamFile, scanWatchedPlaylists, scanWatchedPlaylistsWebApi, spotifyWebConfigured, spotifyWebBackoffActive, groupArchiveFiles, getWatchStatus, hasArchiveCover, archiveCoverFile, backfillArchiveCovers, tapCachePlan, tapCacheFilePath, cacheTapTag, dropTapCache } from "./archiveService.js";
 import {
   addQueueItem,
   addQueueItemNext,
@@ -1962,7 +1962,17 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
   // also runs this on a timer). Returns how many new tracks were queued.
   app.post("/api/archive/scan", async (_req, res) => {
     try {
-      const result = spotifyWebConfigured() ? await scanWatchedPlaylistsWebApi(lms) : await scanWatchedPlaylists(lms);
+      let result;
+      if (spotifyWebConfigured() && !spotifyWebBackoffActive()) {
+        try {
+          result = await scanWatchedPlaylistsWebApi(lms);
+        } catch (error) {
+          console.warn(`[archive] web scan failed: ${error?.message || error}; falling back to Spotty browse`);
+          result = await scanWatchedPlaylists(lms);
+        }
+      } else {
+        result = await scanWatchedPlaylists(lms);
+      }
       res.json({ ok: true, ...result, scan: getWatchStatus() });
     } catch (error) {
       res.status(502).json({ ok: false, error: error.message });
