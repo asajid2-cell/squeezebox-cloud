@@ -4411,6 +4411,52 @@ describe("Cloud Squeeze API", () => {
     expect(response.body.results[0].uri).toBe("spotify:track:0000000000000000000101");
   });
 
+  it("recovers Spotify search when cached provider status is stale", async () => {
+    const previousSpotify = { ...appState.services.spotify };
+    const statusCalls: unknown[] = [];
+    try {
+      appState.services.spotify = { configured: true, reachable: false, detail: "Spotty warming up" };
+      const lms = {
+        ...mockLms,
+        async spotifyStatus(options?: unknown) {
+          statusCalls.push(options);
+          return { configured: true, reachable: true, detail: "Spotty recovered" };
+        }
+      };
+
+      const response = await request(createApp({ lms })).get("/api/spotify/search?q=drake").expect(200);
+
+      expect(response.body.results[0].uri).toBe("spotify:track:0000000000000000000101");
+      expect(statusCalls).toEqual([expect.objectContaining({ force: true })]);
+    } finally {
+      appState.services.spotify = previousSpotify;
+    }
+  });
+
+  it("retries a false-empty cold Spotify search once before showing no results", async () => {
+    const previousSpotify = { ...appState.services.spotify };
+    let searches = 0;
+    try {
+      appState.services.spotify = { configured: true, reachable: true, detail: "Spotty detected" };
+      const lms = {
+        ...mockLms,
+        async spotifySearch() {
+          searches += 1;
+          return searches === 1
+            ? []
+            : [{ id: "spotify:retry", title: "Recovered Hit", artist: "Tester", source: "Spotify", uri: "spotify:track:0000000000000000000abc", kind: "track" }];
+        }
+      };
+
+      const response = await request(createApp({ lms })).get("/api/spotify/search?q=recovered").expect(200);
+
+      expect(searches).toBe(2);
+      expect(response.body.results[0].title).toBe("Recovered Hit");
+    } finally {
+      appState.services.spotify = previousSpotify;
+    }
+  });
+
   it("groups Spotify search results by tracks, artists, albums, and playlists", async () => {
     const groupedLms = {
       ...mockLms,
@@ -4667,9 +4713,10 @@ describe("Cloud Squeeze API", () => {
     expect(calls).toEqual([{ browseId: "7.0", uri: "spotify:artist:1", kind: "artist", title: "Ado" }]);
   });
 
-  it("returns fast empty Spotify results when Spotty is configured but unreachable", async () => {
+  it("returns an unavailable Spotify error when a forced provider check still fails", async () => {
     const previousSpotify = { ...appState.services.spotify };
     const calls: string[] = [];
+    const statusCalls: unknown[] = [];
     const lms = {
       ...mockLms,
       async spotifySearch() {
@@ -4684,21 +4731,30 @@ describe("Cloud Squeeze API", () => {
         calls.push("children");
         return [];
       },
-      async spotifyStatus() {
+      async spotifyStatus(options?: unknown) {
+        statusCalls.push(options);
         return { configured: true, reachable: false, detail: "Reauthorize Spotty in LMS" };
       }
     };
     appState.services.spotify = { configured: true, reachable: false, detail: "Reauthorize Spotty in LMS" };
     try {
       const app = createApp({ lms });
-      const search = await request(app).get("/api/spotify/search?q=drake").expect(200);
-      const library = await request(app).get("/api/spotify/library?type=playlists").expect(200);
-      const children = await request(app).get("/api/spotify/children?uri=spotify%3Aplaylist%3A1&kind=playlist").expect(200);
+      const search = await request(app).get("/api/spotify/search?q=drake").expect(503);
+      const library = await request(app).get("/api/spotify/library?type=playlists").expect(503);
+      const children = await request(app).get("/api/spotify/children?uri=spotify%3Aplaylist%3A1&kind=playlist").expect(503);
 
       expect(search.body.results).toEqual([]);
+      expect(search.body.error).toContain("Reauthorize Spotty");
       expect(library.body.results).toEqual([]);
+      expect(library.body.error).toContain("Reauthorize Spotty");
       expect(children.body.results).toEqual([]);
+      expect(children.body.error).toContain("Reauthorize Spotty");
       expect(calls).toEqual([]);
+      expect(statusCalls).toEqual([
+        expect.objectContaining({ force: true }),
+        expect.objectContaining({ force: true }),
+        expect.objectContaining({ force: true })
+      ]);
     } finally {
       appState.services.spotify = previousSpotify;
     }

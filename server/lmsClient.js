@@ -1009,11 +1009,11 @@ export class LmsClient {
     }
   }
 
-  async spotifyStatus() {
+  async spotifyStatus({ force = false } = {}) {
     const cacheKey = "spotifyStatus";
-    const cached = this.getCached(cacheKey);
+    const cached = force ? null : this.getCached(cacheKey);
     if (cached) return cached;
-    const stale = this.getCached(cacheKey, { allowExpired: true });
+    const stale = force ? null : this.getCached(cacheKey, { allowExpired: true });
     const request = this.once(cacheKey, async () => {
       const status = await this.readSpotifyStatus();
       this.setCached(cacheKey, status, spotifyStatusCacheMs);

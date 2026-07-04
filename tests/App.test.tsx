@@ -755,6 +755,40 @@ describe("Cloud Squeeze UI", () => {
       expect(curationCall?.[1]?.body).toContain("\"action\":\"hide\"");
     });
   });
+
+  it("marks the admin Spotify provider unavailable when Spotty is configured but not reachable", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (url.includes("/api/state")) {
+        return jsonResponse({
+          player: { id: "p1", name: "Test Speaker", connected: true, online: true, mode: "play", volume: 68 },
+          nowPlaying: { id: "t1", title: "X", artist: "Y", album: "", source: "Spotify", duration: 100, elapsed: 0, canSeek: true },
+          queue: [],
+          recentPicks: [],
+          schedule: { current: { name: "Open Queue", until: "10:00 PM", requestsPaused: false }, next: { name: "Quiet", time: "", requestsPaused: false } },
+          rules: [],
+          services: {
+            spotify: { configured: true, reachable: false, detail: "Reauthorize Spotty in LMS" },
+            localLibrary: { root: "Downloads", reachable: true, trackCount: 2 },
+            musicInfo: { configured: true, reachable: true, detail: "Plugin ready" }
+          },
+          trackInfo: { artistBio: "", albumReview: "", lyrics: "" },
+          curation: { hidden: [], saved: [], pinned: [], revision: 0 },
+          admin: { publicRequests: true, maxQueuePerUser: 3, moderation: "basic", scheduleEnabled: true }
+        });
+      }
+      if (url.includes("/api/admin/session")) return jsonResponse({ ok: true });
+      return jsonResponse({ ok: true });
+    });
+    window.history.pushState({}, "", "/admin");
+    window.localStorage.setItem("cloud-squeeze-admin-token", "test-token");
+
+    render(<App />);
+
+    const spotifyRow = (await screen.findByText("Spotify")).closest(".admin-row") as HTMLElement;
+    expect(spotifyRow).toHaveTextContent("Reauthorize Spotty in LMS");
+    expect(spotifyRow.querySelector("svg.bad")).toBeTruthy();
+  });
 });
 
 function jsonResponse(body: unknown, status = 200) {

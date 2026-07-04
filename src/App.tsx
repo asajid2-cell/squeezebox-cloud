@@ -2449,7 +2449,7 @@ function AdminConsole({ state, onSave, onLogout }: { state: AppState; onSave: ()
   const serviceRows = useMemo(
     () => [
       { label: "Speaker", ok: state.player.connected, detail: state.player.detail || state.player.name, action: checkSpeaker },
-      { label: "Spotify", ok: state.services.spotify.configured, detail: state.services.spotify.detail, action: setupSpotify },
+      { label: "Spotify", ok: state.services.spotify.configured && state.services.spotify.reachable !== false, detail: state.services.spotify.detail, action: setupSpotify },
       { label: "Music info", ok: musicInfo.configured, detail: musicInfo.detail, action: checkMusicInfo },
       {
         label: "Local library",

@@ -969,10 +969,6 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
 
   app.get("/api/spotify/search", async (req, res) => {
     try {
-      if (!spotifyBrowsingAvailable()) {
-        res.json({ results: [], spotify: appState.services.spotify });
-        return;
-      }
       const limit = parseBoundedIntegerParam(req.query.limit, { defaultValue: 20, min: 1, max: 50 });
       if (limit === null) {
         res.status(400).json({ error: "Spotify search limit must be a positive integer up to 50", results: [] });
@@ -983,9 +979,13 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
         res.json({ results: [] });
         return;
       }
+      if (!(await ensureSpotifyBrowsingAvailable(lms))) {
+        res.status(503).json({ error: spotifyUnavailableMessage(), results: [], groups: groupSpotifyResults([]), spotify: appState.services.spotify });
+        return;
+      }
       const results = await withLmsRetry(lms, async () => {
         const playerId = await hotPlayerId(lms);
-        return lms.spotifySearch(playerId, query, limit);
+        return spotifySearchWithWarmupRetry(lms, playerId, query, limit);
       });
       rememberKnownSpotifyTracks(results);
       const visible = filterHiddenResults(results, curation);
@@ -998,10 +998,6 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
   app.get("/api/spotify/search/categories", async (req, res) => {
     const empty = { artists: [], albums: [], playlists: [] };
     try {
-      if (!spotifyBrowsingAvailable()) {
-        res.json(empty);
-        return;
-      }
       const limit = parseBoundedIntegerParam(req.query.limit, { defaultValue: 8, min: 1, max: 20 });
       if (limit === null) {
         res.status(400).json({ error: "Spotify category limit must be a positive integer up to 20", ...empty });
@@ -1010,6 +1006,10 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       const query = String(req.query.q || "").trim();
       if (!query) {
         res.json(empty);
+        return;
+      }
+      if (!(await ensureSpotifyBrowsingAvailable(lms))) {
+        res.status(503).json({ error: spotifyUnavailableMessage(), ...empty, spotify: appState.services.spotify });
         return;
       }
       const playerId = await hotPlayerId(lms);
@@ -1027,8 +1027,8 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
 
   app.get("/api/spotify/library", async (req, res) => {
     try {
-      if (!spotifyBrowsingAvailable()) {
-        res.json({ results: [], spotify: appState.services.spotify });
+      if (!(await ensureSpotifyBrowsingAvailable(lms))) {
+        res.status(503).json({ error: spotifyUnavailableMessage(), results: [], spotify: appState.services.spotify });
         return;
       }
       const type = String(req.query.type || "playlists");
@@ -1059,8 +1059,8 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
 
   app.get("/api/spotify/children", async (req, res) => {
     try {
-      if (!spotifyBrowsingAvailable()) {
-        res.json({ results: [], spotify: appState.services.spotify });
+      if (!(await ensureSpotifyBrowsingAvailable(lms))) {
+        res.status(503).json({ error: spotifyUnavailableMessage(), results: [], spotify: appState.services.spotify });
         return;
       }
       const kind = String(req.query.kind || "playlist");
@@ -2885,6 +2885,33 @@ function spotifyBrowsingAvailable() {
 
 function spotifyUnavailableMessage() {
   return appState.services.spotify.detail || "Spotify browsing is unavailable";
+}
+
+async function refreshSpotifyAvailability(lms) {
+  const status = typeof lms.spotifyStatus === "function"
+    ? await lms.spotifyStatus({ force: true })
+    : { configured: false, reachable: false, detail: "Spotify status check is unavailable" };
+  updateSpotifyStatus(status);
+  refreshState.servicesAt = Date.now();
+  return status;
+}
+
+async function ensureSpotifyBrowsingAvailable(lms) {
+  if (spotifyBrowsingAvailable()) return true;
+  await refreshSpotifyAvailability(lms).catch((error) => {
+    updateSpotifyStatus({ configured: false, reachable: false, detail: error.message });
+  });
+  return spotifyBrowsingAvailable();
+}
+
+async function spotifySearchWithWarmupRetry(lms, playerId, query, limit) {
+  const first = await lms.spotifySearch(playerId, query, limit);
+  if ((first || []).length > 0) return first;
+  await delay(300);
+  await refreshSpotifyAvailability(lms).catch(() => null);
+  if (!spotifyBrowsingAvailable()) return first;
+  const second = await lms.spotifySearch(playerId, query, limit);
+  return (second || []).length > 0 ? second : first;
 }
 
 async function checkUrl(url) {

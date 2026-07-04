@@ -405,10 +405,11 @@ async function assertSpotifyUnavailableResponses() {
   ];
   for (const endpoint of endpoints) {
     const started = performance.now();
-    const body = await requestJson(endpoint);
+    const body = await requestJson(endpoint, {}, { expectedStatus: 503 });
     const elapsed = Math.round(performance.now() - started);
     assert(Array.isArray(body.results), `${endpoint} did not return a results array while Spotify is unavailable`);
     assert(body.results.length === 0, `${endpoint} returned results while Spotify is unavailable`);
+    assert(body.error, `${endpoint} did not explain why Spotify is unavailable`);
     assert(elapsed < 500, `${endpoint} was too slow while Spotify is unavailable: ${elapsed}ms`);
   }
 }
