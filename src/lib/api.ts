@@ -1,4 +1,4 @@
-import type { AppState, ConnectionGuide, LibraryCollection, Track } from "../types";
+import type { AppState, ConnectionGuide, CustomPlaylist, LibraryCollection, Track } from "../types";
 
 const apiBase = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/api`;
 let stateRequest: Promise<AppState> | null = null;
@@ -47,6 +47,8 @@ const fallbackState: AppState = {
     lyrics: "Lyrics will appear when available."
   },
   playback: { shuffle: false, manualShuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "mixed", lastShuffleRefillAt: 0, lastShuffleSeed: "", lastSmartQueueBase: "", history: [], previousTracks: [] },
+  curation: { hidden: [], saved: [], pinned: [], revision: 0 },
+  customPlaylists: [],
   admin: { publicRequests: true, maxQueuePerUser: 25, moderation: "basic", scheduleEnabled: true }
 };
 
@@ -115,6 +117,64 @@ export async function fetchCollectionTracks(collection: string, folder: string, 
   const response = await fetch(`${apiBase}/library/collection?${params.toString()}`);
   const data = await responseJson<{ results?: Track[] }>(response, "Library collection failed");
   return data.results || [];
+}
+
+export async function fetchCustomPlaylists(): Promise<CustomPlaylist[]> {
+  const response = await fetch(`${apiBase}/custom-playlists`);
+  const data = await responseJson<{ playlists?: CustomPlaylist[] }>(response, "Custom playlists failed");
+  return data.playlists || [];
+}
+
+export async function createCustomPlaylist(input: { title: string; description?: string }) {
+  const response = await fetch(`${apiBase}/custom-playlists`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...adminAuthHeader() },
+    body: JSON.stringify(input)
+  });
+  return responseJson<{ ok: boolean; playlist: CustomPlaylist; playlists: CustomPlaylist[] }>(response, "Playlist creation failed");
+}
+
+export async function updateCustomPlaylist(id: string, input: { title?: string; description?: string }) {
+  const response = await fetch(`${apiBase}/custom-playlists/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...adminAuthHeader() },
+    body: JSON.stringify(input)
+  });
+  return responseJson<{ ok: boolean; playlist: CustomPlaylist; playlists: CustomPlaylist[] }>(response, "Playlist update failed");
+}
+
+export async function deleteCustomPlaylist(id: string) {
+  const response = await fetch(`${apiBase}/custom-playlists/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: adminAuthHeader()
+  });
+  return responseJson<{ ok: boolean; playlists: CustomPlaylist[] }>(response, "Playlist removal failed");
+}
+
+export async function addCustomPlaylistTracks(id: string, tracks: Partial<Track>[]) {
+  const response = await fetch(`${apiBase}/custom-playlists/${encodeURIComponent(id)}/tracks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...adminAuthHeader() },
+    body: JSON.stringify({ tracks: tracks.map(compactCurationTrack) })
+  });
+  return responseJson<{ ok: boolean; playlist: CustomPlaylist; added: Partial<Track>[]; accepted: number; rejected: number }>(response, "Playlist add failed");
+}
+
+export async function removeCustomPlaylistTrack(playlistId: string, trackId: string) {
+  const response = await fetch(`${apiBase}/custom-playlists/${encodeURIComponent(playlistId)}/tracks/${encodeURIComponent(trackId)}`, {
+    method: "DELETE",
+    headers: adminAuthHeader()
+  });
+  return responseJson<{ ok: boolean; playlist: CustomPlaylist }>(response, "Playlist track removal failed");
+}
+
+export async function moveCustomPlaylistTrack(playlistId: string, trackId: string, direction: "up" | "down") {
+  const response = await fetch(`${apiBase}/custom-playlists/${encodeURIComponent(playlistId)}/tracks/${encodeURIComponent(trackId)}/move`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...adminAuthHeader() },
+    body: JSON.stringify({ direction })
+  });
+  return responseJson<{ ok: boolean; playlist: CustomPlaylist }>(response, "Playlist track move failed");
 }
 
 export async function uploadTrack(file: File) {
@@ -237,6 +297,15 @@ export async function saveAdminSettings(settings: Partial<AppState["admin"]>) {
   return responseJson(response, "Admin settings failed");
 }
 
+export async function curateLibraryItem(action: "hide" | "unhide" | "save" | "unsave" | "pin" | "unpin", track: Partial<Track>) {
+  const response = await fetch(`${apiBase}/curation`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...adminAuthHeader() },
+    body: JSON.stringify({ action, track: compactCurationTrack(track) })
+  });
+  return responseJson<{ ok: boolean; action: string; curation: AppState["curation"] }>(response, "Curation update failed");
+}
+
 export async function loginAdmin(password: string) {
   const response = await fetch(`${apiBase}/admin/login`, {
     method: "POST",
@@ -260,6 +329,15 @@ export function clearAdminSession() {
 function adminAuthHeader() {
   const token = window.localStorage.getItem("cloud-squeeze-admin-token");
   return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function compactCurationTrack(track: Partial<Track>) {
+  const compact: Partial<Track> = {};
+  for (const key of ["id", "title", "artist", "album", "source", "kind", "uri", "path", "lmsTrackId", "browseId", "collection", "folder", "art", "artwork", "duration"] as const) {
+    const value = track[key];
+    if (value !== undefined && value !== null && value !== "") compact[key] = value as never;
+  }
+  return compact;
 }
 
 export async function checkSpeaker() {

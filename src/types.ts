@@ -24,6 +24,27 @@ export type QueueItem = Track & {
   etaMinutes: number;
 };
 
+export type CurationItem = {
+  key: string;
+  track: Partial<Track>;
+  updatedAt: string;
+};
+
+export type CustomPlaylistTrack = Partial<Track> & {
+  id: string;
+  key: string;
+  addedAt: string;
+};
+
+export type CustomPlaylist = {
+  id: string;
+  title: string;
+  description: string;
+  tracks: CustomPlaylistTrack[];
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type AppState = {
   player: {
     id: string;
@@ -65,6 +86,13 @@ export type AppState = {
     history?: string[];
     previousTracks?: Partial<Track>[];
   };
+  curation: {
+    hidden: CurationItem[];
+    saved: CurationItem[];
+    pinned: CurationItem[];
+    revision: number;
+  };
+  customPlaylists: CustomPlaylist[];
   admin: {
     publicRequests: boolean;
     maxQueuePerUser: number;

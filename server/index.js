@@ -1,11 +1,14 @@
 import { createApp, prewarmLibraryCaches, prewarmSpotifySearchCaches } from "./app.js";
 import { LmsClient } from "./lmsClient.js";
-import { config } from "./state.js";
+import { config, loadDiscoveryState } from "./state.js";
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const lms = new LmsClient();
+await loadDiscoveryState().catch((error) => {
+  console.warn(`Could not load Cloud Squeeze discovery state: ${error.message}`);
+});
 await prewarmLibraryCaches(lms).catch(() => null);
 const app = createApp({ lms });
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

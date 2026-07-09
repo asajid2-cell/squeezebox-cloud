@@ -6,10 +6,13 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  EyeOff,
+  Heart,
   ListMusic,
   LockKeyhole,
   Music2,
   Pause,
+  Pin,
   Play,
   Radio,
   Repeat,
@@ -29,20 +32,27 @@ import {
   checkMusicInfo,
   checkSpeaker,
   checkSpotify,
+  addCustomPlaylistTracks,
+  createCustomPlaylist,
+  curateLibraryItem,
+  deleteCustomPlaylist,
   fetchCollectionTracks,
   clearAdminSession,
   fetchCollections,
   fetchConnectionGuide,
+  fetchCustomPlaylists,
   fetchSpotifyChildren,
   fetchSpotifyLibrary,
   fetchState,
   getSpotifyConnect,
   hasAdminSession,
   loginAdmin,
+  moveCustomPlaylistTrack,
   moveQueueItem,
   playerAction,
   playTrack,
   playTracks,
+  removeCustomPlaylistTrack,
   removeQueueItem,
   rescanLibrary,
   saveAdminSettings,
@@ -51,10 +61,11 @@ import {
   searchSpotify,
   seekPlayer,
   setPlayerVolume,
+  updateCustomPlaylist,
   updateQueueItem,
   uploadTrack,
 } from "./lib/api";
-import type { AppState, ConnectionGuide, LibraryCollection, Track } from "./types";
+import type { AppState, ConnectionGuide, CustomPlaylist, LibraryCollection, Track } from "./types";
 import "./styles.css";
 
 const spotifyRecommendationQuery = "drake";
@@ -72,6 +83,7 @@ const navItems = [
 
 type PublicScreenName = (typeof navItems)[number]["label"];
 type ActionRunner = <T>(action: () => Promise<T>) => Promise<T | undefined>;
+type SearchKindFilter = "all" | "track" | "album" | "artist" | "playlist";
 
 function mergeStateFromAction(previous: AppState | null, result: unknown): AppState | null {
   if (!previous || !result || typeof result !== "object") return previous;
@@ -98,8 +110,23 @@ function mergeStateFromAction(previous: AppState | null, result: unknown): AppSt
     next.playback = { ...previous.playback, ...payload.playback };
     changed = true;
   }
+  if (payload.curation && typeof payload.curation === "object") {
+    next.curation = { ...defaultCuration(), ...previous.curation, ...payload.curation };
+    changed = true;
+  }
+  if (Array.isArray(payload.customPlaylists)) {
+    next.customPlaylists = payload.customPlaylists;
+    changed = true;
+  } else if (Array.isArray((payload as { playlists?: unknown }).playlists)) {
+    next.customPlaylists = (payload as { playlists: AppState["customPlaylists"] }).playlists;
+    changed = true;
+  }
 
   return changed ? next : previous;
+}
+
+function defaultCuration(): AppState["curation"] {
+  return { hidden: [], saved: [], pinned: [], revision: 0 };
 }
 
 export default function App() {
@@ -282,6 +309,7 @@ function PublicScreen({
       setQuery={setQuery}
       results={results}
       state={state}
+      customPlaylists={state.customPlaylists || []}
       sourceFilter={sourceFilter}
       setSourceFilter={setSourceFilter}
       onRefresh={onRefresh}
@@ -310,7 +338,7 @@ function PublicScreen({
   if (activeScreen === "Playlists") {
     return (
       <div className="content-grid focus-grid">
-        <PlaylistsPanel requestsOpen={publicRequestsOpen(state)} onRefresh={onRefresh} onAction={onAction} />
+        <PlaylistsPanel requestsOpen={publicRequestsOpen(state)} curation={state.curation || defaultCuration()} customPlaylists={state.customPlaylists || []} onRefresh={onRefresh} onAction={onAction} />
         <RightRail state={state} />
       </div>
     );
@@ -700,6 +728,7 @@ function SearchPanel({
   setQuery,
   results,
   state,
+  customPlaylists,
   sourceFilter,
   setSourceFilter,
   onRefresh,
@@ -709,17 +738,42 @@ function SearchPanel({
   setQuery: (value: string) => void;
   results: Track[];
   state: AppState;
+  customPlaylists: CustomPlaylist[];
   sourceFilter: "local" | "uploaded" | "spotify" | "playlists";
   setSourceFilter: (value: "local" | "uploaded" | "spotify" | "playlists") => void;
   onRefresh: () => void;
   onAction: ActionRunner;
 }) {
   const [showAllResults, setShowAllResults] = useState(false);
+  const [kindFilter, setKindFilter] = useState<SearchKindFilter>("all");
   const [collections, setCollections] = useState<LibraryCollection[]>([]);
   const [uploadError, setUploadError] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [selectedSpotify, setSelectedSpotify] = useState<Track | null>(null);
+  const [detailTracks, setDetailTracks] = useState<Track[]>([]);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [hasMoreDetail, setHasMoreDetail] = useState(false);
+  const detailPageSize = 50;
   const spotifyAvailable = state.services.spotify.configured;
-  const visibleResults = showAllResults ? results : results.slice(0, 3);
+  const canCurate = hasAdminSession();
+  const curation = state.curation || defaultCuration();
+  const hiddenKeys = useMemo(() => new Set(curation.hidden.map((item) => item.key)), [curation.hidden]);
+  const spotifyKindCounts = useMemo(() => {
+    return results.reduce(
+      (counts, track) => {
+        const kind = track.kind || "track";
+        if (kind in counts) counts[kind as Exclude<SearchKindFilter, "all">] += 1;
+        return counts;
+      },
+      { track: 0, album: 0, artist: 0, playlist: 0 }
+    );
+  }, [results]);
+  const filteredByKind = sourceFilter === "spotify" && kindFilter !== "all"
+    ? results.filter((track) => (track.kind || "track") === kindFilter)
+    : results;
+  const filteredResults = filteredByKind.filter((track) => !hiddenKeys.has(curationKey(track)));
+  const visibleResults = showAllResults ? filteredResults : filteredResults.slice(0, 3);
+  const visibleDetailTracks = detailTracks.filter((track) => !hiddenKeys.has(curationKey(track)));
   const filteredCollections = collections.filter((item) =>
     `${item.collection} ${item.folder} ${item.sample.join(" ")}`.toLowerCase().includes(query.toLowerCase())
   );
@@ -730,10 +784,75 @@ function SearchPanel({
 
   useEffect(() => {
     setShowAllResults(false);
+    setKindFilter("all");
+    setSelectedSpotify(null);
+    setDetailTracks([]);
+    setHasMoreDetail(false);
   }, [query, sourceFilter]);
+
+  async function openSpotifyResult(track: Track) {
+    setSelectedSpotify(track);
+    setDetailTracks(track.kind === "track" ? [track] : []);
+    setHasMoreDetail(false);
+    if (track.kind === "track") {
+      setLoadingDetail(false);
+      return;
+    }
+    setLoadingDetail(true);
+    try {
+      const tracks = await onAction(() => fetchSpotifyChildren(track, detailPageSize, 0));
+      if (tracks) {
+        setDetailTracks(tracks);
+        setHasMoreDetail(tracks.length === detailPageSize);
+      }
+    } finally {
+      setLoadingDetail(false);
+    }
+  }
+
+  async function loadMoreSpotifyDetail() {
+    if (!selectedSpotify) return;
+    setLoadingDetail(true);
+    try {
+      const offset = detailTracks.length;
+      const tracks = await onAction(() => fetchSpotifyChildren(selectedSpotify, detailPageSize, offset));
+      if (tracks) {
+        setDetailTracks((current) => [...current, ...tracks]);
+        setHasMoreDetail(tracks.length === detailPageSize);
+      }
+    } finally {
+      setLoadingDetail(false);
+    }
+  }
+
+  function closeSpotifyDetail() {
+    setSelectedSpotify(null);
+    setDetailTracks([]);
+    setHasMoreDetail(false);
+    setLoadingDetail(false);
+  }
+
+  async function queueableSpotifyDetailTracks() {
+    const queueLimit = 200;
+    if (selectedSpotify && selectedSpotify.kind !== "track") {
+      return fetchSpotifyChildren(selectedSpotify, queueLimit, 0);
+    }
+    return detailTracks;
+  }
+
   return (
     <section className="panel search-panel" aria-label="Library">
-      <h2>Library</h2>
+      <div className="playlist-title-row">
+        <div>
+          <h2>{selectedSpotify ? selectedSpotify.title : "Library"}</h2>
+          {selectedSpotify && <small>{selectedSpotify.artist || selectedSpotify.album || selectedSpotify.source}</small>}
+        </div>
+        {selectedSpotify && (
+          <button className="ghost-add" onClick={closeSpotifyDetail}>
+            Back
+          </button>
+        )}
+      </div>
       <div className="source-tabs">
         <button disabled={!spotifyAvailable} className={sourceFilter === "spotify" ? "primary-small" : ""} onClick={() => setSourceFilter("spotify")}>
           Spotify{spotifyAvailable ? "" : " not linked"}
@@ -790,6 +909,41 @@ function SearchPanel({
           ))}
         </div>
       )}
+      {sourceFilter === "spotify" && spotifyAvailable && results.length > 0 && !selectedSpotify && (
+        <div className="kind-filter-row" aria-label="Spotify result types">
+          {(["all", "track", "album", "artist", "playlist"] as const).map((kind) => {
+            const count = kind === "all" ? results.length : spotifyKindCounts[kind];
+            return (
+              <button key={kind} className={kindFilter === kind ? "is-selected" : ""} disabled={count === 0} onClick={() => setKindFilter(kind)}>
+                {kind === "all" ? "All" : `${kind[0].toUpperCase()}${kind.slice(1)}s`} <span>{count}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {selectedSpotify && (
+        <PlaylistTracks
+          title={selectedSpotify.title}
+          tracks={visibleDetailTracks}
+          loading={loadingDetail}
+          hasMore={hasMoreDetail}
+          onLoadMore={loadMoreSpotifyDetail}
+          getQueueTracks={queueableSpotifyDetailTracks}
+          requestsOpen={publicRequestsOpen(state)}
+          canCurate={canCurate}
+          curation={curation}
+          customPlaylists={customPlaylists}
+          onRefresh={onRefresh}
+          onAction={onAction}
+        />
+      )}
+      {!selectedSpotify && canCurate && curation.pinned.length > 0 && (
+        <CuratedShelf title="Pinned" items={curation.pinned} curation={curation} customPlaylists={customPlaylists} requestsOpen={publicRequestsOpen(state)} onRefresh={onRefresh} onAction={onAction} onOpen={openSpotifyResult} />
+      )}
+      {!selectedSpotify && canCurate && curation.saved.length > 0 && (
+        <CuratedShelf title="Saved" items={curation.saved} curation={curation} customPlaylists={customPlaylists} requestsOpen={publicRequestsOpen(state)} onRefresh={onRefresh} onAction={onAction} onOpen={openSpotifyResult} />
+      )}
+      {!selectedSpotify && (
       <div className="result-list">
         {sourceFilter === "spotify" && !spotifyAvailable && (
           <EmptyState title="Spotify is not linked" detail="Connect Spotty in LMS before public Spotify search is enabled." />
@@ -802,6 +956,9 @@ function SearchPanel({
         )}
         {sourceFilter === "spotify" && spotifyAvailable && query.trim() !== "" && results.length === 0 && (
           <EmptyState title="No Spotify results" detail="Try another Spotify search term." />
+        )}
+        {sourceFilter === "spotify" && spotifyAvailable && results.length > 0 && filteredResults.length === 0 && (
+          <EmptyState title={`No ${kindFilter}s found`} detail="Try another result type or search term." />
         )}
         {sourceFilter === "playlists" && filteredCollections.length === 0 && (
           <EmptyState title="No playlist collections" detail="Try another collection, era, folder, or track name." />
@@ -824,23 +981,92 @@ function SearchPanel({
           />
         )}
         {visibleResults.map((track) => (
-          <SearchResultRow key={track.id} track={track} requestsOpen={publicRequestsOpen(state)} onRefresh={onRefresh} onAction={onAction} />
+          <SearchResultRow key={track.id} track={track} requestsOpen={publicRequestsOpen(state)} canCurate={canCurate} curation={curation} customPlaylists={customPlaylists} onOpen={sourceFilter === "spotify" ? openSpotifyResult : undefined} onRefresh={onRefresh} onAction={onAction} />
         ))}
       </div>
-      {(sourceFilter === "local" || sourceFilter === "uploaded" || sourceFilter === "spotify") && results.length > 3 && (
+      )}
+      {!selectedSpotify && (sourceFilter === "local" || sourceFilter === "uploaded" || sourceFilter === "spotify") && filteredResults.length > 3 && (
         <button className="link-button" onClick={() => setShowAllResults(!showAllResults)}>
-          {showAllResults ? "Show fewer" : `View all ${results.length} results`}
+          {showAllResults ? "Show fewer" : `View all ${filteredResults.length} results`}
         </button>
       )}
     </section>
   );
 }
 
-function SearchResultRow({ track, requestsOpen, onRefresh, onAction }: { track: Track; requestsOpen: boolean; onRefresh: () => void; onAction: ActionRunner }) {
+function CuratedShelf({
+  title,
+  items,
+  curation,
+  customPlaylists,
+  requestsOpen,
+  onOpen,
+  onRefresh,
+  onAction
+}: {
+  title: string;
+  items: AppState["curation"]["saved"];
+  curation: AppState["curation"];
+  customPlaylists: CustomPlaylist[];
+  requestsOpen: boolean;
+  onOpen: (track: Track) => void;
+  onRefresh: () => void;
+  onAction: ActionRunner;
+}) {
+  const visibleItems = items.filter((item) => !curation.hidden.some((hidden) => hidden.key === item.key)).slice(0, 5);
+  if (visibleItems.length === 0) return null;
+  return (
+    <div className="curation-shelf">
+      <div className="curation-shelf-title">
+        <strong>{title}</strong>
+        <span>{visibleItems.length}</span>
+      </div>
+      <div className="result-list">
+        {visibleItems.map((item) => {
+          const track = curationTrack(item.track);
+          return (
+            <SearchResultRow
+              key={`${title}-${item.key}`}
+              track={track}
+              requestsOpen={requestsOpen}
+              canCurate
+              curation={curation}
+              customPlaylists={customPlaylists}
+              onOpen={track.kind && track.kind !== "track" ? onOpen : undefined}
+              onRefresh={onRefresh}
+              onAction={onAction}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function SearchResultRow({
+  track,
+  requestsOpen,
+  canCurate = false,
+  curation = defaultCuration(),
+  customPlaylists = [],
+  onOpen,
+  onRefresh,
+  onAction
+}: {
+  track: Track;
+  requestsOpen: boolean;
+  canCurate?: boolean;
+  curation?: AppState["curation"];
+  customPlaylists?: CustomPlaylist[];
+  onOpen?: (track: Track) => void;
+  onRefresh: () => void;
+  onAction: ActionRunner;
+}) {
   const playable = !track.kind || track.kind === "track" || Boolean(track.path || track.lmsTrackId);
   const art = track.art || track.artwork;
+  const container = Boolean(onOpen && !playable);
   return (
-    <div className="result-row">
+    <div className={`result-row ${container ? "is-container-result" : ""}`}>
       <div className="cover-thumb">{art && <img src={art} alt="" />}</div>
       <div>
         <strong>{track.title}</strong>
@@ -851,31 +1077,117 @@ function SearchResultRow({ track, requestsOpen, onRefresh, onAction }: { track: 
       </div>
       <span>{track.kind && track.kind !== "track" ? track.kind : track.duration ? formatTime(track.duration) : "--:--"}</span>
       <div className="track-actions">
+        {container && <button className="ghost-add" onClick={() => onOpen?.(track)}>Open</button>}
         {playable && <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("play-now", track); await onRefresh(); })}>Play now</button>}
         {playable && <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("play-next", track); await onRefresh(); })}>Play next</button>}
         {playable && <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("add-queue", track); await onRefresh(); })}>Queue</button>}
+        {canCurate && <CurationControls track={track} curation={curation} customPlaylists={customPlaylists} onRefresh={onRefresh} onAction={onAction} />}
       </div>
     </div>
   );
 }
 
-function PlaylistsPanel({ requestsOpen, onRefresh, onAction }: { requestsOpen: boolean; onRefresh: () => void; onAction: ActionRunner }) {
+function CurationControls({
+  track,
+  curation,
+  customPlaylists = [],
+  onRefresh,
+  onAction
+}: {
+  track: Track;
+  curation: AppState["curation"];
+  customPlaylists?: CustomPlaylist[];
+  onRefresh: () => void;
+  onAction: ActionRunner;
+}) {
+  const key = curationKey(track);
+  const saved = curation.saved.some((item) => item.key === key);
+  const pinned = curation.pinned.some((item) => item.key === key);
+
+  async function curate(action: "hide" | "save" | "unsave" | "pin" | "unpin") {
+    await onAction(async () => {
+      await curateLibraryItem(action, track);
+      await onRefresh();
+    });
+  }
+
+  return (
+    <>
+      <button className="ghost-add curation-button" aria-label={`${saved ? "Unsave" : "Save"} ${track.title}`} title={saved ? "Remove from saved" : "Save item"} onClick={() => curate(saved ? "unsave" : "save")}>
+        <Heart size={14} fill={saved ? "currentColor" : "none"} />
+        {saved ? "Saved" : "Save"}
+      </button>
+      <button className="ghost-add curation-button" aria-label={`${pinned ? "Unpin" : "Pin"} ${track.title}`} title={pinned ? "Remove pin" : "Pin item"} onClick={() => curate(pinned ? "unpin" : "pin")}>
+        <Pin size={14} fill={pinned ? "currentColor" : "none"} />
+        {pinned ? "Pinned" : "Pin"}
+      </button>
+      <button className="ghost-add curation-button danger" aria-label={`Hide ${track.title}`} title="Hide from discovery" onClick={() => curate("hide")}>
+        <EyeOff size={14} />
+        Hide
+      </button>
+      {customPlaylists.length > 0 && (
+        <select
+          className="playlist-add-select"
+          aria-label={`Add ${track.title} to playlist`}
+          value=""
+          onChange={async (event) => {
+            const playlistId = event.currentTarget.value;
+            event.currentTarget.value = "";
+            if (!playlistId) return;
+            await onAction(async () => {
+              await addCustomPlaylistTracks(playlistId, [track]);
+              await onRefresh();
+            });
+          }}
+        >
+          <option value="">Add to...</option>
+          {customPlaylists.map((playlist) => (
+            <option key={playlist.id} value={playlist.id}>{playlist.title}</option>
+          ))}
+        </select>
+      )}
+    </>
+  );
+}
+
+function PlaylistsPanel({
+  requestsOpen,
+  curation,
+  customPlaylists,
+  onRefresh,
+  onAction
+}: {
+  requestsOpen: boolean;
+  curation: AppState["curation"];
+  customPlaylists: CustomPlaylist[];
+  onRefresh: () => void;
+  onAction: ActionRunner;
+}) {
   const [collections, setCollections] = useState<LibraryCollection[]>([]);
-  const [source, setSource] = useState<"local" | "spotify">("local");
+  const [source, setSource] = useState<"curated" | "local" | "spotify">("local");
   const [spotifyType, setSpotifyType] = useState<"playlists" | "albums" | "artists" | "tracks" | "home">("playlists");
   const [spotifyItems, setSpotifyItems] = useState<Track[]>([]);
+  const [customItems, setCustomItems] = useState<CustomPlaylist[]>(customPlaylists);
+  const [selectedCustom, setSelectedCustom] = useState<CustomPlaylist | null>(null);
   const [selectedLocal, setSelectedLocal] = useState<LibraryCollection | null>(null);
   const [selectedSpotify, setSelectedSpotify] = useState<Track | null>(null);
   const [detailTracks, setDetailTracks] = useState<Track[]>([]);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [hasMoreDetail, setHasMoreDetail] = useState(false);
+  const [newPlaylistTitle, setNewPlaylistTitle] = useState("");
+  const [newPlaylistDescription, setNewPlaylistDescription] = useState("");
   const detailPageSize = 50;
+  const canCurate = hasAdminSession();
 
   useEffect(() => {
     onAction(async () => {
       setCollections(await fetchCollections());
     });
   }, [onAction]);
+
+  useEffect(() => {
+    setCustomItems(customPlaylists);
+  }, [customPlaylists]);
 
   useEffect(() => {
     if (source === "spotify") {
@@ -885,7 +1197,32 @@ function PlaylistsPanel({ requestsOpen, onRefresh, onAction }: { requestsOpen: b
     }
   }, [source, spotifyType, onAction]);
 
+  async function refreshCustom() {
+    const playlists = await fetchCustomPlaylists();
+    setCustomItems(playlists);
+    setSelectedCustom((current) => {
+      if (!current) return current;
+      const updated = playlists.find((playlist) => playlist.id === current.id) || null;
+      setDetailTracks(updated ? updated.tracks.map(curationTrack) : []);
+      return updated;
+    });
+    return playlists;
+  }
+
+  async function createCuratedPlaylist() {
+    const title = newPlaylistTitle.trim();
+    if (!title) return;
+    await onAction(async () => {
+      const result = await createCustomPlaylist({ title, description: newPlaylistDescription });
+      setCustomItems(result.playlists);
+      setNewPlaylistTitle("");
+      setNewPlaylistDescription("");
+      await onRefresh();
+    });
+  }
+
   async function openLocal(collection: LibraryCollection) {
+    setSelectedCustom(null);
     setSelectedSpotify(null);
     setSelectedLocal(collection);
     setDetailTracks([]);
@@ -903,6 +1240,7 @@ function PlaylistsPanel({ requestsOpen, onRefresh, onAction }: { requestsOpen: b
   }
 
   async function openSpotify(track: Track) {
+    setSelectedCustom(null);
     if (track.kind === "track") {
       setSelectedLocal(null);
       setSelectedSpotify(track);
@@ -927,7 +1265,17 @@ function PlaylistsPanel({ requestsOpen, onRefresh, onAction }: { requestsOpen: b
     }
   }
 
+  function openCustom(playlist: CustomPlaylist) {
+    setSelectedLocal(null);
+    setSelectedSpotify(null);
+    setSelectedCustom(playlist);
+    setDetailTracks(playlist.tracks.map(curationTrack));
+    setHasMoreDetail(false);
+    setLoadingDetail(false);
+  }
+
   async function loadMoreDetail() {
+    if (selectedCustom) return;
     if (!selectedLocal && !selectedSpotify) return;
     setLoadingDetail(true);
     try {
@@ -947,6 +1295,7 @@ function PlaylistsPanel({ requestsOpen, onRefresh, onAction }: { requestsOpen: b
 
   async function queueableDetailTracks() {
     const queueLimit = 200;
+    if (selectedCustom) return detailTracks.slice(0, queueLimit);
     if (selectedLocal) {
       return fetchCollectionTracks(selectedLocal.collection, selectedLocal.folder, "all", queueLimit, 0);
     }
@@ -956,8 +1305,51 @@ function PlaylistsPanel({ requestsOpen, onRefresh, onAction }: { requestsOpen: b
     return detailTracks;
   }
 
-  const selectedTitle = selectedLocal?.folder || selectedSpotify?.title || "";
-  const selectedSubtitle = selectedLocal?.collection || selectedSpotify?.artist || selectedSpotify?.source || "";
+  async function deleteSelectedCustom() {
+    if (!selectedCustom) return;
+    await onAction(async () => {
+      const result = await deleteCustomPlaylist(selectedCustom.id);
+      setCustomItems(result.playlists);
+      setSelectedCustom(null);
+      setDetailTracks([]);
+      await onRefresh();
+    });
+  }
+
+  async function renameSelectedCustom(title: string, description: string) {
+    if (!selectedCustom) return;
+    await onAction(async () => {
+      const result = await updateCustomPlaylist(selectedCustom.id, { title, description });
+      setCustomItems(result.playlists);
+      setSelectedCustom(result.playlist);
+      await onRefresh();
+    });
+  }
+
+  async function removeCustomTrack(track: Track) {
+    if (!selectedCustom) return;
+    await onAction(async () => {
+      const result = await removeCustomPlaylistTrack(selectedCustom.id, track.id);
+      setSelectedCustom(result.playlist);
+      setDetailTracks(result.playlist.tracks.map(curationTrack));
+      await refreshCustom();
+      await onRefresh();
+    });
+  }
+
+  async function moveCustomTrack(track: Track, direction: "up" | "down") {
+    if (!selectedCustom) return;
+    await onAction(async () => {
+      const result = await moveCustomPlaylistTrack(selectedCustom.id, track.id, direction);
+      setSelectedCustom(result.playlist);
+      setDetailTracks(result.playlist.tracks.map(curationTrack));
+      await refreshCustom();
+      await onRefresh();
+    });
+  }
+
+  const selectedTitle = selectedCustom?.title || selectedLocal?.folder || selectedSpotify?.title || "";
+  const selectedSubtitle = selectedCustom?.description || selectedLocal?.collection || selectedSpotify?.artist || selectedSpotify?.source || "";
 
   return (
     <section className="panel playlist-panel" aria-label="Playlists">
@@ -970,6 +1362,7 @@ function PlaylistsPanel({ requestsOpen, onRefresh, onAction }: { requestsOpen: b
           <button
             className="ghost-add"
             onClick={() => {
+              setSelectedCustom(null);
               setSelectedLocal(null);
               setSelectedSpotify(null);
               setDetailTracks([]);
@@ -981,13 +1374,23 @@ function PlaylistsPanel({ requestsOpen, onRefresh, onAction }: { requestsOpen: b
         )}
       </div>
       <div className="source-tabs">
-        <button className={source === "local" ? "primary-small" : ""} onClick={() => { setSource("local"); setSelectedSpotify(null); setDetailTracks([]); }}>
+        <button className={source === "curated" ? "primary-small" : ""} onClick={() => { setSource("curated"); setSelectedLocal(null); setSelectedSpotify(null); setDetailTracks([]); }}>
+          Curated
+        </button>
+        <button className={source === "local" ? "primary-small" : ""} onClick={() => { setSource("local"); setSelectedCustom(null); setSelectedSpotify(null); setDetailTracks([]); }}>
           Local
         </button>
-        <button className={source === "spotify" ? "primary-small" : ""} onClick={() => { setSource("spotify"); setSelectedLocal(null); setDetailTracks([]); }}>
+        <button className={source === "spotify" ? "primary-small" : ""} onClick={() => { setSource("spotify"); setSelectedCustom(null); setSelectedLocal(null); setDetailTracks([]); }}>
           Spotify
         </button>
       </div>
+      {source === "curated" && !selectedTitle && canCurate && (
+        <div className="playlist-create-row">
+          <input aria-label="New playlist title" placeholder="New playlist title" value={newPlaylistTitle} onChange={(event) => setNewPlaylistTitle(event.currentTarget.value)} />
+          <input aria-label="New playlist description" placeholder="Description" value={newPlaylistDescription} onChange={(event) => setNewPlaylistDescription(event.currentTarget.value)} />
+          <button className="ghost-add" disabled={!newPlaylistTitle.trim()} onClick={createCuratedPlaylist}>Create</button>
+        </div>
+      )}
       {source === "spotify" && !selectedTitle && (
         <div className="suggestion-row" aria-label="Spotify playlist filters">
           {(["playlists", "albums", "artists", "tracks", "home"] as const).map((type) => (
@@ -1000,19 +1403,43 @@ function PlaylistsPanel({ requestsOpen, onRefresh, onAction }: { requestsOpen: b
       {selectedTitle && (
         <PlaylistTracks
           title={selectedTitle}
+          description={selectedCustom?.description || ""}
           tracks={detailTracks}
           loading={loadingDetail}
           hasMore={hasMoreDetail}
           onLoadMore={loadMoreDetail}
           getQueueTracks={queueableDetailTracks}
           requestsOpen={requestsOpen}
+          canCurate={hasAdminSession()}
+          curation={curation}
+          customPlaylists={customItems}
           onRefresh={onRefresh}
           onAction={onAction}
+          onRename={selectedCustom && canCurate ? renameSelectedCustom : undefined}
+          onDeletePlaylist={selectedCustom && canCurate ? deleteSelectedCustom : undefined}
+          onMoveTrack={selectedCustom && canCurate ? moveCustomTrack : undefined}
+          onRemoveTrack={selectedCustom && canCurate ? removeCustomTrack : undefined}
         />
+      )}
+      {!selectedTitle && source === "curated" && customItems.length === 0 && (
+        <EmptyState title="No curated playlists" detail={canCurate ? "Create one here, then add tracks from search or opened collections." : "Curated playlists will appear here after the admin creates them."} />
       )}
       {!selectedTitle && source === "local" && collections.length === 0 && (
         <EmptyState title="No collections found" detail="Import music folders or rescan the LMS library." />
       )}
+      {!selectedTitle && source === "curated" && <div className="collection-list">
+        {customItems.map((playlist) => (
+          <button className="collection-row" key={playlist.id} onClick={() => openCustom(playlist)}>
+            <div>
+              <strong>{playlist.title}</strong>
+              <small>{playlist.description || "Curated playlist"}</small>
+              <small>{playlist.tracks.slice(0, 3).map((track) => track.title).filter(Boolean).join(", ") || "No tracks yet"}</small>
+            </div>
+            <span>{playlist.tracks.length} tracks</span>
+            <ChevronRight size={16} />
+          </button>
+        ))}
+      </div>}
       {!selectedTitle && source === "spotify" && spotifyItems.length === 0 && (
         <EmptyState title="No Spotify items found" detail="Spotty did not return items for this library section yet." />
       )}
@@ -1049,25 +1476,50 @@ function PlaylistsPanel({ requestsOpen, onRefresh, onAction }: { requestsOpen: b
 
 function PlaylistTracks({
   title,
+  description = "",
   tracks,
   loading,
   hasMore,
   onLoadMore,
   getQueueTracks,
   requestsOpen,
+  canCurate = false,
+  curation = defaultCuration(),
+  customPlaylists = [],
   onRefresh,
-  onAction
+  onAction,
+  onRename,
+  onDeletePlaylist,
+  onMoveTrack,
+  onRemoveTrack
 }: {
   title: string;
+  description?: string;
   tracks: Track[];
   loading: boolean;
   hasMore: boolean;
   onLoadMore: () => void;
   getQueueTracks: () => Promise<Track[] | undefined>;
   requestsOpen: boolean;
+  canCurate?: boolean;
+  curation?: AppState["curation"];
+  customPlaylists?: CustomPlaylist[];
   onRefresh: () => void;
   onAction: ActionRunner;
+  onRename?: (title: string, description: string) => Promise<void>;
+  onDeletePlaylist?: () => Promise<void>;
+  onMoveTrack?: (track: Track, direction: "up" | "down") => Promise<void>;
+  onRemoveTrack?: (track: Track) => Promise<void>;
 }) {
+  const [editingPlaylist, setEditingPlaylist] = useState(false);
+  const [draftTitle, setDraftTitle] = useState(title);
+  const [draftDescription, setDraftDescription] = useState(description);
+
+  useEffect(() => {
+    setDraftTitle(title);
+    setDraftDescription(description);
+  }, [title, description]);
+
   async function queueAll(action: "add-queue" | "play-next") {
     await onAction(async () => {
       const queueTracks = await getQueueTracks();
@@ -1084,6 +1536,23 @@ function PlaylistTracks({
 
   return (
     <div className="playlist-detail" aria-label={`${title} tracks`}>
+      {onRename && (
+        <div className="playlist-edit-row">
+          {editingPlaylist ? (
+            <>
+              <input aria-label="Playlist title" value={draftTitle} onChange={(event) => setDraftTitle(event.currentTarget.value)} />
+              <input aria-label="Playlist description" value={draftDescription} onChange={(event) => setDraftDescription(event.currentTarget.value)} />
+              <button className="ghost-add" disabled={!draftTitle.trim()} onClick={async () => { await onRename(draftTitle, draftDescription); setEditingPlaylist(false); }}>Save</button>
+              <button className="ghost-add" onClick={() => setEditingPlaylist(false)}>Cancel</button>
+            </>
+          ) : (
+            <>
+              <button className="ghost-add" onClick={() => setEditingPlaylist(true)}>Edit playlist</button>
+              {onDeletePlaylist && <button className="ghost-add danger" onClick={onDeletePlaylist}>Delete playlist</button>}
+            </>
+          )}
+        </div>
+      )}
       <div className="playlist-detail-actions">
         <span>{loading ? "Loading tracks" : `${tracks.length} tracks`}</span>
         <button className="ghost-add" disabled={!requestsOpen || tracks.length === 0} onClick={() => queueAll("play-next")}>Play next</button>
@@ -1104,9 +1573,17 @@ function PlaylistTracks({
             </div>
             <span>{track.duration ? formatTime(track.duration) : "--:--"}</span>
             <div className="track-actions">
+              {onMoveTrack && (
+                <>
+                  <button className="ghost-add curation-button" disabled={tracks.indexOf(track) === 0} onClick={() => onMoveTrack(track, "up")}>Move up</button>
+                  <button className="ghost-add curation-button" disabled={tracks.indexOf(track) === tracks.length - 1} onClick={() => onMoveTrack(track, "down")}>Move down</button>
+                </>
+              )}
               <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("play-now", track); await onRefresh(); })}>Play now</button>
               <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("play-next", track); await onRefresh(); })}>Play next</button>
               <button className="ghost-add" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("add-queue", track); await onRefresh(); })}>Queue</button>
+              {canCurate && <CurationControls track={track} curation={curation} customPlaylists={customPlaylists} onRefresh={onRefresh} onAction={onAction} />}
+              {onRemoveTrack && <button className="ghost-add curation-button danger" onClick={() => onRemoveTrack(track)}>Remove</button>}
             </div>
           </div>
         ))}
@@ -1447,4 +1924,47 @@ function formatTime(seconds: number) {
 
 function publicRequestsOpen(state: AppState) {
   return state.admin.publicRequests !== false && !state.schedule.current?.requestsPaused;
+}
+
+function curationKey(track: Partial<Track>) {
+  const uri = cleanString(track.uri);
+  if (uri) return `uri:${normalizeIdentityText(uri).replace(/^spotify:\/\//, "spotify:")}`;
+  const path = cleanString(track.path);
+  if (path) return `path:${normalizeIdentityText(path).replace(/\\/g, "/")}`;
+  const lmsTrackId = cleanString(String(track.lmsTrackId || ""));
+  if (lmsTrackId) return `lms:${normalizeIdentityText(lmsTrackId)}`;
+  const kind = normalizeIdentityText(track.kind || (track.collection || track.folder ? "collection" : "track"));
+  const title = normalizeIdentityText(track.title);
+  const artist = normalizeIdentityText(track.artist);
+  const album = normalizeIdentityText(track.album);
+  const source = normalizeIdentityText(track.source || track.collection || track.folder);
+  return `meta:${kind}:${title}:${artist}:${album}:${source}`;
+}
+
+function curationTrack(track: Partial<Track>): Track {
+  return {
+    id: String(track.id || track.uri || track.path || curationKey(track)),
+    title: String(track.title || "Untitled"),
+    artist: String(track.artist || track.source || ""),
+    album: track.album,
+    source: String(track.source || "Cloud Squeeze"),
+    kind: track.kind,
+    uri: track.uri,
+    path: track.path,
+    lmsTrackId: track.lmsTrackId,
+    browseId: track.browseId,
+    collection: track.collection,
+    folder: track.folder,
+    art: track.art,
+    artwork: track.artwork,
+    duration: track.duration
+  };
+}
+
+function normalizeIdentityText(value: unknown) {
+  return cleanString(value).replace(/\s+/g, " ").toLowerCase();
+}
+
+function cleanString(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
 }

@@ -9,11 +9,19 @@ import {
   addQueueItemNext,
   appState,
   config,
+  addCustomPlaylistTracks,
+  createCustomPlaylist,
+  curateItem,
   getPublicState,
+  isCuratedHidden,
+  moveCustomPlaylistTrack,
   moveQueueItem,
+  removeCustomPlaylist,
+  removeCustomPlaylistTrack,
   removeQueueItem,
   setMode,
   setVolume,
+  updateCustomPlaylist,
   updateQueueItem,
   updateNowPlaying,
   updatePlayerStatus,
@@ -125,6 +133,46 @@ const smartShuffleSchema = z.object({
   source: z.enum(["mixed", "spotify", "local"]).optional(),
   count: z.number().int().min(1).max(8).optional(),
   seed: optionalText
+}).strict();
+
+const curationTrackSchema = z.object({
+  id: z.union([z.string().trim().min(1), z.number()]).optional(),
+  title: requiredText,
+  artist: optionalText,
+  album: optionalText,
+  source: optionalText,
+  kind: z.enum(["track", "artist", "album", "playlist"]).optional(),
+  uri: optionalText,
+  path: optionalText,
+  lmsTrackId: z.union([z.string().trim().min(1), z.number()]).optional(),
+  browseId: optionalText,
+  collection: optionalText,
+  folder: optionalText,
+  art: optionalText.nullable(),
+  artwork: optionalText.nullable(),
+  duration: z.number().finite().nonnegative().nullable().optional()
+}).strict();
+
+const curationSchema = z.object({
+  action: z.enum(["hide", "unhide", "save", "unsave", "pin", "unpin"]),
+  track: curationTrackSchema
+}).strict();
+
+const customPlaylistSchema = z.object({
+  title: requiredText,
+  description: z.string().trim().optional()
+}).strict();
+
+const customPlaylistUpdateSchema = z.object({
+  title: requiredText.optional(),
+  description: z.string().trim().optional()
+}).strict().refine(
+  (value) => value.title !== undefined || value.description !== undefined,
+  { message: "Playlist title or description is required" }
+);
+
+const customPlaylistTracksSchema = z.object({
+  tracks: z.array(curationTrackSchema).min(1).max(300)
 }).strict();
 
 const loginSchema = z.object({
@@ -616,7 +664,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       const libraryResults = await searchLibrary(query, undefined, limit, source);
       return enrichLibraryArtwork(lms, libraryResults, { fallbackBudgetMs: localSearchFallbackArtworkBudgetMs });
     });
-    res.json({ results });
+    res.json({ results: filterHiddenResults(results) });
   });
 
   app.get("/api/spotify/search", async (req, res) => {
@@ -638,7 +686,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       const playerId = await hotPlayerId(lms);
       const results = await lms.spotifySearch(playerId, query, limit);
       rememberKnownSpotifyTracks(results);
-      res.json({ results });
+      res.json({ results: filterHiddenResults(results) });
     } catch (error) {
       res.status(502).json({ error: error.message, results: [] });
     }
@@ -669,7 +717,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       const results = await lms.spotifyLibrary(playerId, type, limit, offset);
       rememberKnownSpotifyTracks(results);
       res.json({
-        results
+        results: filterHiddenResults(results)
       });
     } catch (error) {
       res.status(502).json({ error: error.message, results: [] });
@@ -716,7 +764,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
         offset
       );
       rememberKnownSpotifyTracks(results);
-      res.json({ results });
+      res.json({ results: filterHiddenResults(results) });
     } catch (error) {
       res.status(502).json({ error: error.message, results: [] });
     }
@@ -778,7 +826,7 @@ export function createApp({ lms = new LmsClient() } = {}) {
       });
       return enrichLibraryArtwork(lms, collectionResults);
     });
-    res.json({ results });
+    res.json({ results: filterHiddenResults(results) });
   });
 
   app.post("/api/library/rescan", requireAdmin, async (_req, res) => {
@@ -805,6 +853,99 @@ export function createApp({ lms = new LmsClient() } = {}) {
     } catch (error) {
       res.status(400).json({ error: error.message });
     }
+  });
+
+  app.get("/api/custom-playlists", (_req, res) => {
+    res.json({ playlists: customPlaylistPayload(appState.customPlaylists) });
+  });
+
+  app.post("/api/custom-playlists", requireAdmin, (req, res) => {
+    const parsed = customPlaylistSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid playlist", issues: parsed.error.issues });
+      return;
+    }
+    const playlist = createCustomPlaylist(parsed.data);
+    res.status(201).json({ ok: true, playlist, playlists: customPlaylistPayload(appState.customPlaylists) });
+  });
+
+  app.patch("/api/custom-playlists/:id", requireAdmin, (req, res) => {
+    const parsed = customPlaylistUpdateSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid playlist update", issues: parsed.error.issues });
+      return;
+    }
+    const playlist = updateCustomPlaylist(req.params.id, parsed.data);
+    if (!playlist) {
+      res.status(404).json({ error: "Playlist not found" });
+      return;
+    }
+    res.json({ ok: true, playlist, playlists: customPlaylistPayload(appState.customPlaylists) });
+  });
+
+  app.delete("/api/custom-playlists/:id", requireAdmin, (req, res) => {
+    const removed = removeCustomPlaylist(req.params.id);
+    if (!removed) {
+      res.status(404).json({ error: "Playlist not found" });
+      return;
+    }
+    res.json({ ok: true, removed, playlists: customPlaylistPayload(appState.customPlaylists) });
+  });
+
+  app.post("/api/custom-playlists/:id/tracks", requireAdmin, (req, res) => {
+    const parsed = customPlaylistTracksSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid playlist tracks", issues: parsed.error.issues });
+      return;
+    }
+    const result = addCustomPlaylistTracks(req.params.id, parsed.data.tracks);
+    if (!result) {
+      res.status(404).json({ error: "Playlist not found" });
+      return;
+    }
+    res.status(201).json({
+      ok: true,
+      playlist: customPlaylistPayload([result.playlist])[0],
+      added: result.added,
+      accepted: result.added.length,
+      rejected: parsed.data.tracks.length - result.added.length
+    });
+  });
+
+  app.delete("/api/custom-playlists/:id/tracks/:trackId", requireAdmin, (req, res) => {
+    const result = removeCustomPlaylistTrack(req.params.id, req.params.trackId);
+    if (result === null) {
+      res.status(404).json({ error: "Playlist not found" });
+      return;
+    }
+    if (result === undefined) {
+      res.status(404).json({ error: "Playlist track not found" });
+      return;
+    }
+    res.json({ ok: true, playlist: customPlaylistPayload([result.playlist])[0], removed: result.removed });
+  });
+
+  app.post("/api/custom-playlists/:id/tracks/:trackId/move", requireAdmin, (req, res) => {
+    const parsed = queueMoveSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid playlist track move", issues: parsed.error.issues });
+      return;
+    }
+    const direction = parsed.data.direction ?? parsed.data.index;
+    const result = moveCustomPlaylistTrack(req.params.id, req.params.trackId, direction);
+    if (result === null) {
+      res.status(404).json({ error: "Playlist not found" });
+      return;
+    }
+    if (result === undefined) {
+      res.status(404).json({ error: "Playlist track not found" });
+      return;
+    }
+    if (result === false) {
+      res.status(400).json({ error: "Invalid playlist track move" });
+      return;
+    }
+    res.json({ ok: true, playlist: customPlaylistPayload([result.playlist])[0], item: result.item });
   });
 
   const streamHandler = async (req, res) => {
@@ -956,6 +1097,20 @@ export function createApp({ lms = new LmsClient() } = {}) {
       res.status(502).json({ error: error.message, mode: appState.player.mode, player: appState.player, nowPlaying: appState.nowPlaying, queue: appState.queue });
     }
     });
+  });
+
+  app.post("/api/curation", requireAdmin, (req, res) => {
+    const parsed = curationSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid curation item", issues: parsed.error.issues });
+      return;
+    }
+    try {
+      const item = curateItem(parsed.data.action, parsed.data.track);
+      res.json({ ok: true, action: parsed.data.action, item, curation: appState.curation });
+    } catch (error) {
+      res.status(400).json({ error: error.message, curation: appState.curation });
+    }
   });
 
   app.post("/api/player/pause", async (req, res) => {
@@ -1724,6 +1879,18 @@ function spotifyBrowsingAvailable() {
 
 function spotifyUnavailableMessage() {
   return appState.services.spotify.detail || "Spotify browsing is unavailable";
+}
+
+function filterHiddenResults(results) {
+  if (!Array.isArray(results) || appState.curation.hidden.length === 0) return results;
+  return results.filter((track) => !isCuratedHidden(track));
+}
+
+function customPlaylistPayload(playlists = []) {
+  return playlists.map((playlist) => ({
+    ...playlist,
+    tracks: filterHiddenResults(playlist.tracks || [])
+  }));
 }
 
 async function checkUrl(url) {

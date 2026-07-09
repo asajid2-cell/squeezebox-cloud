@@ -491,6 +491,24 @@ describe("Cloud Squeeze UI", () => {
     expect(within(artistRow as HTMLElement).queryByRole("button", { name: "Queue" })).not.toBeInTheDocument();
   });
 
+  it("opens typed Spotify search containers into queueable detail tracks", async () => {
+    const fetchMock = vi.mocked(fetch);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Library" }));
+    await userEvent.click(screen.getByRole("button", { name: "Spotify" }));
+    await userEvent.type(screen.getByLabelText("Search music"), "drake");
+    await userEvent.click(await screen.findByRole("button", { name: /Artists 1/ }));
+
+    const artistRow = await screen.findByText("Drake Artist");
+    await userEvent.click(within(artistRow.closest(".result-row") as HTMLElement).getByRole("button", { name: "Open" }));
+
+    expect(await screen.findByLabelText("Drake Artist tracks")).toBeInTheDocument();
+    expect(await screen.findByText("Playlist Child")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/spotify/children") && String(url).includes("kind=artist") && String(url).includes("limit=50"))).toBe(true);
+    await userEvent.click(screen.getByRole("button", { name: "Queue all" }));
+    expect(fetchMock.mock.calls.some(([url, options]) => String(url).includes("/api/player/tracks") && options?.method === "POST")).toBe(true);
+  });
+
   it("opens local and Spotify playlists before queueing individual tracks", async () => {
     const fetchMock = vi.mocked(fetch);
     render(<App />);

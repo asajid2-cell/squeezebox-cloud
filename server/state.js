@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+
 export const config = {
   port: Number(process.env.PORT || 4177),
   lmsHost: process.env.LMS_HOST || "127.0.0.1",
@@ -11,6 +14,12 @@ export const config = {
   uploadDir: expandPath(process.env.UPLOAD_DIR || "/music/uploads"),
   publicQueueMaxPerUser: Number(process.env.PUBLIC_QUEUE_MAX_PER_USER || 25)
 };
+
+config.discoveryStatePath = expandPath(
+  process.env.CLOUD_SQUEEZE_DISCOVERY_STATE_PATH ||
+  process.env.DISCOVERY_STATE_PATH ||
+  path.join(config.lmsConfigDir, "cloud-squeeze-discovery.json")
+);
 
 export const appState = {
   player: {
@@ -72,6 +81,13 @@ export const appState = {
     previousTracks: [],
     appManagedPlayback: false
   },
+  curation: {
+    hidden: [],
+    saved: [],
+    pinned: [],
+    revision: 0
+  },
+  customPlaylists: [],
   admin: {
     publicRequests: true,
     maxQueuePerUser: config.publicQueueMaxPerUser,
@@ -81,9 +97,66 @@ export const appState = {
 };
 
 let queueIdCounter = 0;
+let customPlaylistIdCounter = 0;
+let customPlaylistTrackIdCounter = 0;
+let discoveryStatePath = config.discoveryStatePath;
+let discoveryPersistenceEnabled = process.env.NODE_ENV !== "test";
+let discoverySaveTimer = null;
+let discoverySavePromise = Promise.resolve();
 
 export function getPublicState() {
   return structuredClone(appState);
+}
+
+export async function loadDiscoveryState(filePath = discoveryStatePath) {
+  if (!filePath) return false;
+  const raw = await fs.readFile(filePath, "utf8").catch((error) => {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  });
+  if (!raw) return false;
+  const parsed = JSON.parse(raw);
+  applyDiscoveryState(parsed);
+  return true;
+}
+
+export async function saveDiscoveryStateNow(filePath = discoveryStatePath) {
+  if (!filePath) return false;
+  const payload = `${JSON.stringify(discoveryStatePayload(), null, 2)}\n`;
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tempPath, payload, "utf8");
+  await fs.rename(tempPath, filePath);
+  return true;
+}
+
+export async function flushDiscoveryStateForTests() {
+  if (discoverySaveTimer) {
+    clearTimeout(discoverySaveTimer);
+    discoverySaveTimer = null;
+  }
+  discoverySavePromise = saveDiscoveryStateNow();
+  return discoverySavePromise;
+}
+
+export function setDiscoveryStatePathForTests(filePath) {
+  if (discoverySaveTimer) {
+    clearTimeout(discoverySaveTimer);
+    discoverySaveTimer = null;
+  }
+  discoveryStatePath = filePath;
+  discoveryPersistenceEnabled = Boolean(filePath);
+  discoverySavePromise = Promise.resolve();
+}
+
+export function resetDiscoveryStatePersistenceForTests() {
+  if (discoverySaveTimer) {
+    clearTimeout(discoverySaveTimer);
+    discoverySaveTimer = null;
+  }
+  discoveryStatePath = config.discoveryStatePath;
+  discoveryPersistenceEnabled = process.env.NODE_ENV !== "test";
+  discoverySavePromise = Promise.resolve();
 }
 
 export function addQueueItem(input) {
@@ -182,6 +255,267 @@ export function updatePlayback(settings) {
   return appState.playback;
 }
 
+export function curationItemKey(input = {}) {
+  const uri = cleanText(input.uri);
+  if (uri) return `uri:${normalizeIdentityText(uri).replace(/^spotify:\/\//, "spotify:")}`;
+  const path = cleanText(input.path);
+  if (path) return `path:${normalizeIdentityText(path).replace(/\\/g, "/")}`;
+  const lmsTrackId = cleanText(String(input.lmsTrackId || ""));
+  if (lmsTrackId) return `lms:${normalizeIdentityText(lmsTrackId)}`;
+  const kind = normalizeIdentityText(input.kind || (input.collection || input.folder ? "collection" : "track"));
+  const title = normalizeIdentityText(input.title);
+  const artist = normalizeIdentityText(input.artist);
+  const album = normalizeIdentityText(input.album);
+  const source = normalizeIdentityText(input.source || input.collection || input.folder);
+  return `meta:${kind}:${title}:${artist}:${album}:${source}`;
+}
+
+export function isCuratedHidden(track) {
+  const key = curationItemKey(track);
+  return appState.curation.hidden.some((item) => item.key === key);
+}
+
+export function curateItem(action, track) {
+  const normalizedAction = String(action || "").toLowerCase();
+  const key = curationItemKey(track);
+  const item = {
+    key,
+    track: compactCurationTrack(track),
+    updatedAt: new Date().toISOString()
+  };
+
+  if (normalizedAction === "hide") {
+    removeCuratedItem("saved", key);
+    removeCuratedItem("pinned", key);
+    upsertCuratedItem("hidden", item);
+  } else if (normalizedAction === "save") {
+    removeCuratedItem("hidden", key);
+    upsertCuratedItem("saved", item);
+  } else if (normalizedAction === "pin") {
+    removeCuratedItem("hidden", key);
+    upsertCuratedItem("pinned", item);
+  } else if (normalizedAction === "unhide") {
+    removeCuratedItem("hidden", key);
+  } else if (normalizedAction === "unsave") {
+    removeCuratedItem("saved", key);
+  } else if (normalizedAction === "unpin") {
+    removeCuratedItem("pinned", key);
+  } else {
+    throw new Error("Unsupported curation action");
+  }
+
+  appState.curation.revision += 1;
+  scheduleDiscoveryStateSave();
+  return item;
+}
+
+export function createCustomPlaylist(input = {}) {
+  const now = new Date().toISOString();
+  const playlist = {
+    id: nextCustomPlaylistId(),
+    title: cleanText(input.title) || "Untitled playlist",
+    description: cleanText(input.description) || "",
+    tracks: [],
+    createdAt: now,
+    updatedAt: now
+  };
+  appState.customPlaylists.unshift(playlist);
+  scheduleDiscoveryStateSave();
+  return playlist;
+}
+
+export function updateCustomPlaylist(id, input = {}) {
+  const playlist = appState.customPlaylists.find((item) => item.id === id);
+  if (!playlist) return null;
+  if (typeof input.title === "string" && input.title.trim()) playlist.title = input.title.trim();
+  if (typeof input.description === "string") playlist.description = input.description.trim();
+  playlist.updatedAt = new Date().toISOString();
+  scheduleDiscoveryStateSave();
+  return playlist;
+}
+
+export function removeCustomPlaylist(id) {
+  const index = appState.customPlaylists.findIndex((item) => item.id === id);
+  if (index < 0) return null;
+  const [removed] = appState.customPlaylists.splice(index, 1);
+  scheduleDiscoveryStateSave();
+  return removed;
+}
+
+export function addCustomPlaylistTracks(id, tracks = []) {
+  const playlist = appState.customPlaylists.find((item) => item.id === id);
+  if (!playlist) return null;
+  const existing = new Set(playlist.tracks.map((item) => item.key));
+  const added = [];
+  for (const track of tracks) {
+    const key = curationItemKey(track);
+    if (existing.has(key)) continue;
+    const item = {
+      ...compactCurationTrack(track),
+      id: nextCustomPlaylistTrackId(),
+      key,
+      addedAt: new Date().toISOString()
+    };
+    playlist.tracks.push(item);
+    existing.add(key);
+    added.push(item);
+  }
+  if (added.length > 0) playlist.updatedAt = new Date().toISOString();
+  if (added.length > 0) scheduleDiscoveryStateSave();
+  return { playlist, added };
+}
+
+export function removeCustomPlaylistTrack(playlistId, trackId) {
+  const playlist = appState.customPlaylists.find((item) => item.id === playlistId);
+  if (!playlist) return null;
+  const index = playlist.tracks.findIndex((item) => item.id === trackId);
+  if (index < 0) return undefined;
+  const [removed] = playlist.tracks.splice(index, 1);
+  playlist.updatedAt = new Date().toISOString();
+  scheduleDiscoveryStateSave();
+  return { playlist, removed };
+}
+
+export function moveCustomPlaylistTrack(playlistId, trackId, direction) {
+  const playlist = appState.customPlaylists.find((item) => item.id === playlistId);
+  if (!playlist) return null;
+  const index = playlist.tracks.findIndex((item) => item.id === trackId);
+  if (index < 0) return undefined;
+  const target = direction === "up" ? index - 1 : direction === "down" ? index + 1 : Number(direction);
+  if ((direction === "up" && index === 0) || (direction === "down" && index === playlist.tracks.length - 1)) return { playlist, item: playlist.tracks[index] };
+  if (!Number.isInteger(target) || target < 0 || target >= playlist.tracks.length) return false;
+  const [item] = playlist.tracks.splice(index, 1);
+  playlist.tracks.splice(target, 0, item);
+  playlist.updatedAt = new Date().toISOString();
+  scheduleDiscoveryStateSave();
+  return { playlist, item };
+}
+
+function scheduleDiscoveryStateSave() {
+  if (!discoveryPersistenceEnabled || !discoveryStatePath) return;
+  if (discoverySaveTimer) clearTimeout(discoverySaveTimer);
+  discoverySaveTimer = setTimeout(() => {
+    discoverySaveTimer = null;
+    discoverySavePromise = saveDiscoveryStateNow().catch((error) => {
+      console.error(`Could not save Cloud Squeeze discovery state: ${error.message}`);
+    });
+  }, 120);
+  discoverySaveTimer.unref?.();
+}
+
+function discoveryStatePayload() {
+  return {
+    version: 1,
+    curation: sanitizeCurationState(appState.curation),
+    customPlaylists: sanitizeCustomPlaylists(appState.customPlaylists),
+    savedAt: new Date().toISOString()
+  };
+}
+
+function applyDiscoveryState(input = {}) {
+  appState.curation = sanitizeCurationState(input.curation || input);
+  appState.customPlaylists = sanitizeCustomPlaylists(input.customPlaylists);
+}
+
+function sanitizeCurationState(input = {}) {
+  return {
+    hidden: sanitizeCuratedItems(input.hidden),
+    saved: sanitizeCuratedItems(input.saved),
+    pinned: sanitizeCuratedItems(input.pinned),
+    revision: Number.isInteger(input.revision) && input.revision >= 0 ? input.revision : 0
+  };
+}
+
+function sanitizeCuratedItems(items) {
+  if (!Array.isArray(items)) return [];
+  const seen = new Set();
+  const sanitized = [];
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+    const track = compactCurationTrack(item.track || item);
+    const key = cleanText(item.key) || curationItemKey(track);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    sanitized.push({
+      key,
+      track,
+      updatedAt: validIsoDate(item.updatedAt) || new Date().toISOString()
+    });
+    if (sanitized.length >= 500) break;
+  }
+  return sanitized;
+}
+
+function sanitizeCustomPlaylists(playlists) {
+  if (!Array.isArray(playlists)) return [];
+  const seen = new Set();
+  const sanitized = [];
+  for (const playlist of playlists) {
+    if (!playlist || typeof playlist !== "object") continue;
+    const id = cleanText(playlist.id) || nextCustomPlaylistId();
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const createdAt = validIsoDate(playlist.createdAt) || new Date().toISOString();
+    sanitized.push({
+      id,
+      title: cleanText(playlist.title) || "Untitled playlist",
+      description: cleanText(playlist.description) || "",
+      tracks: sanitizeCustomPlaylistTracks(playlist.tracks),
+      createdAt,
+      updatedAt: validIsoDate(playlist.updatedAt) || createdAt
+    });
+    if (sanitized.length >= 100) break;
+  }
+  return sanitized;
+}
+
+function sanitizeCustomPlaylistTracks(tracks) {
+  if (!Array.isArray(tracks)) return [];
+  const seen = new Set();
+  const sanitized = [];
+  for (const item of tracks) {
+    if (!item || typeof item !== "object") continue;
+    const track = compactCurationTrack(item.track || item);
+    const key = cleanText(item.key) || curationItemKey(track);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    sanitized.push({
+      ...track,
+      id: cleanText(item.id) || nextCustomPlaylistTrackId(),
+      key,
+      addedAt: validIsoDate(item.addedAt) || new Date().toISOString()
+    });
+    if (sanitized.length >= 500) break;
+  }
+  return sanitized;
+}
+
+function validIsoDate(value) {
+  if (typeof value !== "string" || !value.trim()) return "";
+  return Number.isNaN(Date.parse(value)) ? "" : value;
+}
+
+function upsertCuratedItem(collection, item) {
+  const list = appState.curation[collection];
+  const existing = list.findIndex((candidate) => candidate.key === item.key);
+  if (existing >= 0) list.splice(existing, 1);
+  list.unshift(item);
+}
+
+function removeCuratedItem(collection, key) {
+  const list = appState.curation[collection];
+  const index = list.findIndex((item) => item.key === key);
+  if (index >= 0) list.splice(index, 1);
+}
+
+function compactCurationTrack(track = {}) {
+  return Object.fromEntries(
+    ["id", "title", "artist", "album", "source", "kind", "uri", "path", "lmsTrackId", "browseId", "collection", "folder", "art", "artwork", "duration"]
+      .map((key) => [key, track[key]])
+      .filter(([, value]) => value !== undefined && value !== null && value !== "")
+  );
+}
+
 export function updatePlayerStatus(status) {
   appState.player = { ...appState.player, ...status, updatedAt: new Date().toISOString() };
 }
@@ -224,9 +558,26 @@ function nextQueueId() {
   return `q-${Date.now()}-${queueIdCounter}`;
 }
 
+function nextCustomPlaylistId() {
+  customPlaylistIdCounter += 1;
+  return `pl-${Date.now()}-${customPlaylistIdCounter}`;
+}
+
+function nextCustomPlaylistTrackId() {
+  customPlaylistTrackIdCounter += 1;
+  return `plt-${Date.now()}-${customPlaylistTrackIdCounter}`;
+}
+
 function cleanText(value) {
   if (typeof value !== "string") return value;
   return value.trim() || undefined;
+}
+
+function normalizeIdentityText(value) {
+  return String(cleanText(value) || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
 }
 
 function recordRecentPick(item, status) {

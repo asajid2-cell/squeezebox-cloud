@@ -5,7 +5,22 @@ import os from "node:os";
 import path from "node:path";
 import { createApp, maintainVisiblePlaybackQueueForTests, nextQueueItemForPlayback, prewarmSpotifySearchCaches, refreshLmsForTests, resetRefreshStateForTests, sameContinuingPlayback, shouldNudgePlayback, syncVisibleQueueWithCurrentTrack } from "../server/app.js";
 import { clearLibraryCaches } from "../server/library.js";
-import { addQueueItem, appState, config, removeQueueItem, updateNowPlaying, updatePlayback, updateSpotifyStatus } from "../server/state.js";
+import {
+  addCustomPlaylistTracks,
+  addQueueItem,
+  appState,
+  config,
+  createCustomPlaylist,
+  curateItem,
+  flushDiscoveryStateForTests,
+  loadDiscoveryState,
+  removeQueueItem,
+  resetDiscoveryStatePersistenceForTests,
+  setDiscoveryStatePathForTests,
+  updateNowPlaying,
+  updatePlayback,
+  updateSpotifyStatus
+} from "../server/state.js";
 
 const tinyMp3 = Buffer.from(
   "SUQzBAAAAAAAIlRTU0UAAAAOAAADTGF2ZjYyLjMuMTAwAAAAAAAAAAAAAAD/+0DAAAAAAAAAAAAAAAAAAAAAAABJbmZvAAAADwAAAAUAAAK+AGhoaGhoaGhoaGhoaGhoaGhoaGiOjo6Ojo6Ojo6Ojo6Ojo6Ojo6OjrS0tLS0tLS0tLS0tLS0tLS0tLS02tra2tra2tra2tra2tra2tra2tr//////////////////////////wAAAABMYXZjNjIuMTEAAAAAAAAAAAAAAAAkAwYAAAAAAAACvhC6F/0AAAAAAP/7EMQAA8AAAaQAAAAgAAA0gAAABExBTUUzLjEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//sQxCmDwAABpAAAACAAADSAAAAEVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVX/+xDEUwPAAAGkAAAAIAAANIAAAARVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVf/7EMR8g8AAAaQAAAAgAAA0gAAABFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//sQxKYDwAABpAAAACAAADSAAAAEVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU=",
@@ -70,6 +85,9 @@ describe("Cloud Squeeze API", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    resetDiscoveryStatePersistenceForTests();
+    appState.curation = { hidden: [], saved: [], pinned: [], revision: 0 };
+    appState.customPlaylists = [];
   });
 
   it("returns speaker and now playing state", async () => {
@@ -4291,6 +4309,101 @@ describe("Cloud Squeeze API", () => {
   it("returns Spotify search results from Spotty", async () => {
     const response = await request(createApp({ lms: mockLms })).get("/api/spotify/search?q=drake").expect(200);
     expect(response.body.results[0].uri).toBe("spotify:track:0000000000000000000101");
+  });
+
+  it("stores admin curation actions in public state", async () => {
+    const app = createApp({ lms: mockLms });
+    const track = { title: "Headlines", artist: "Drake", source: "Spotify", uri: "spotify:track:0000000000000000000101", kind: "track" };
+
+    await request(app).post("/api/curation").send({ action: "save", track }).expect(401);
+    const saved = await request(app)
+      .post("/api/curation")
+      .set("Authorization", "Bearer cloud-squeeze-admin")
+      .send({ action: "save", track })
+      .expect(200);
+    const pinned = await request(app)
+      .post("/api/curation")
+      .set("Authorization", "Bearer cloud-squeeze-admin")
+      .send({ action: "pin", track })
+      .expect(200);
+
+    expect(saved.body.curation.saved[0].key).toBe("uri:spotify:track:0000000000000000000101");
+    expect(pinned.body.curation.pinned[0].track.title).toBe("Headlines");
+    const state = await request(app).get("/api/state").expect(200);
+    expect(state.body.curation.saved).toHaveLength(1);
+    expect(state.body.curation.pinned).toHaveLength(1);
+  });
+
+  it("filters hidden Spotify search results at the API boundary", async () => {
+    const app = createApp({ lms: mockLms });
+    const track = { title: "Headlines", artist: "Drake", source: "Spotify", uri: "spotify:track:0000000000000000000101", kind: "track" };
+
+    await request(app)
+      .post("/api/curation")
+      .set("Authorization", "Bearer cloud-squeeze-admin")
+      .send({ action: "hide", track })
+      .expect(200);
+
+    const response = await request(app).get("/api/spotify/search?q=drake").expect(200);
+    expect(response.body.results).toEqual([]);
+  });
+
+  it("creates edits reorders and removes custom playlist tracks", async () => {
+    const app = createApp({ lms: mockLms });
+    const auth = { Authorization: "Bearer cloud-squeeze-admin" };
+    const one = { title: "One", artist: "Tester", source: "Spotify", uri: "spotify:track:one", kind: "track" };
+    const two = { title: "Two", artist: "Tester", source: "Spotify", uri: "spotify:track:two", kind: "track" };
+
+    await request(app).post("/api/custom-playlists").send({ title: "No Auth" }).expect(401);
+    const created = await request(app).post("/api/custom-playlists").set(auth).send({ title: "Road Trip", description: "Car queue" }).expect(201);
+    const playlistId = created.body.playlist.id;
+    expect(created.body.playlist).toMatchObject({ title: "Road Trip", description: "Car queue", tracks: [] });
+
+    const added = await request(app).post(`/api/custom-playlists/${playlistId}/tracks`).set(auth).send({ tracks: [one, two, one] }).expect(201);
+    expect(added.body.accepted).toBe(2);
+    expect(added.body.rejected).toBe(1);
+    expect(added.body.playlist.tracks.map((track: { title: string }) => track.title)).toEqual(["One", "Two"]);
+
+    const secondId = added.body.playlist.tracks[1].id;
+    const moved = await request(app).post(`/api/custom-playlists/${playlistId}/tracks/${secondId}/move`).set(auth).send({ direction: "up" }).expect(200);
+    expect(moved.body.playlist.tracks.map((track: { title: string }) => track.title)).toEqual(["Two", "One"]);
+
+    const updated = await request(app).patch(`/api/custom-playlists/${playlistId}`).set(auth).send({ title: "Road Trip Edited", description: "" }).expect(200);
+    expect(updated.body.playlist).toMatchObject({ title: "Road Trip Edited", description: "" });
+
+    const removed = await request(app).delete(`/api/custom-playlists/${playlistId}/tracks/${secondId}`).set(auth).expect(200);
+    expect(removed.body.playlist.tracks.map((track: { title: string }) => track.title)).toEqual(["One"]);
+
+    const listed = await request(app).get("/api/custom-playlists").expect(200);
+    expect(listed.body.playlists[0]).toMatchObject({ id: playlistId, title: "Road Trip Edited" });
+  });
+
+  it("persists curated state and custom playlists across process restarts", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-discovery-state-"));
+    const stateFile = path.join(root, "discovery.json");
+    const hidden = { title: "Hidden Cut", artist: "Tester", source: "Spotify", uri: "spotify:track:hidden", kind: "track" };
+    const saved = { title: "Saved Cut", artist: "Tester", source: "Spotify", uri: "spotify:track:saved", kind: "track" };
+
+    setDiscoveryStatePathForTests(stateFile);
+    try {
+      curateItem("hide", hidden);
+      curateItem("save", saved);
+      const playlist = createCustomPlaylist({ title: "Keepers", description: "Reloaded picks" });
+      addCustomPlaylistTracks(playlist.id, [saved, hidden]);
+      await flushDiscoveryStateForTests();
+
+      appState.curation = { hidden: [], saved: [], pinned: [], revision: 0 };
+      appState.customPlaylists = [];
+
+      await expect(loadDiscoveryState(stateFile)).resolves.toBe(true);
+      expect(appState.curation.hidden[0].track.title).toBe("Hidden Cut");
+      expect(appState.curation.saved[0].key).toBe("uri:spotify:track:saved");
+      expect(appState.customPlaylists[0]).toMatchObject({ title: "Keepers", description: "Reloaded picks" });
+      expect(appState.customPlaylists[0].tracks.map((track: { title: string }) => track.title)).toEqual(["Saved Cut", "Hidden Cut"]);
+    } finally {
+      resetDiscoveryStatePersistenceForTests();
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("returns Spotify library sections from Spotty", async () => {
