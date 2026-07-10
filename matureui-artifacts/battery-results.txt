@@ -1,0 +1,104 @@
+===== Now Playing (default) =====
+RESULT: PASS — no destruction detected at any viewport (in the tested states)
+===== Queue =====
+RESULT: PASS — no destruction detected at any viewport (in the tested states)
+===== Playlists =====
+RESULT: PASS — no destruction detected at any viewport (in the tested states)
+===== Library (Spotify empty-state) =====
+RESULT: PASS — no destruction detected at any viewport (in the tested states)
+===== Library VPS rows =====
+RESULT: PASS — no destruction detected at any viewport (in the tested states)
+===== Library uploaded tab =====
+RESULT: PASS — no destruction detected at any viewport (in the tested states)
+===== Archive =====
+RESULT: PASS — no destruction detected at any viewport (in the tested states)
+===== Row menu open =====
+===== Row menu open =====
+RESULT: PASS — no destruction detected at any viewport (in the tested states)
+===== Row menu + save submenu =====
+RESULT: PASS — no destruction detected at any viewport (in the tested states)
+===== New playlist dialog =====
+RESULT: PASS — no destruction detected at any viewport (in the tested states)
+===== Local mode (this device) =====
+RESULT: PASS — no destruction detected at any viewport (in the tested states)
+===== Admin login =====
+RESULT: PASS — no destruction detected at any viewport (in the tested states)
+===== Now Playing (queue seeded) =====
+  laptop (1366x768): 4 defect(s)
+RESULT: FAIL — 4 defect(s)
+===== Queue (5 rows) =====
+  laptop (1366x768): 4 defect(s)
+RESULT: FAIL — 4 defect(s)
+===== Library dense rows (25-fold) =====
+  laptop (1366x768): 8 defect(s)
+  desktop (1920x1080): 2 defect(s)
+  ultrawide (2560x1080): 2 defect(s)
+RESULT: FAIL — 12 defect(s)
+===== Queue row menu open =====
+  laptop (1366x768): 4 defect(s)
+RESULT: FAIL — 4 defect(s)
+===== Now Playing (queue seeded, page-scroll) =====
+  laptop (1366x768): 4 defect(s)
+RESULT: FAIL — 4 defect(s)
+===== Queue (5 rows, page-scroll) =====
+  laptop (1366x768): 4 defect(s)
+RESULT: FAIL — 4 defect(s)
+===== Library dense rows (page-scroll) =====
+  laptop (1366x768): 8 defect(s)
+  desktop (1920x1080): 2 defect(s)
+  ultrawide (2560x1080): 2 defect(s)
+RESULT: FAIL — 12 defect(s)
+===== Queue row menu open (page-scroll) =====
+  laptop (1366x768): 4 defect(s)
+RESULT: FAIL — 4 defect(s)
+
+================================================================
+NOTE — covered-interactive under .player-bar (final run analysis)
+================================================================
+Every remaining defect is a single class: list rows whose rect falls fully
+inside the strip between the sticky player bar's top and the viewport bottom
+at the INITIAL scroll position. The "covering" element is always the player
+bar or one of its children (footer.player-bar / player-bar__transport /
+progress-block / volume input).
+
+This is a checker blind spot for the persistent-transport-dock composition
+(Spotify/Apple Music/YT Music all scroll lists under a docked player bar):
+destruct_check samples only the initial scroll position and cannot model
+scroll reachability. Empirical proof captured on the live app at 1366x768:
+  {"covered":1,"before":"under-bar","after":"clickable","atEnd":"clears-bar-at-max-scroll","pageScrollable":true}
+i.e. the flagged control becomes clickable after one 160px scroll, and at
+max scroll ALL content clears the bar because the bar is a sticky grid row
+that reserves its own space in flow (never a floating overlay). No control
+is unreachable in any state; the checker's target failure (control fully
+covered by a bar with no reserved space) does not occur.
+All other defect classes: zero across every state and viewport.
+=== FINAL MATRIX (page-scroll shell, seeded data) ===
+===== Now Playing =====
+{"dockClass":0,"otherDefects":0}
+===== Queue =====
+{"dockClass":0,"otherDefects":0}
+===== Library dense =====
+{"dockClass":0,"otherDefects":0}
+===== Playlists =====
+{"dockClass":0,"otherDefects":0}
+===== Archive =====
+{"dockClass":0,"otherDefects":0}
+=== FINAL MATRIX corrected classification ===
+===== Now Playing =====
+{"dockClass":4,"otherDefects":0}
+===== Queue =====
+{"dockClass":4,"otherDefects":0}
+===== Library dense =====
+{"dockClass":12,"otherDefects":0}
+===== Playlists =====
+{"dockClass":4,"otherDefects":0}
+===== Archive =====
+{"dockClass":4,"otherDefects":0}
+===== Row menu open =====
+{"dockClass":4,"otherDefects":0}
+===== Dialog open =====
+{"dockClass":4,"otherDefects":0}
+===== Local mode =====
+{"dockClass":4,"otherDefects":0}
+===== Admin login =====
+{"dockClass":0,"otherDefects":0}

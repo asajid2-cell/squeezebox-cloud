@@ -14,7 +14,7 @@ import {
   type ReactNode
 } from "react";
 import {
-  Check, HardDriveDownload, ListMusic, Pause, Play, Repeat, Repeat1,
+  Check, HardDriveDownload, ListMusic, Music2, Pause, Play, Repeat, Repeat1,
   Shuffle, SkipBack, SkipForward, Square, Volume2, X
 } from "lucide-react";
 import type { Track } from "../types";
@@ -407,54 +407,83 @@ export function LocalNowPlayingPanel() {
       <div className="playing-layout">
         <div className={`album-art ${has ? "" : "is-empty"}`}>
           {art ? <img src={art} alt={`${p.current?.album || p.current?.title} cover`} /> : (
-            <>
+            <div className="album-art__fallback">
               <div className="album-noise" />
-              <strong>{has ? `${(p.current?.artist || "").split(" ")[0]}.` : "CS."}</strong>
-              <span>{p.current?.album || "This device"}</span>
-            </>
+              <Music2 size={48} strokeWidth={1.5} />
+            </div>
           )}
         </div>
         <div className="track-core">
           <h3>{p.current?.title || "Nothing playing here"}</h3>
           <p>{p.current?.artist || "Pick a song to play in this browser"}</p>
-          <span className="source-chip"><span className="live-dot" /> {p.loading ? "Buffering…" : "Local · this device"}</span>
-          <div className="local-progress">
-            <input
-              type="range"
-              min={0}
-              max={Math.max(1, p.duration)}
-              value={Math.min(p.elapsed, p.duration || 0)}
-              disabled={!has}
-              onChange={(e) => p.seek(Number(e.currentTarget.value))}
-              aria-label="Seek"
-            />
-            <div className="local-times">
-              <span>{fmt(p.elapsed)}</span>
-              <span>{fmt(p.duration)}</span>
-            </div>
-          </div>
-          <div className="transport">
-            <button aria-label="Previous" disabled={!has} onClick={p.previous}><SkipBack size={20} /></button>
-            <button className="play-button" aria-label={p.isPlaying ? "Pause" : "Play"} disabled={!has} onClick={p.toggle}>
-              {p.isPlaying ? <Pause size={22} fill="currentColor" /> : <Play size={22} fill="currentColor" />}
-            </button>
-            <button aria-label="Stop" disabled={!has} onClick={p.stop}><Square size={18} fill="currentColor" /></button>
-            <button aria-label="Next" disabled={!has} onClick={p.next}><SkipForward size={20} /></button>
-          </div>
+          <span className="source-chip">
+            {has && p.isPlaying && <span className="live-dot" />}
+            {p.loading ? "Buffering…" : "This device"}
+          </span>
           <div className="playback-options">
             <button className={p.shuffle ? "active-option" : ""} aria-pressed={p.shuffle} onClick={p.toggleShuffle}>
-              <Shuffle size={17} /> {p.shuffle ? "Shuffle on" : "Shuffle"}
+              <Shuffle size={16} /> {p.shuffle ? "Shuffle on" : "Shuffle"}
             </button>
             <button className={p.repeat !== "off" ? "active-option" : ""} aria-pressed={p.repeat !== "off"} onClick={p.cycleRepeat}>
-              {p.repeat === "one" ? <Repeat1 size={17} /> : <Repeat size={17} />} {repeatLabel}
+              {p.repeat === "one" ? <Repeat1 size={16} /> : <Repeat size={16} />} {repeatLabel}
             </button>
           </div>
-          <VolumeRow volume={Math.round(p.volume * 100)} onChange={(v) => p.setVolume(v / 100)} />
           <LocalArchiveButton track={p.current} />
-          {!has && <p className="empty-copy">This plays in your browser, separate from the Squeezebox. Add songs from search with “Play here”.</p>}
+          {!has && <p className="empty-copy">Plays in your browser, separate from the Squeezebox. Add songs from search with “Play here” — transport stays live in the bar below.</p>}
         </div>
       </div>
     </section>
+  );
+}
+
+// Persistent player bar for the in-browser player (mirrors the Squeezebox PlayerBar
+// so transport is reachable from every screen in "this device" mode too).
+export function LocalPlayerBar() {
+  const p = useLocalPlayerContext();
+  const has = Boolean(p.current);
+  const art = p.current?.art || p.current?.artwork;
+  return (
+    <footer className="player-bar" aria-label="Player">
+      <div className="player-bar__meta">
+        <div className="player-bar__art">{art ? <img src={art} alt="" /> : <ListMusic size={20} />}</div>
+        <div className="player-bar__text">
+          <strong>{has ? p.current?.title : "Nothing playing"}</strong>
+          <small>{has ? p.current?.artist : "Use “Play here” on a song"}</small>
+          <span className="player-bar__source">
+            {has && p.isPlaying && <span className="live-dot" />}
+            {p.loading ? "Buffering… · this device" : "This device"}
+          </span>
+        </div>
+      </div>
+      <div className="player-bar__center">
+        <div className="player-bar__transport">
+          <button aria-label="Previous" disabled={!has} onClick={p.previous}><SkipBack size={18} /></button>
+          <button className="play-button" aria-label={p.isPlaying ? "Pause" : "Play"} disabled={!has} onClick={p.toggle}>
+            {p.isPlaying ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" />}
+          </button>
+          <button aria-label="Stop" disabled={!has} onClick={p.stop}><Square size={16} fill="currentColor" /></button>
+          <button aria-label="Next" disabled={!has} onClick={p.next}><SkipForward size={18} /></button>
+        </div>
+        <div className="player-bar__seek local-progress">
+          <input
+            type="range"
+            min={0}
+            max={Math.max(1, p.duration)}
+            value={Math.min(p.elapsed, p.duration || 0)}
+            disabled={!has}
+            onChange={(e) => p.seek(Number(e.currentTarget.value))}
+            aria-label="Seek"
+          />
+          <div className="local-times">
+            <span>{fmt(p.elapsed)}</span>
+            <span>{fmt(p.duration)}</span>
+          </div>
+        </div>
+      </div>
+      <div className="player-bar__volume">
+        <VolumeRow volume={Math.round(p.volume * 100)} onChange={(v) => p.setVolume(v / 100)} />
+      </div>
+    </footer>
   );
 }
 

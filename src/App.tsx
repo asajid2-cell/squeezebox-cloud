@@ -1,4 +1,5 @@
-import { type FormEvent, type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { type FormEvent, type ReactNode, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   CheckCircle2,
   ChevronRight,
@@ -86,6 +87,7 @@ import {
   PlaybackModeToggle,
   LocalNowPlayingPanel,
   LocalQueuePanel,
+  LocalPlayerBar,
   usePlaybackMode,
   useLocalPlayerContext,
   localStreamUrl,
@@ -117,6 +119,18 @@ function usePlaylists() {
   return { playlists, reload };
 }
 
+// While an overlay (dialog, row menu) is open, the page behind it is inert —
+// clicks can't land on half-covered controls and assistive tech isn't offered
+// dead background content. The overlay itself lives in a portal, so it stays live.
+function useInertBackground(open: boolean) {
+  useEffect(() => {
+    if (!open) return;
+    const root = document.getElementById("root");
+    root?.setAttribute("inert", "");
+    return () => root?.removeAttribute("inert");
+  }, [open]);
+}
+
 function Dialog({
   title,
   children,
@@ -139,6 +153,10 @@ function Dialog({
   const titleId = useId();
   const dialogRef = useRef<HTMLFormElement>(null);
   const onCloseRef = useRef(onClose);
+
+  // Declared before the focus effect so its cleanup (removing inert) runs first
+  // on unmount — the restored focus target must not still be inert.
+  useInertBackground(true);
 
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -167,7 +185,7 @@ function Dialog({
     };
   }, []);
 
-  return (
+  return createPortal(
     <div className="dialog-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <form
         ref={dialogRef}
@@ -184,7 +202,8 @@ function Dialog({
           <button type="submit" className="primary-small" disabled={busy || confirmDisabled}>{busy ? busyLabel : confirmLabel}</button>
         </div>
       </form>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -369,7 +388,7 @@ function AppShell() {
   const speakerOnline = state.player.connected && state.player.online && !reconnecting;
 
   return (
-    <div className="desktop-shell">
+    <div className={`app-shell ${isAdminRoute ? "is-admin" : ""}`}>
       <aside className="sidebar">
         <div className="brand">
           <Cloud size={18} fill="currentColor" />
@@ -409,7 +428,9 @@ function AppShell() {
           <span className={speakerOnline ? "status-dot online" : reconnecting ? "status-dot connecting" : "status-dot offline"} />
           <div>
             <strong>{speakerOnline ? "Speaker online" : reconnecting ? "Reconnecting…" : "Speaker offline"}</strong>
-            <small>{speakerOnline ? state.player.name : state.player.detail || "LMS player not connected"}</small>
+            <small title={state.player.detail || undefined}>
+              {speakerOnline ? state.player.name : humanizeConnectionDetail(state.player.detail)}
+            </small>
           </div>
           <Radio size={22} />
         </div>
@@ -440,11 +461,93 @@ function AppShell() {
             onRefresh={refresh}
             onAction={runAction}
             actionPending={actionPending}
-            onPlayerAction={playerAction}
           />
         )}
       </main>
+      {!isAdminRoute && (
+        <PlayerBar
+          state={state}
+          actionPending={actionPending}
+          onRefresh={refresh}
+          onAction={runAction}
+          onPlayerAction={playerAction}
+        />
+      )}
     </div>
+  );
+}
+
+// Persistent player bar — owns transport across EVERY screen (the flagship move:
+// control is never trapped on the Now Playing surface). Mode-aware: drives the
+// Squeezebox in "squeezebox" mode, the in-browser player in "local" mode.
+function PlayerBar({
+  state,
+  actionPending,
+  onRefresh,
+  onAction,
+  onPlayerAction
+}: {
+  state: AppState;
+  actionPending: boolean;
+  onRefresh: () => void;
+  onAction: ActionRunner;
+  onPlayerAction: (action: "play" | "pause" | "stop" | "next" | "previous") => Promise<unknown>;
+}) {
+  const { mode } = usePlaybackMode();
+  if (mode === "local") return <LocalPlayerBar />;
+
+  const np = state.nowPlaying;
+  const hasTrack = np.id !== "idle";
+  const reconnecting = Boolean(state.player.reconnecting);
+  const controlsDisabled = !state.player.connected || !state.player.online || reconnecting || actionPending;
+  const isPlaying = state.player.mode === "play";
+  const art = usableArt(np.art || np.artwork);
+
+  return (
+    <footer className="player-bar" aria-label="Player">
+      <div className="player-bar__meta">
+        <div className="player-bar__art">{art ? <img src={art} alt="" /> : <Music2 size={20} />}</div>
+        <div className="player-bar__text">
+          <strong>{hasTrack ? np.title : "Nothing playing"}</strong>
+          <small>{hasTrack ? np.artist : "Queue a song or connect the Squeezebox"}</small>
+          <span className="player-bar__source">
+            {isPlaying && hasTrack && <span className="live-dot" />}
+            {np.source}
+          </span>
+        </div>
+      </div>
+      <div className="player-bar__center">
+        <div className="player-bar__transport">
+          <button aria-label="Previous" disabled={controlsDisabled} onClick={() => onAction(async () => { await onPlayerAction("previous"); await onRefresh(); })}>
+            <SkipBack size={18} />
+          </button>
+          <button className="play-button" aria-label={isPlaying ? "Pause" : "Play"} disabled={controlsDisabled} onClick={() => onAction(async () => { await onPlayerAction(isPlaying ? "pause" : "play"); await onRefresh(); })}>
+            {isPlaying ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" />}
+          </button>
+          <button aria-label="Stop" disabled={controlsDisabled || state.player.mode === "stop"} onClick={() => onAction(async () => { await onPlayerAction("stop"); await onRefresh(); })}>
+            <Square size={16} fill="currentColor" />
+          </button>
+          <button aria-label="Next" disabled={controlsDisabled} onClick={() => onAction(async () => { await onPlayerAction("next"); await onRefresh(); })}>
+            <SkipForward size={18} />
+          </button>
+        </div>
+        <div className="player-bar__seek">
+          <Progress
+            key={`${np.id}:${np.duration || 0}`}
+            trackId={np.id}
+            elapsed={np.elapsed || 0}
+            duration={np.duration || 0}
+            canSeek={Boolean(np.canSeek)}
+            mode={state.player.mode}
+            onSeek={(seconds) => onAction(async () => { await seekPlayer(seconds); await onRefresh(); })}
+            onEnded={onRefresh}
+          />
+        </div>
+      </div>
+      <div className="player-bar__volume">
+        <VolumeControl volume={state.player.volume} onChange={(volume) => onAction(async () => { await setPlayerVolume(volume); await onRefresh(); })} />
+      </div>
+    </footer>
   );
 }
 
@@ -459,8 +562,7 @@ function PublicScreen({
   setSourceFilter,
   onRefresh,
   onAction,
-  actionPending,
-  onPlayerAction
+  actionPending
 }: {
   state: AppState;
   activeScreen: PublicScreenName;
@@ -473,7 +575,6 @@ function PublicScreen({
   onRefresh: () => void;
   onAction: ActionRunner;
   actionPending: boolean;
-  onPlayerAction: (action: "play" | "pause" | "stop" | "next" | "previous") => Promise<unknown>;
 }) {
   const { mode } = usePlaybackMode();
   const commonSearch = (
@@ -490,60 +591,59 @@ function PublicScreen({
     />
   );
 
+  // List/browse screens are the page — full-width, dense. The track-info inspector
+  // is deliberately absent here: it describes the CURRENT track, so it belongs only
+  // on Now Playing (fixing the original's irrelevant-rail-on-Library defect).
   if (activeScreen === "Queue") {
     return (
-      <div className="content-grid focus-grid">
+      <div className="stage">
         {mode === "local" ? <LocalQueuePanel /> : <QueuePanel queue={state.queue} requestsOpen={publicRequestsOpen(state)} onRefresh={onRefresh} onAction={onAction} />}
-        <RightRail state={state} />
       </div>
     );
   }
 
   if (activeScreen === "Library") {
-    return (
-      <div className="content-grid focus-grid">
-        {commonSearch}
-        <RightRail state={state} />
-      </div>
-    );
+    return <div className="stage">{commonSearch}</div>;
   }
 
   if (activeScreen === "Playlists") {
     return (
-      <div className="content-grid focus-grid">
+      <div className="stage">
         <PlaylistsPanel requestsOpen={publicRequestsOpen(state)} onRefresh={onRefresh} onAction={onAction} />
-        <RightRail state={state} />
       </div>
     );
   }
 
   if (activeScreen === "Archive") {
     return (
-      <div className="archive-screen">
+      <div className="stage">
         <ArchivePanel />
       </div>
     );
   }
 
+  // Now Playing = the rich DETAIL + context view (transport lives in the player bar).
   // A real track is one with a non-idle identity — don't require a known duration,
   // or live streams / duration-unknown tracks falsely read as "no track".
   const hasTrack = state.nowPlaying.id !== "idle";
   const controlsDisabled = !state.player.connected || !state.player.online || Boolean(state.player.reconnecting) || actionPending;
   if (mode === "local") {
     return (
-      <div className="content-grid">
-        <LocalNowPlayingPanel />
-        <LocalQueuePanel />
+      <div className="stage stage--split">
+        <div className="np-column">
+          <LocalNowPlayingPanel />
+          <LocalQueuePanel />
+        </div>
         <RightRail state={state} />
       </div>
     );
   }
   return (
-    <div className="content-grid">
-      <NowPlayingPanel state={state} hasTrack={hasTrack} controlsDisabled={controlsDisabled} onRefresh={onRefresh} onAction={onAction} onPlayerAction={onPlayerAction} />
-
-      <QueuePanel queue={state.queue} requestsOpen={publicRequestsOpen(state)} onRefresh={onRefresh} onAction={onAction} />
-
+    <div className="stage stage--split">
+      <div className="np-column">
+        <NowPlayingPanel state={state} hasTrack={hasTrack} controlsDisabled={controlsDisabled} onRefresh={onRefresh} onAction={onAction} />
+        <QueuePanel queue={state.queue} requestsOpen={publicRequestsOpen(state)} onRefresh={onRefresh} onAction={onAction} />
+      </div>
       <RightRail state={state} />
     </div>
   );
@@ -554,53 +654,30 @@ function NowPlayingPanel({
   hasTrack,
   controlsDisabled,
   onRefresh,
-  onAction,
-  onPlayerAction
+  onAction
 }: {
   state: AppState;
   hasTrack: boolean;
   controlsDisabled: boolean;
   onRefresh: () => void;
   onAction: ActionRunner;
-  onPlayerAction: (action: "play" | "pause" | "stop" | "next" | "previous") => Promise<unknown>;
 }) {
+  const isPlaying = state.player.mode === "play";
   return (
     <section className="panel now-playing" aria-label="Now playing">
         <h2>Now playing</h2>
         <div className="playing-layout">
           <AlbumArt track={state.nowPlaying} />
           <div className="track-core">
-            <h3>{state.nowPlaying.title}</h3>
-            <p>{state.nowPlaying.artist}</p>
-            <span className="source-chip">{state.nowPlaying.source}</span>
-            <Progress
-              key={`${state.nowPlaying.id}:${state.nowPlaying.duration || 0}`}
-              trackId={state.nowPlaying.id}
-              elapsed={state.nowPlaying.elapsed || 0}
-              duration={state.nowPlaying.duration || 0}
-              canSeek={Boolean(state.nowPlaying.canSeek)}
-              mode={state.player.mode}
-              onSeek={(seconds) => onAction(async () => { await seekPlayer(seconds); await onRefresh(); })}
-              onEnded={onRefresh}
-            />
-            <div className="transport">
-              <button aria-label="Previous" disabled={controlsDisabled} onClick={() => onAction(async () => { await onPlayerAction("previous"); await onRefresh(); })}>
-                <SkipBack size={20} />
-              </button>
-              <button className="play-button" aria-label={state.player.mode === "play" ? "Pause" : "Play"} disabled={controlsDisabled} onClick={() => onAction(async () => { await onPlayerAction(state.player.mode === "play" ? "pause" : "play"); await onRefresh(); })}>
-                {state.player.mode === "play" ? <Pause size={22} fill="currentColor" /> : <Play size={22} fill="currentColor" />}
-              </button>
-              <button aria-label="Stop" disabled={controlsDisabled || state.player.mode === "stop"} onClick={() => onAction(async () => { await onPlayerAction("stop"); await onRefresh(); })}>
-                <Square size={18} fill="currentColor" />
-              </button>
-              <button aria-label="Next" disabled={controlsDisabled} onClick={() => onAction(async () => { await onPlayerAction("next"); await onRefresh(); })}>
-                <SkipForward size={20} />
-              </button>
-            </div>
+            <h3>{hasTrack ? state.nowPlaying.title : "No track playing"}</h3>
+            <p>{hasTrack ? state.nowPlaying.artist : "Pick a song, or connect the Squeezebox"}</p>
+            <span className="source-chip">
+              {isPlaying && hasTrack && <span className="live-dot" />}
+              {state.nowPlaying.source}
+            </span>
             <PlaybackOptions state={state} disabled={controlsDisabled || !publicRequestsOpen(state)} onRefresh={onRefresh} onAction={onAction} />
-            <VolumeControl volume={state.player.volume} onChange={(volume) => onAction(async () => { await setPlayerVolume(volume); await onRefresh(); })} />
             <ArchiveButton track={hasTrack ? state.nowPlaying : null} />
-            {!hasTrack && <p className="empty-copy">No live track yet. Connect the Squeezebox or add a local-library song.</p>}
+            {!hasTrack && <p className="empty-copy">Transport controls stay live in the bar below. Queue a local-library or Spotify song, or connect the Squeezebox, to start playback.</p>}
           </div>
         </div>
       </section>
@@ -884,11 +961,10 @@ function AlbumArt({ track }: { track: Track }) {
       {art ? (
         <img src={art} alt={`${track.album || track.title} cover`} />
       ) : (
-        <>
+        <div className="album-art__fallback">
           <div className="album-noise" />
-          <strong>{empty ? "CS." : `${track.artist.split(" ")[0]}.`}</strong>
-          <span>{track.album || "No Album"}</span>
-        </>
+          <Music2 size={48} strokeWidth={1.5} />
+        </div>
       )}
     </div>
   );
@@ -1047,7 +1123,9 @@ function QueuePanel({ queue, requestsOpen, onRefresh, onAction }: { queue: AppSt
           </button>
         )}
       </div>
-      <p className="quiet-note">{queue.length} songs - ~{queue.at(-1)?.etaMinutes || 0} min total</p>
+      {queue.length > 0 && (
+        <p className="quiet-note">{queue.length} {queue.length === 1 ? "song" : "songs"} · ~{queue.at(-1)?.etaMinutes || 0} min total</p>
+      )}
     </section>
   );
 }
@@ -1166,7 +1244,10 @@ function SearchPanel({
   const [detail, setDetail] = useState<{ track: Track; tracks: Track[]; loading: boolean } | null>(null);
   const spotifyAvailable = state.services.spotify.configured;
   const requestsOpen = publicRequestsOpen(state);
-  const visibleResults = showAllResults ? results : results.slice(0, 3);
+  // A results view should FILL its page with rows, not tease three and hide the
+  // rest behind "view all" — the fold only kicks in past a real page of rows.
+  const resultsFold = 25;
+  const visibleResults = showAllResults ? results : results.slice(0, resultsFold);
   const filteredCollections = collections.filter((item) =>
     `${item.collection} ${item.folder} ${item.sample.join(" ")}`.toLowerCase().includes(query.toLowerCase())
   );
@@ -1327,7 +1408,7 @@ function SearchPanel({
                 <SearchResultRow key={track.id} track={track} requestsOpen={requestsOpen} onRefresh={onRefresh} onAction={onAction} />
               ))}
           </div>
-          {(sourceFilter === "local" || sourceFilter === "uploaded" || sourceFilter === "archived") && results.length > 3 && (
+          {(sourceFilter === "local" || sourceFilter === "uploaded" || sourceFilter === "archived") && results.length > resultsFold && (
             <button className="link-button" onClick={() => setShowAllResults(!showAllResults)}>
               {showAllResults ? "Show fewer" : `View all ${results.length} results`}
             </button>
@@ -1453,27 +1534,71 @@ function SpotifyDetail({
 
 // Overflow menu for a row's secondary actions — keeps the row to one prominent
 // primary action + a "More" button, instead of a wall of buttons (esp. on mobile).
+// The open menu is a PORTALED, viewport-clamped popover with an inert background
+// (the Radix/Linear modal-dropdown pattern): it can never clip at a viewport edge,
+// and a click outside dismisses instead of hitting a half-covered control.
 function RowMenu({ children, label }: { children: ReactNode; label?: string }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
+  const popRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  useInertBackground(open);
+
+  const close = useCallback((refocus: boolean) => {
+    setOpen(false);
+    setPos(null);
+    // Refocus after the inert attribute is gone (its effect cleanup runs on the
+    // same commit; the rAF orders the focus call after it).
+    if (refocus) requestAnimationFrame(() => triggerRef.current?.focus());
+  }, []);
+
+  // Position: below the trigger, right-aligned, clamped into the viewport; flips
+  // above the trigger when there's no room below.
+  useLayoutEffect(() => {
+    if (!open || !popRef.current || !triggerRef.current) return;
+    const t = triggerRef.current.getBoundingClientRect();
+    const p = popRef.current.getBoundingClientRect();
+    const margin = 8;
+    let left = t.right - p.width;
+    left = Math.max(margin, Math.min(left, window.innerWidth - p.width - margin));
+    let top = t.bottom + 6;
+    if (top + p.height > window.innerHeight - margin) top = Math.max(margin, t.top - p.height - 6);
+    // Cap the height to the space below `top` so later growth (e.g. the inline
+    // save-to-playlist submenu) scrolls inside the pop instead of overflowing.
+    setPos({ top, left, maxHeight: window.innerHeight - top - margin });
+  }, [open]);
+
+  // Focus the first item only once the pop is positioned (a visibility:hidden
+  // element — the pre-measure state — can't receive focus).
+  const positioned = pos !== null;
+  useLayoutEffect(() => {
+    if (open && positioned) popRef.current?.querySelector<HTMLElement>("button:not(:disabled)")?.focus();
+  }, [open, positioned]);
+
   useEffect(() => {
     if (!open) return;
-    function onDoc(e: MouseEvent) { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); }
-    function onKey(e: KeyboardEvent) { if (e.key === "Escape") { setOpen(false); triggerRef.current?.focus(); } }
+    function onDoc(e: MouseEvent) { if (popRef.current && !popRef.current.contains(e.target as Node)) close(false); }
+    function onKey(e: KeyboardEvent) { if (e.key === "Escape") close(true); }
     document.addEventListener("mousedown", onDoc);
     document.addEventListener("keydown", onKey);
     return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
-  }, [open]);
+  }, [open, close]);
+
   return (
-    <div className="row-menu" ref={ref}>
-      <button ref={triggerRef} className="icon-button" aria-label={label || "More actions"} aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+    <div className="row-menu">
+      <button ref={triggerRef} className="icon-button" aria-label={label || "More actions"} aria-expanded={open} onClick={() => (open ? close(false) : setOpen(true))}>
         <MoreHorizontal size={16} />
       </button>
-      {open && (
-        <div className="row-menu__pop" onClick={(e) => { if ((e.target as HTMLElement).closest(".row-menu__item")) { setOpen(false); triggerRef.current?.focus(); } }}>
+      {open && createPortal(
+        <div
+          ref={popRef}
+          className="row-menu__pop"
+          style={pos ? { top: pos.top, left: pos.left, maxHeight: pos.maxHeight } : { visibility: "hidden", top: 0, left: 0 }}
+          onClick={(e) => { if ((e.target as HTMLElement).closest(".row-menu__item")) close(true); }}
+        >
           {children}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -2649,6 +2774,17 @@ function trackDurationLabel(track: Track): string {
   if (track.kind && track.kind !== "track") return track.kind;
   if (track.duration && track.duration > 0) return formatTime(track.duration);
   return "";
+}
+
+// Raw socket errno strings ("connect ECONNREFUSED 127.0.0.1:9090") don't belong in
+// user-facing chrome — translate the common ones; the raw detail stays in a title
+// attribute for diagnosis.
+function humanizeConnectionDetail(detail?: string | null): string {
+  if (!detail) return "LMS player not connected";
+  if (/ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|ETIMEDOUT|ENOTFOUND|EAI_AGAIN/i.test(detail)) {
+    return "Can't reach the music server";
+  }
+  return detail;
 }
 
 function publicRequestsOpen(state: AppState) {

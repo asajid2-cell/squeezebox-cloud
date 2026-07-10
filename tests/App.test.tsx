@@ -201,7 +201,9 @@ describe("Cloud Squeeze UI", () => {
     await waitFor(() => expect(Number((slider as HTMLInputElement).value)).toBeGreaterThan(0), { timeout: 1500 });
 
     secondTrack = true;
-    await waitFor(() => expect(screen.getByText("Track B")).toBeInTheDocument(), { timeout: 1500 });
+    // "Track B" now legitimately renders in both the Now Playing detail and the
+    // persistent player bar, so assert on presence (getAllByText), not uniqueness.
+    await waitFor(() => expect(screen.getAllByText("Track B").length).toBeGreaterThan(0), { timeout: 1500 });
     expect((screen.getByLabelText("Seek position") as HTMLInputElement).value).toBe("0");
   });
 
@@ -268,7 +270,9 @@ describe("Cloud Squeeze UI", () => {
     const row = screen.getByText("Local Test").closest(".result-row");
     expect(row).toBeTruthy();
     await userEvent.click(within(row as HTMLElement).getByRole("button", { name: /More actions/ }));
-    await userEvent.click(within(row as HTMLElement).getByRole("button", { name: "Add to queue" }));
+    // The open row menu is a portaled popover on document.body (only one can be
+    // open), so its items are queried at screen level, not inside the row.
+    await userEvent.click(screen.getByRole("button", { name: "Add to queue" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("That song is already in the queue");
   });
@@ -302,7 +306,7 @@ describe("Cloud Squeeze UI", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Queue" }));
     const row = (await screen.findByText("Awake")).closest(".queue-row") as HTMLElement;
     await userEvent.click(within(row).getByRole("button", { name: /More queue actions/ }));
-    await userEvent.click(within(row).getByRole("button", { name: "Edit details" }));
+    await userEvent.click(screen.getByRole("button", { name: "Edit details" }));
 
     expect(screen.queryByLabelText("Requested by")).not.toBeInTheDocument();
     await userEvent.clear(screen.getByLabelText("Queue title"));
@@ -310,7 +314,7 @@ describe("Cloud Squeeze UI", () => {
     await userEvent.clear(screen.getByLabelText("Queue artist"));
     await userEvent.type(screen.getByLabelText("Queue artist"), "Edited Tycho");
     await userEvent.click(within(row).getByRole("button", { name: /More queue actions/ }));
-    await userEvent.click(within(row).getByRole("button", { name: "Save edits" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save edits" }));
 
     await waitFor(() => {
       const patchCall = fetchMock.mock.calls.find(([url, options]) => String(url).includes("/api/queue/") && options?.method === "PATCH");
@@ -348,8 +352,8 @@ describe("Cloud Squeeze UI", () => {
 
     const row = (await screen.findByText("Awake")).closest(".queue-row") as HTMLElement;
     await userEvent.click(within(row).getByRole("button", { name: /More queue actions/ }));
-    expect(within(row).queryByRole("button", { name: "Edit details" })).not.toBeInTheDocument();
-    expect(within(row).getByRole("button", { name: "Remove" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit details" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove" })).toBeInTheDocument();
   });
 
   it("disables public track actions when requests are paused", async () => {
@@ -388,8 +392,8 @@ describe("Cloud Squeeze UI", () => {
     const row = screen.getByText("Shabang").closest(".result-row") as HTMLElement;
     expect(within(row).getByRole("button", { name: /^Play( here)?$/ })).toBeDisabled();
     await userEvent.click(within(row).getByRole("button", { name: /More actions/ }));
-    expect(within(row).getByRole("button", { name: "Play next" })).toBeDisabled();
-    const queueButton = within(row).getByRole("button", { name: "Add to queue" });
+    expect(screen.getByRole("button", { name: "Play next" })).toBeDisabled();
+    const queueButton = screen.getByRole("button", { name: "Add to queue" });
     expect(queueButton).toBeDisabled();
     await userEvent.click(queueButton);
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/player/track"))).toBe(false);
@@ -509,8 +513,8 @@ describe("Cloud Squeeze UI", () => {
     const row = screen.getByText("Local Test").closest(".result-row") as HTMLElement;
     expect(within(row).getByRole("button", { name: /^Play( here)?$/ })).toBeInTheDocument();
     await userEvent.click(within(row).getByRole("button", { name: /More actions/ }));
-    expect(within(row).getByRole("button", { name: "Play next" })).toBeInTheDocument();
-    expect(within(row).getByRole("button", { name: "Add to queue" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Play next" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add to queue" })).toBeInTheDocument();
   });
 
   it("shows a real time when a duration is known and a blank (never --:--) when it isn't", async () => {
@@ -690,7 +694,7 @@ describe("Cloud Squeeze UI", () => {
     const row = screen.getAllByText("Saved Track").find((element) => element.closest(".result-row"))?.closest(".result-row");
     expect(row).toBeTruthy();
     await userEvent.click(within(row as HTMLElement).getByRole("button", { name: /More actions/ }));
-    await userEvent.click(within(row as HTMLElement).getByRole("button", { name: "Add to queue" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add to queue" }));
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([url, options]) => String(url).includes("/api/player/track") && options?.method === "POST")).toBe(true);
@@ -706,7 +710,9 @@ describe("Cloud Squeeze UI", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Queue all" }));
 
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/library/collection") && String(url).includes("limit=200"))).toBe(true);
-    expect(await screen.findByRole("alert")).toHaveTextContent("Queued 1 of 2 tracks; 1 skipped because of the queue limit or duplicates.");
+    // Generous timeout: under full parallel suite load the queue-all round trip can
+    // exceed findByRole's 1s default, which read as a flaky failure.
+    expect(await screen.findByRole("alert", {}, { timeout: 4000 })).toHaveTextContent("Queued 1 of 2 tracks; 1 skipped because of the queue limit or duplicates.");
   });
 
   it("shows app playlists under My Playlists and opens their tracks", async () => {
@@ -727,7 +733,7 @@ describe("Cloud Squeeze UI", () => {
     await waitFor(() => expect(screen.getByText("Headlines")).toBeInTheDocument());
     const row = screen.getByText("Headlines").closest(".result-row");
     await userEvent.click(within(row as HTMLElement).getByRole("button", { name: /More actions/ }));
-    await userEvent.click(within(row as HTMLElement).getByRole("button", { name: /Save/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
     await userEvent.click(await screen.findByText("Late Nights"));
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([url, options]) => /\/api\/playlists\/pl-1\/tracks$/.test(String(url)) && options?.method === "POST")).toBe(true);
@@ -746,7 +752,7 @@ describe("Cloud Squeeze UI", () => {
     const row = screen.getByText("Headlines").closest(".result-row");
     expect(row).toBeTruthy();
     await userEvent.click(within(row as HTMLElement).getByRole("button", { name: /More actions/ }));
-    await userEvent.click(within(row as HTMLElement).getByRole("button", { name: "Hide" }));
+    await userEvent.click(screen.getByRole("button", { name: "Hide" }));
 
     await waitFor(() => {
       const curationCall = fetchMock.mock.calls.find(([url, options]) => String(url).includes("/api/curation") && options?.method === "POST");
