@@ -1,4 +1,4 @@
-import { type FormEvent, type ReactNode, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, type ReactNode, type RefObject, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   CheckCircle2,
@@ -33,13 +33,17 @@ import {
   Square,
   Trash2,
   Volume2,
-  XCircle
+  XCircle,
+  GripVertical,
+  AudioLines,
+  ArrowUpDown
 } from "lucide-react";
 import {
   addTracksToPlaylist,
   checkMusicInfo,
   checkSpeaker,
   checkSpotify,
+  clearQueue,
   createPlaylist,
   curateLibraryItem,
   deletePlaylist,
@@ -272,6 +276,29 @@ function navigateTo(screen: PublicScreenName) {
   window.dispatchEvent(new CustomEvent("sqz:navigate", { detail: screen }));
 }
 
+// The real per-screen content toolbar (replaces the old dead header band). Left:
+// the page title (its own large, non-eyebrow tier) + a context line. Right: the
+// screen's actions. 56px tall with a hairline base — the flagship list-view frame.
+function ScreenToolbar({
+  title,
+  context,
+  actions
+}: {
+  title: string;
+  context?: ReactNode;
+  actions?: ReactNode;
+}) {
+  return (
+    <div className="screen-toolbar">
+      <div className="screen-toolbar__titles">
+        <h1 className="screen-title">{title}</h1>
+        {context != null && context !== "" && <span className="screen-sub">{context}</span>}
+      </div>
+      {actions && <div className="screen-toolbar__actions">{actions}</div>}
+    </div>
+  );
+}
+
 function AppShell() {
   const [state, setState] = useState<AppState | null>(null);
   const [activeScreen, setActiveScreen] = useState<PublicScreenName>("Now Playing");
@@ -291,8 +318,12 @@ function AppShell() {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         setActiveScreen("Library");
-        searchRef.current?.focus();
-        searchRef.current?.select();
+        // The search field now lives in the Library toolbar, which may not be
+        // mounted yet on the frame the shortcut fires — focus after it renders.
+        requestAnimationFrame(() => {
+          searchRef.current?.focus();
+          searchRef.current?.select();
+        });
       }
     }
     document.addEventListener("keydown", onKey);
@@ -408,27 +439,6 @@ function AppShell() {
         <div className="brand">
           <Cloud size={18} fill="currentColor" />
           <span>Squeezebox Cloud</span>
-          {/* Compact top-bar action for narrow layouts, where the sidebar stacks above
-              the main header and the desktop top-right Admin link would float orphaned. */}
-          <a className="brand__admin top-link" href={isAdminRoute ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}admin`}>
-            <ShieldCheck size={16} />
-            {isAdminRoute ? "Public site" : "Admin"}
-          </a>
-        </div>
-        <div className="sidebar-search">
-          <Search size={18} />
-          <input
-            ref={searchRef}
-            aria-label="Search music"
-            placeholder="Search..."
-            value={query}
-            onChange={(event) => {
-              setQuery(event.currentTarget.value);
-              setActiveScreen("Library");
-            }}
-            onFocus={() => setActiveScreen("Library")}
-          />
-          <kbd>Ctrl+K</kbd>
         </div>
         <nav>
           {navItems.map((item) => (
@@ -442,6 +452,14 @@ function AppShell() {
               {item.label}
             </button>
           ))}
+          {/* Admin lives in the nav (never a floating button in a dead band). */}
+          <a
+            className="nav-admin"
+            href={isAdminRoute ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}admin`}
+          >
+            <ShieldCheck size={20} />
+            {isAdminRoute ? "Public site" : "Admin"}
+          </a>
         </nav>
         <RecentPicks picks={state.recentPicks} />
         <PlaybackModeToggle />
@@ -457,15 +475,6 @@ function AppShell() {
         </div>
       </aside>
       <main className="main">
-        <header className="hero-row">
-          {isAdminRoute ? <h1>Admin Console</h1> : <h1 className="sr-only">Squeezebox Cloud</h1>}
-          <div className="top-actions">
-            <a className="top-link" href={isAdminRoute ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}admin`}>
-              <ShieldCheck size={18} />
-              {isAdminRoute ? "Public site" : "Admin"}
-            </a>
-          </div>
-        </header>
         {actionError && <div className="action-error" role="alert">{actionError}</div>}
         {isAdminRoute ? (
           <AdminPage state={state} onSave={refresh} />
@@ -477,6 +486,7 @@ function AppShell() {
             results={results}
             spotifyGroups={spotifyGroups}
             setQuery={setQuery}
+            searchRef={searchRef}
             sourceFilter={sourceFilter}
             setSourceFilter={setSourceFilter}
             onRefresh={refresh}
@@ -527,7 +537,7 @@ function PlayerBar({
   return (
     <footer className="player-bar" aria-label="Player">
       <div className="player-bar__meta">
-        <div className="player-bar__art">{art ? <img src={art} alt="" /> : <Music2 size={20} />}</div>
+        <div className={`player-bar__art${art ? "" : " is-empty"}`}>{art ? <img src={art} alt="" /> : <AudioLines size={18} />}</div>
         <div className="player-bar__text">
           <strong>{hasTrack ? np.title : "Nothing playing"}</strong>
           <small>{hasTrack ? np.artist : "Queue a song or connect the Squeezebox"}</small>
@@ -579,6 +589,7 @@ function PublicScreen({
   results,
   spotifyGroups,
   setQuery,
+  searchRef,
   sourceFilter,
   setSourceFilter,
   onRefresh,
@@ -591,6 +602,7 @@ function PublicScreen({
   results: Track[];
   spotifyGroups: SpotifySearchGroups;
   setQuery: (value: string) => void;
+  searchRef: RefObject<HTMLInputElement | null>;
   sourceFilter: "local" | "uploaded" | "spotify" | "playlists" | "archived";
   setSourceFilter: (value: "local" | "uploaded" | "spotify" | "playlists" | "archived") => void;
   onRefresh: () => void;
@@ -598,33 +610,42 @@ function PublicScreen({
   actionPending: boolean;
 }) {
   const { mode } = usePlaybackMode();
-  const commonSearch = (
-    <SearchPanel
-      query={query}
-      setQuery={setQuery}
-      results={results}
-      spotifyGroups={spotifyGroups}
-      state={state}
-      sourceFilter={sourceFilter}
-      setSourceFilter={setSourceFilter}
-      onRefresh={onRefresh}
-      onAction={onAction}
-    />
-  );
 
-  // List/browse screens are the page — full-width, dense. The track-info inspector
-  // is deliberately absent here: it describes the CURRENT track, so it belongs only
-  // on Now Playing (fixing the original's irrelevant-rail-on-Library defect).
+  // List/browse screens are the page — full-width, dense, no enclosing card. The
+  // track-info inspector is deliberately absent here: it describes the CURRENT track,
+  // so it belongs only on Now Playing (fixing the irrelevant-rail-on-Library defect).
   if (activeScreen === "Queue") {
     return (
       <div className="stage stage--fill">
-        {mode === "local" ? <LocalQueuePanel /> : <QueuePanel queue={state.queue} requestsOpen={publicRequestsOpen(state)} onRefresh={onRefresh} onAction={onAction} />}
+        {mode === "local" ? (
+          <section className="screen" aria-label="Queue">
+            <ScreenToolbar title="Queue" />
+            <div className="list-region"><LocalQueuePanel /></div>
+          </section>
+        ) : (
+          <QueuePanel variant="page" queue={state.queue} requestsOpen={publicRequestsOpen(state)} onRefresh={onRefresh} onAction={onAction} />
+        )}
       </div>
     );
   }
 
   if (activeScreen === "Library") {
-    return <div className="stage stage--fill">{commonSearch}</div>;
+    return (
+      <div className="stage stage--fill">
+        <SearchPanel
+          query={query}
+          setQuery={setQuery}
+          searchRef={searchRef}
+          results={results}
+          spotifyGroups={spotifyGroups}
+          state={state}
+          sourceFilter={sourceFilter}
+          setSourceFilter={setSourceFilter}
+          onRefresh={onRefresh}
+          onAction={onAction}
+        />
+      </div>
+    );
   }
 
   if (activeScreen === "Playlists") {
@@ -650,23 +671,29 @@ function PublicScreen({
   const controlsDisabled = !state.player.connected || !state.player.online || Boolean(state.player.reconnecting) || actionPending;
   if (mode === "local") {
     return (
-      <div className="stage stage--split">
-        <div className="np-column">
-          <LocalNowPlayingPanel />
-          <LocalQueuePanel />
+      <>
+        <ScreenToolbar title="Now Playing" />
+        <div className="stage stage--split">
+          <div className="np-column">
+            <LocalNowPlayingPanel />
+            <LocalQueuePanel />
+          </div>
+          <RightRail state={state} />
         </div>
-        <RightRail state={state} />
-      </div>
+      </>
     );
   }
   return (
-    <div className="stage stage--split">
-      <div className="np-column">
-        <NowPlayingPanel state={state} hasTrack={hasTrack} controlsDisabled={controlsDisabled} onRefresh={onRefresh} onAction={onAction} />
-        <QueuePanel queue={state.queue} requestsOpen={publicRequestsOpen(state)} onRefresh={onRefresh} onAction={onAction} />
+    <>
+      <ScreenToolbar title="Now Playing" />
+      <div className="stage stage--split">
+        <div className="np-column">
+          <NowPlayingPanel state={state} hasTrack={hasTrack} controlsDisabled={controlsDisabled} onRefresh={onRefresh} onAction={onAction} />
+          <QueuePanel variant="nowplaying" queue={state.queue} requestsOpen={publicRequestsOpen(state)} onRefresh={onRefresh} onAction={onAction} />
+        </div>
+        <RightRail state={state} />
       </div>
-      <RightRail state={state} />
-    </div>
+    </>
   );
 }
 
@@ -685,8 +712,7 @@ function NowPlayingPanel({
 }) {
   const isPlaying = state.player.mode === "play";
   return (
-    <section className="panel now-playing" aria-label="Now playing">
-        <h2>Now playing</h2>
+    <section className="now-playing" aria-label="Now playing">
         <div className="playing-layout">
           <AlbumArt track={state.nowPlaying} />
           <div className="track-core">
@@ -848,20 +874,24 @@ function ArchivePanel() {
   const shownGroups = groups.filter((g) => g.count > 0);
 
   return (
-    <section className="panel archive-panel" aria-label="Archive">
-      <div className="panel-head-row">
-        <h2>Archive</h2>
-        <div className="archive-head-actions">
-          <button className="ghost-button" onClick={runScan} disabled={scanning} aria-label="Scan watched playlists now">{scanning ? "Scanning…" : "Scan now"}</button>
-          <button className="ghost-button" onClick={reload} aria-label="Refresh archive">Refresh</button>
-        </div>
-      </div>
+    <section className="screen archive-panel" aria-label="Archive">
+      <ScreenToolbar
+        title="Archive"
+        context={totalFiles > 0 ? `${totalFiles} ${totalFiles === 1 ? "song" : "songs"}` : undefined}
+        actions={
+          <>
+            <button className="ghost-button" onClick={runScan} disabled={scanning} aria-label="Scan watched playlists now">{scanning ? "Scanning…" : "Scan now"}</button>
+            <button className="ghost-button" onClick={reload} aria-label="Refresh archive">Refresh</button>
+          </>
+        }
+      />
       <p className="panel-subtitle">Lossless FLAC copies, downloaded in the background. Queue songs from search or the player — or just add them to a Spotify playlist named <strong>archive</strong> and they get pulled in automatically.</p>
       {watchCount > 0 && (
         <p className="archive-watch-note">Auto-archiving {watchCount} playlist{watchCount > 1 ? "s" : ""}{emailCount > 0 ? ` · emailing new songs from ${emailCount}` : ""}{scan?.lastScanAt ? ` · last checked ${archiveRelativeTime(scan.lastScanAt)}` : ""}.</p>
       )}
       {error && <div className="action-error" role="alert">{error}</div>}
 
+      <div className="list-region">
       {pending.length > 0 && (
         <div className="archive-queue">
           <h3 className="archive-section-title">In progress</h3>
@@ -902,6 +932,7 @@ function ArchivePanel() {
       {failed.length > 0 && (
         <p className="archive-failed-note">{failed.length} download{failed.length > 1 ? "s" : ""} failed — re-queue to retry.</p>
       )}
+      </div>
     </section>
   );
 }
@@ -992,9 +1023,8 @@ function AlbumArt({ track }: { track: Track }) {
       {art ? (
         <img src={art} alt={`${track.album || track.title} cover`} />
       ) : (
-        <div className="album-art__fallback">
-          <div className="album-noise" />
-          <Music2 size={48} strokeWidth={1.5} />
+        <div className="album-art__fallback" aria-hidden="true">
+          <span className="album-art__mark"><AudioLines size={40} strokeWidth={1.75} /></span>
         </div>
       )}
     </div>
@@ -1120,38 +1150,104 @@ function VolumeControl({ volume, onChange }: { volume: number; onChange: (volume
   );
 }
 
-function QueuePanel({ queue, requestsOpen, onRefresh, onAction }: { queue: AppState["queue"]; requestsOpen: boolean; onRefresh: () => void; onAction: ActionRunner }) {
+function QueuePanel({ queue, requestsOpen, onRefresh, onAction, variant = "nowplaying" }: { queue: AppState["queue"]; requestsOpen: boolean; onRefresh: () => void; onAction: ActionRunner; variant?: "page" | "nowplaying" }) {
   const [showAll, setShowAll] = useState(false);
-  const visibleQueue = showAll ? queue : queue.slice(0, 12);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [overIndex, setOverIndex] = useState<number | null>(null);
+  const isPage = variant === "page";
+  const fold = isPage ? 40 : 12;
+  const visibleQueue = showAll ? queue : queue.slice(0, fold);
+  const totalMin = queue.at(-1)?.etaMinutes || 0;
+  const count = `${queue.length} ${queue.length === 1 ? "song" : "songs"}${queue.length ? ` · ~${totalMin} min` : ""}`;
+  const canDrag = isPage && requestsOpen;
 
-  return (
-    <section className="panel queue-panel" aria-label="Up next">
-      <div className="section-head">
-        <h2>Up next</h2>
-        <span>Requested by</span>
-        <span>ETA</span>
-      </div>
-      <div className="queue-list">
-        {queue.length === 0 && (
-          <EmptyState
-            title="Queue is empty"
-            detail="Requests appear here once someone adds a local or Spotify track. Start by browsing the library."
-            icon={<ListMusic size={26} />}
-            actions={<button className="primary-small" onClick={() => navigateTo("Library")}><Search size={15} /> Browse library</button>}
-          />
-        )}
+  function commitDrop(target: number) {
+    const from = dragIndex;
+    setDragIndex(null);
+    setOverIndex(null);
+    if (from == null || from === target) return;
+    const item = queue[from];
+    if (!item) return;
+    onAction(async () => { await moveQueueItem(item.id, target); await onRefresh(); });
+  }
+
+  const emptyState = (
+    <EmptyState
+      title="Queue is empty"
+      detail="Requests appear here once someone adds a local or Spotify track. Start by browsing the library."
+      icon={<ListMusic size={26} />}
+      actions={<button className="primary-small" onClick={() => navigateTo("Library")}><Search size={15} /> Browse library</button>}
+    />
+  );
+
+  const list = (
+    <>
+      {queue.length > 0 && (
+        <div className="list-head queue-head" aria-hidden="true">
+          <span className="list-head__lead">Track</span>
+          <span>Requested by</span>
+          <span>ETA</span>
+          <span />
+        </div>
+      )}
+      <div className="queue-list" onDragLeave={() => setOverIndex(null)}>
+        {queue.length === 0 && emptyState}
         {visibleQueue.map((item, index) => (
-          <QueueRow key={item.id} item={item} index={index} queueLength={queue.length} requestsOpen={requestsOpen} onRefresh={onRefresh} onAction={onAction} />
+          <QueueRow
+            key={item.id}
+            item={item}
+            index={index}
+            queueLength={queue.length}
+            requestsOpen={requestsOpen}
+            canDrag={canDrag}
+            dragging={dragIndex === index}
+            dropTarget={overIndex === index && dragIndex !== null && dragIndex !== index}
+            onDragStart={() => setDragIndex(index)}
+            onDragEnter={() => canDrag && dragIndex !== null && setOverIndex(index)}
+            onDrop={() => commitDrop(index)}
+            onDragEnd={() => { setDragIndex(null); setOverIndex(null); }}
+            onRefresh={onRefresh}
+            onAction={onAction}
+          />
         ))}
-        {queue.length > 12 && (
+        {queue.length > fold && (
           <button className="ghost-add queue-show-all" aria-expanded={showAll} onClick={() => setShowAll((value) => !value)}>
             {showAll ? "Show less" : `Show all ${queue.length}`}
           </button>
         )}
       </div>
-      {queue.length > 0 && (
-        <p className="quiet-note">{queue.length} {queue.length === 1 ? "song" : "songs"} · ~{queue.at(-1)?.etaMinutes || 0} min total</p>
-      )}
+    </>
+  );
+
+  if (isPage) {
+    return (
+      <section className="screen queue-panel" aria-label="Queue">
+        <ScreenToolbar
+          title="Queue"
+          context={count}
+          actions={
+            <>
+              <button className="ghost-button" disabled={!requestsOpen} onClick={() => navigateTo("Library")}>
+                <Plus size={15} /> Add from library
+              </button>
+              <button className="ghost-button danger-ghost" disabled={!requestsOpen || queue.length === 0} onClick={() => onAction(async () => { await clearQueue(); await onRefresh(); })}>
+                <Trash2 size={15} /> Clear
+              </button>
+            </>
+          }
+        />
+        <div className="list-region">{list}</div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="queue-panel queue-panel--np" aria-label="Up next">
+      <div className="section-eyebrow">
+        <h2>Up next</h2>
+        {queue.length > 0 && <span className="quiet-note">{count}</span>}
+      </div>
+      {list}
     </section>
   );
 }
@@ -1161,6 +1257,13 @@ function QueueRow({
   index,
   queueLength,
   requestsOpen,
+  canDrag,
+  dragging,
+  dropTarget,
+  onDragStart,
+  onDragEnter,
+  onDrop,
+  onDragEnd,
   onRefresh,
   onAction
 }: {
@@ -1168,14 +1271,38 @@ function QueueRow({
   index: number;
   queueLength: number;
   requestsOpen: boolean;
+  canDrag: boolean;
+  dragging: boolean;
+  dropTarget: boolean;
+  onDragStart: () => void;
+  onDragEnter: () => void;
+  onDrop: () => void;
+  onDragEnd: () => void;
   onRefresh: () => void;
   onAction: ActionRunner;
 }) {
-
+  const play = () => { if (requestsOpen) onAction(async () => { await playTrack("play-now", item); await onRefresh(); }); };
   return (
-    <div className="queue-row">
+    <div
+      className={`queue-row${dragging ? " is-dragging" : ""}${dropTarget ? " is-drop-target" : ""}`}
+      role="button"
+      tabIndex={0}
+      aria-disabled={!requestsOpen || undefined}
+      aria-label={`Play ${item.title}`}
+      draggable={canDrag}
+      onClick={play}
+      onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); play(); } }}
+      onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; onDragStart(); }}
+      onDragEnter={onDragEnter}
+      onDragOver={(event) => { if (canDrag) event.preventDefault(); }}
+      onDrop={(event) => { event.preventDefault(); onDrop(); }}
+      onDragEnd={onDragEnd}
+    >
+      <span className={`drag-handle${canDrag ? "" : " is-static"}`} aria-hidden="true" onClick={(event) => event.stopPropagation()}>
+        <GripVertical size={16} />
+      </span>
       <div className="mini-art">
-        {item.art || item.artwork ? <img src={item.art || item.artwork || ""} alt="" /> : <Music2 size={18} />}
+        {item.art || item.artwork ? <img src={item.art || item.artwork || ""} alt="" /> : <AudioLines size={18} />}
       </div>
       <div>
         <strong>{item.title}</strong>
@@ -1186,10 +1313,7 @@ function QueueRow({
       </div>
       <span>{item.requestedBy}</span>
       <span>~{item.etaMinutes} min</span>
-      <div className="queue-actions">
-        <button className="primary-small row-play" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("play-now", item); await onRefresh(); })}>
-          <Play size={14} />Play
-        </button>
+      <div className="queue-actions" onClick={(event) => event.stopPropagation()}>
         <QueueRowMenu item={item} index={index} queueLength={queueLength} requestsOpen={requestsOpen} onRefresh={onRefresh} onAction={onAction} />
       </div>
     </div>
@@ -1229,16 +1353,31 @@ function QueueRowMenu({
       <button className="row-menu__item" disabled={index === queueLength - 1 || !requestsOpen} onClick={() => move("down")}>
         <ChevronDown size={15} /> Move down
       </button>
+      <div className="row-menu__divider" role="separator" />
       <button className="row-menu__item danger" disabled={!requestsOpen} onClick={() => onAction(async () => { await removeQueueItem(item.id); await onRefresh(); })}>
-        <XCircle size={15} /> Remove from queue
+        <Trash2 size={15} /> Remove from queue
       </button>
     </RowMenu>
   );
 }
 
+type LibrarySort = "relevance" | "title" | "artist" | "duration";
+
+function sortTracks(tracks: Track[], sort: LibrarySort): Track[] {
+  if (sort === "relevance") return tracks;
+  const copy = [...tracks];
+  if (sort === "duration") {
+    copy.sort((a, b) => (b.duration || 0) - (a.duration || 0));
+  } else {
+    copy.sort((a, b) => (a[sort] || "").toString().localeCompare((b[sort] || "").toString(), undefined, { sensitivity: "base" }));
+  }
+  return copy;
+}
+
 function SearchPanel({
   query,
   setQuery,
+  searchRef,
   results,
   spotifyGroups,
   state,
@@ -1249,6 +1388,7 @@ function SearchPanel({
 }: {
   query: string;
   setQuery: (value: string) => void;
+  searchRef: RefObject<HTMLInputElement | null>;
   results: Track[];
   spotifyGroups: SpotifySearchGroups;
   state: AppState;
@@ -1257,17 +1397,19 @@ function SearchPanel({
   onRefresh: () => void;
   onAction: ActionRunner;
 }) {
-  const [showAllResults, setShowAllResults] = useState(false);
+  const [sort, setSort] = useState<LibrarySort>("relevance");
   const [collections, setCollections] = useState<LibraryCollection[]>([]);
   const [uploadError, setUploadError] = useState("");
   const [uploading, setUploading] = useState(false);
   const [detail, setDetail] = useState<{ track: Track; tracks: Track[]; loading: boolean } | null>(null);
   const spotifyAvailable = state.services.spotify.configured;
   const requestsOpen = publicRequestsOpen(state);
-  // A results view should FILL its page with rows, not tease three and hide the
-  // rest behind "view all" — the fold only kicks in past a real page of rows.
-  const resultsFold = 25;
-  const visibleResults = showAllResults ? results : results.slice(0, resultsFold);
+  const isRowSource = sourceFilter === "local" || sourceFilter === "uploaded" || sourceFilter === "archived";
+  const sortedResults = isRowSource ? sortTracks(results, sort) : results;
+  // The list IS the page: render every row (the true count lives in the toolbar),
+  // never a "show all N" fold that contradicts the header count. The server already
+  // caps the result set (60 starter / 50 typed), so this stays bounded.
+  const visibleResults = sortedResults;
   const filteredCollections = collections.filter((item) =>
     `${item.collection} ${item.folder} ${item.sample.join(" ")}`.toLowerCase().includes(query.toLowerCase())
   );
@@ -1282,10 +1424,6 @@ function SearchPanel({
   }, []);
 
   useEffect(() => {
-    setShowAllResults(false);
-  }, [query, sourceFilter]);
-
-  useEffect(() => {
     setDetail(null);
   }, [query, sourceFilter]);
 
@@ -1295,9 +1433,43 @@ function SearchPanel({
     setDetail({ track, tracks, loading: false });
   }
 
+  const libraryContext = sourceFilter === "spotify"
+    ? (query.trim() ? `Results for “${query.trim()}”` : "Recommended")
+    : sourceFilter === "playlists"
+      ? `${filteredCollections.length} ${filteredCollections.length === 1 ? "collection" : "collections"}`
+      : `${results.length} ${results.length === 1 ? "song" : "songs"}`;
+
   return (
-    <section className="panel search-panel" aria-label="Library">
-      <h2>Library</h2>
+    <section className="screen search-panel" aria-label="Library">
+      <ScreenToolbar
+        title="Library"
+        context={libraryContext}
+        actions={
+          <>
+            <div className="toolbar-search">
+              <Search size={16} />
+              <input
+                ref={searchRef}
+                aria-label="Search music"
+                placeholder="Search library…"
+                value={query}
+                onChange={(event) => setQuery(event.currentTarget.value)}
+              />
+            </div>
+            {isRowSource && (
+              <label className="sort-control">
+                <ArrowUpDown size={15} />
+                <select aria-label="Sort library" value={sort} onChange={(event) => setSort(event.currentTarget.value as LibrarySort)}>
+                  <option value="relevance">Relevance</option>
+                  <option value="title">Title</option>
+                  <option value="artist">Artist</option>
+                  <option value="duration">Duration</option>
+                </select>
+              </label>
+            )}
+          </>
+        }
+      />
       <div className="source-tabs">
         <button disabled={!spotifyAvailable} aria-pressed={sourceFilter === "spotify"} className={sourceFilter === "spotify" ? "primary-small" : ""} onClick={() => setSourceFilter("spotify")}>
           Spotify{spotifyAvailable ? "" : " not linked"}
@@ -1315,6 +1487,7 @@ function SearchPanel({
           Playlists
         </button>
       </div>
+      <div className="list-region">
       {sourceFilter === "archived" && (
         <div className="upload-box">
           <div>
@@ -1407,6 +1580,13 @@ function SearchPanel({
 
       {sourceFilter !== "spotify" && (
         <>
+          {isRowSource && sortedResults.length > 0 && (
+            <div className="list-head" aria-hidden="true">
+              <span className="list-head__lead">Title</span>
+              <span>Duration</span>
+              <span />
+            </div>
+          )}
           <div className="result-list">
             {sourceFilter === "playlists" && filteredCollections.length === 0 && (
               <EmptyState title="No playlist collections" detail="Try another collection, era, folder, or track name." />
@@ -1433,13 +1613,9 @@ function SearchPanel({
                 <SearchResultRow key={track.id} track={track} requestsOpen={requestsOpen} onRefresh={onRefresh} onAction={onAction} />
               ))}
           </div>
-          {(sourceFilter === "local" || sourceFilter === "uploaded" || sourceFilter === "archived") && results.length > resultsFold && (
-            <button className="link-button" onClick={() => setShowAllResults(!showAllResults)}>
-              {showAllResults ? "Show fewer" : `View all ${results.length} results`}
-            </button>
-          )}
         </>
       )}
+      </div>
     </section>
   );
 }
@@ -1501,7 +1677,7 @@ function usableArt(art?: string | null): string | undefined {
 }
 
 function FallbackArt({ kind }: { kind?: string }) {
-  const Icon = kind === "playlist" ? ListMusic : kind === "artist" ? Radio : Music2;
+  const Icon = kind === "playlist" ? ListMusic : kind === "artist" ? Radio : AudioLines;
   return <Icon size={18} className="art-fallback-icon" />;
 }
 
@@ -1670,7 +1846,15 @@ function SearchResultRow({ track, requestsOpen, onRefresh, onAction, siblingTrac
   const disabled = isLocal ? false : !requestsOpen;
 
   return (
-    <div className="result-row">
+    <div
+      className="result-row"
+      role={playable ? "button" : undefined}
+      tabIndex={playable ? 0 : undefined}
+      aria-disabled={playable && disabled ? true : undefined}
+      aria-label={playable ? `${isLocal ? "Play here" : "Play"} ${track.title}` : undefined}
+      onClick={playable && !disabled ? () => run("play-now") : undefined}
+      onKeyDown={playable && !disabled ? (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); run("play-now"); } } : undefined}
+    >
       <div className="cover-thumb">{art ? <img src={art} alt="" /> : <FallbackArt kind={track.kind} />}</div>
       <div>
         <strong>{track.title}</strong>
@@ -1680,8 +1864,7 @@ function SearchResultRow({ track, requestsOpen, onRefresh, onAction, siblingTrac
         </small>
       </div>
       <span>{trackDurationLabel(track)}</span>
-      <div className="track-actions">
-        {playable && <button className="primary-small row-play" disabled={disabled} onClick={() => run("play-now")}><Play size={14} />{isLocal ? "Play here" : "Play"}</button>}
+      <div className="track-actions" onClick={(event) => event.stopPropagation()}>
         <RowMenu label={`More actions for ${track.title}`}>
           {playable && <button className="row-menu__item" disabled={disabled} onClick={() => run("play-next")}><ListPlus size={15} /> Play next</button>}
           {playable && <button className="row-menu__item" disabled={disabled} onClick={() => run("add-queue")}><ListMusic size={15} /> Add to queue</button>}
@@ -1928,29 +2111,21 @@ function PlaylistsPanel({ requestsOpen, onRefresh, onAction }: { requestsOpen: b
   const selectedTitle = selectedLocal?.folder || selectedSpotify?.title || "";
   const selectedSubtitle = selectedLocal?.collection || selectedSpotify?.artist || selectedSpotify?.source || "";
 
+  const backToCollections = () => {
+    setSelectedLocal(null);
+    setSelectedSpotify(null);
+    setDetailTracks([]);
+    setHasMoreDetail(false);
+  };
+  const drilledIn = source !== "mine" && Boolean(selectedTitle);
+
   return (
-    <section className="panel playlist-panel" aria-label="Playlists">
-      {/* Every list page carries a rose eyebrow header for a consistent hierarchy;
-          on the collection tabs it names the current context (or the drilled-in title). */}
-      <div className="playlist-title-row">
-        <div>
-          <h2>{source === "mine" ? "Playlists" : selectedTitle ? selectedTitle : "Collections"}</h2>
-          {source !== "mine" && selectedTitle && <small>{selectedSubtitle}</small>}
-        </div>
-        {source !== "mine" && selectedTitle && (
-          <button
-            className="ghost-add"
-            onClick={() => {
-              setSelectedLocal(null);
-              setSelectedSpotify(null);
-              setDetailTracks([]);
-              setHasMoreDetail(false);
-            }}
-          >
-            Back
-          </button>
-        )}
-      </div>
+    <section className="screen playlist-panel" aria-label="Playlists">
+      <ScreenToolbar
+        title="Playlists"
+        context={drilledIn ? selectedSubtitle : undefined}
+        actions={drilledIn ? <button className="ghost-button" onClick={backToCollections}>Back</button> : undefined}
+      />
       <div className="source-tabs">
         <button className={source === "mine" ? "primary-small" : ""} aria-pressed={source === "mine"} onClick={() => { setSource("mine"); setSelectedLocal(null); setSelectedSpotify(null); setDetailTracks([]); }}>
           My Playlists
@@ -1962,6 +2137,10 @@ function PlaylistsPanel({ requestsOpen, onRefresh, onAction }: { requestsOpen: b
           Spotify
         </button>
       </div>
+      <div className="list-region">
+      {drilledIn && (
+        <div className="section-eyebrow"><h2>{selectedTitle}</h2></div>
+      )}
       {source === "mine" && <AppPlaylistsView requestsOpen={requestsOpen} onRefresh={onRefresh} onAction={onAction} />}
       {source === "spotify" && !selectedTitle && (
         <div className="suggestion-row" aria-label="Spotify playlist filters">
@@ -2018,6 +2197,7 @@ function PlaylistsPanel({ requestsOpen, onRefresh, onAction }: { requestsOpen: b
           </button>
         ))}
       </div>}
+      </div>
     </section>
   );
 }
@@ -2130,19 +2310,31 @@ function AppPlaylistsView({ requestsOpen, onRefresh, onAction }: { requestsOpen:
       {playlists.length === 0 && (
         <EmptyState title="No playlists yet" detail="Create a playlist, then add songs from search or Spotify with the Save button." />
       )}
-      <div className="collection-list">
-        {playlists.map((playlist) => (
-          <button className="collection-row" key={playlist.id} onClick={() => openDetail(playlist.id)}>
-            <div className="cover-thumb">{playlist.art && <img src={playlist.art} alt="" />}</div>
-            <div>
-              <strong>{playlist.name}</strong>
-              <small>{playlist.description || playlist.sample.join(", ") || "Empty playlist"}</small>
-            </div>
-            <span>{playlist.trackCount} tracks</span>
-            <ChevronRight size={16} />
-          </button>
-        ))}
-      </div>
+      {playlists.length > 0 && (
+        <div className="collection-list">
+          {playlists.map((playlist) => (
+            <button className="collection-row" key={playlist.id} onClick={() => openDetail(playlist.id)}>
+              <div className="cover-thumb">{playlist.art && <img src={playlist.art} alt="" />}</div>
+              <div>
+                <strong>{playlist.name}</strong>
+                <small>{playlist.description || playlist.sample.join(", ") || "Empty playlist"}</small>
+              </div>
+              <span>{playlist.trackCount} tracks</span>
+              <ChevronRight size={16} />
+            </button>
+          ))}
+        </div>
+      )}
+      {/* Sparse-but-not-empty: a short list composes the reclaimed space into a
+          guidance panel instead of leaving a dead void below the row(s). */}
+      {playlists.length > 0 && playlists.length <= 3 && (
+        <div className="sparse-hint">
+          <div className="sparse-hint__mark" aria-hidden="true"><ListPlus size={22} /></div>
+          <strong>Build your collection</strong>
+          <small>Add songs to a playlist from the library or Spotify with <b>Save</b> on any track — or start a fresh one.</small>
+          <button className="ghost-button" onClick={() => setCreating(true)}><Plus size={15} /> New playlist</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -2338,16 +2530,26 @@ function AppPlaylistDetail({
       {error && <small className="form-error">{error}</small>}
       {isEmpty && <EmptyState title="Empty playlist" detail="Add songs from search or Spotify using the Save button." />}
       <div className="result-list">
-        {current.tracks.map((track, index) => (
-          <div className="result-row" key={playlistTrackKey(track) || index}>
+        {current.tracks.map((track, index) => {
+          const rowDisabled = isLocal ? !localStreamUrl(track) : !requestsOpen;
+          return (
+          <div
+            className="result-row"
+            key={playlistTrackKey(track) || index}
+            role="button"
+            tabIndex={0}
+            aria-disabled={rowDisabled || undefined}
+            aria-label={`${isLocal ? "Play here" : "Play"} ${track.title}`}
+            onClick={rowDisabled ? undefined : () => playRow(track, index)}
+            onKeyDown={rowDisabled ? undefined : (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); playRow(track, index); } }}
+          >
             <div className="cover-thumb">{(track.art || track.artwork) && <img src={track.art || track.artwork || ""} alt="" />}</div>
             <div>
               <strong>{track.title}</strong>
               <small>{track.artist} - {track.album || track.source}</small>
             </div>
             <span>{trackDurationLabel(track)}</span>
-            <div className="track-actions">
-              <button className="primary-small row-play" disabled={isLocal ? !localStreamUrl(track) : !requestsOpen} onClick={() => playRow(track, index)}><Play size={14} />{isLocal ? "Play here" : "Play"}</button>
+            <div className="track-actions" onClick={(event) => event.stopPropagation()}>
               <RowMenu label={`More actions for ${track.title}`}>
                 <button className="row-menu__item" disabled={isLocal ? !localStreamUrl(track) : !requestsOpen} onClick={() => queueRow(track)}>
                   <ListMusic size={15} /> Add to queue
@@ -2370,7 +2572,8 @@ function AppPlaylistDetail({
               </RowMenu>
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -2628,6 +2831,23 @@ function AdminConsole({ state, onSave, onLogout }: { state: AppState; onSave: ()
   }
 
   return (
+    <>
+    <ScreenToolbar
+      title="Admin Console"
+      context="Providers, library, and public controls"
+      actions={
+        <button
+          className="ghost-button"
+          onClick={() => {
+            clearAdminSession();
+            onLogout();
+            window.location.assign(import.meta.env.BASE_URL);
+          }}
+        >
+          Log out
+        </button>
+      }
+    />
     <div className="admin-grid">
       <ConnectionPipeline
         guide={connectionGuide}
@@ -2653,18 +2873,7 @@ function AdminConsole({ state, onSave, onLogout }: { state: AppState; onSave: ()
         </div>
       </section>
       <section className="panel admin-panel">
-        <div className="panel-title-row">
-          <h2>Public controls</h2>
-          <button
-            onClick={() => {
-              clearAdminSession();
-              onLogout();
-              window.location.assign(import.meta.env.BASE_URL);
-            }}
-          >
-            Log out
-          </button>
-        </div>
+        <h2>Public controls</h2>
         <label className="setting-row">
           <span>Public requests</span>
           <input
@@ -2690,6 +2899,7 @@ function AdminConsole({ state, onSave, onLogout }: { state: AppState; onSave: ()
         {saveError && <small className="form-error">{saveError}</small>}
       </section>
     </div>
+    </>
   );
 }
 

@@ -1,0 +1,14 @@
+You are a zero-mercy cross-model UI design judge. ROUND 2. A prior judge scored this app 4/10, then 6/10 after a structural rebuild. The builder then fixed the round-1 findings. Verify against the FRESH pixels, harshly. Design language is LOCKED (near-black world, single rose accent #ff5f83, Inter, cloud wordmark) — judge BUILD QUALITY + STRUCTURE only, never propose a new look.
+
+READ: z:/328/CMPUT328-A2/codexworks/301/cloud-squeeze-matureui-v3/matureui-artifacts/PUNCHLIST.md
+
+FRESH captures (regenerated in place just now) in .../matureui-artifacts/current/ :
+- desk-01-nowplaying.png, desk-02-queue.png (NOW POPULATED: 3 songs), desk-02b-queue-menu.png (open row kebab), desk-03-playlists.png, desk-04-library.png, desk-05-archive.png, desk-06-library-local.png, desk-08-admin-login.png, desk-09-admin-console.png, narrow-01-nowplaying.png, narrow-02-library.png, narrow-03-queue.png
+
+Round-1 findings the builder claims to have fixed — VERIFY each in the pixels:
+- Item 6: the contradictory "Show all 60" footer is GONE from desk-06-library-local (full list renders; count lives in the toolbar).
+- Item 7: desk-02-queue now PROVES 64px rows, a drag handle per row, "Queue · 3 songs · ~21 min" context, Add from library + Clear. desk-02b-queue-menu PROVES the kebab groups Play next / Move up / Move down with a DIVIDER before a red destructive "Remove from queue".
+- Item 8: the persistent player dock art (bottom-left of every screen) is now a rose matte signal mark, not a music-note placeholder.
+- Item 9: desk-03-playlists — the 1-item list is now followed by a COMPOSED "Build your collection" guidance panel that fills the space (not a dead void).
+
+Then re-grade all 9 [STRUCTURAL] punch-list items done/partial/ignored with pixel evidence, and score the after 1-10 vs the top-1% (Linear/Stripe/Spotify) benchmark for composition, rhythm, finish, states. Below 8 = still not flagship. Name the 3 sloppiest remaining details. No praise padding. End with one line: "SCORE: N/10".

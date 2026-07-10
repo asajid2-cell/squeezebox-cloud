@@ -364,7 +364,9 @@ describe("Cloud Squeeze UI", () => {
 
     expect(await screen.findByText("Shabang")).toBeInTheDocument();
     const row = screen.getByText("Shabang").closest(".result-row") as HTMLElement;
-    expect(within(row).getByRole("button", { name: /^Play( here)?$/ })).toBeDisabled();
+    // Row-as-action: the whole row is the primary Play control and reads disabled
+    // (aria-disabled) while public requests are paused — no stamped per-row button.
+    expect(row).toHaveAttribute("aria-disabled", "true");
     await userEvent.click(within(row).getByRole("button", { name: /More actions/ }));
     expect(screen.getByRole("button", { name: "Play next" })).toBeDisabled();
     const queueButton = screen.getByRole("button", { name: "Add to queue" });
@@ -458,7 +460,7 @@ describe("Cloud Squeeze UI", () => {
   it("navigates public sections from the sidebar", async () => {
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Queue" }));
-    expect(await screen.findByLabelText("Up next")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Queue")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Playlists" }));
     expect(await screen.findByLabelText("Playlists")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Schedule/i })).not.toBeInTheDocument();
@@ -485,7 +487,8 @@ describe("Cloud Squeeze UI", () => {
     await userEvent.type(await screen.findByLabelText("Search music"), "local");
     await waitFor(() => expect(screen.getByText("Local Test")).toBeInTheDocument());
     const row = screen.getByText("Local Test").closest(".result-row") as HTMLElement;
-    expect(within(row).getByRole("button", { name: /^Play( here)?$/ })).toBeInTheDocument();
+    // Row-as-action: the row itself is the Play control (aria-label), plus a kebab.
+    expect(row).toHaveAttribute("aria-label", expect.stringMatching(/^Play( here)? /));
     await userEvent.click(within(row).getByRole("button", { name: /More actions/ }));
     expect(screen.getByRole("button", { name: "Play next" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add to queue" })).toBeInTheDocument();
@@ -549,6 +552,7 @@ describe("Cloud Squeeze UI", () => {
     // The default source IS Spotify, so on a cold load the app is searching Spotify
     // while it's still initializing — exactly the bug. Type a query in that window.
     render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Library" }));
     await userEvent.type(await screen.findByLabelText("Search music"), "hit");
     // The first state poll reports Spotify not-yet-ready, so the search returns nothing.
     // A later poll flips it ready; the search effect depends on that readiness, so it
@@ -617,6 +621,7 @@ describe("Cloud Squeeze UI", () => {
   it("searches Spotify when the Spotify source is selected", async () => {
     const fetchMock = vi.mocked(fetch);
     render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Library" }));
     await userEvent.type(await screen.findByLabelText("Search music"), "drake");
     await waitFor(() => expect(screen.getByText("Headlines")).toBeInTheDocument());
     expect(screen.getByText(/Drake - Take Care/)).toBeInTheDocument();

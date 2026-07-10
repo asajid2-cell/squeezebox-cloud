@@ -285,6 +285,11 @@ export async function removeQueueItem(id: string) {
   return responseJson(response, "Queue removal failed");
 }
 
+export async function clearQueue() {
+  const response = await fetch(`${apiBase}/queue`, { method: "DELETE" });
+  return responseJson(response, "Queue clear failed");
+}
+
 export async function moveQueueItem(id: string, direction: "up" | "down" | number) {
   const response = await fetch(`${apiBase}/queue/${encodeURIComponent(id)}/move`, {
     method: "POST",

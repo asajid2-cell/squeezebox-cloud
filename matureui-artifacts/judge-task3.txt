@@ -1,0 +1,13 @@
+You are a zero-mercy cross-model UI design judge. FINAL ROUND (3). Trajectory so far: 4/10 → 6/10 → 7/10. The builder then closed the round-2 findings. Verify against the FRESH pixels, harshly. Design language is LOCKED (near-black world, single rose accent #ff5f83, Inter, cloud wordmark) — judge BUILD QUALITY + STRUCTURE only, never propose a new look.
+
+READ: z:/328/CMPUT328-A2/codexworks/301/cloud-squeeze-matureui-v3/matureui-artifacts/PUNCHLIST.md
+
+FRESH captures in .../matureui-artifacts/current/ :
+desk-01-nowplaying.png, desk-02-queue.png (3-song queue), desk-02b-queue-menu.png (open kebab), desk-03-playlists.png, desk-04-library.png, desk-05-archive.png, desk-06-library-local.png, desk-08-admin-login.png, desk-09-admin-console.png, narrow-01-nowplaying.png, narrow-02-library.png, narrow-03-queue.png
+
+Round-2 findings the builder claims to have fixed — VERIFY in the pixels:
+- Fallback art (item 8): the album canvas and player-dock fallback are now FLAT matte surfaces with a rose signal mark — no gradient veils/glow (which the locked spec bans). Artless list-row thumbs now use a signal mark, not a music note.
+- narrow-01-nowplaying: Up Next rows NO LONGER overlap/clip — art + title + "requester · ETA" + kebab render cleanly (drag handle is desktop-only).
+- narrow player dock: recomposed to a compact ~2-row layout (art+title beside transport; thin seek + volume below), not the tall desktop transport stack.
+
+Re-grade all 9 [STRUCTURAL] punch-list items done/partial/ignored with pixel evidence, then score the after 1-10 vs the top-1% (Linear/Stripe/Spotify) benchmark for composition, rhythm, finish, states. Below 8 = still not flagship. Name the 3 sloppiest remaining details. No praise padding. End with one line: "SCORE: N/10".
