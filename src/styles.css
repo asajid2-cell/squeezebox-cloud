@@ -148,6 +148,8 @@ small { display: block; font-size: 13px; line-height: 1.45; }
   letter-spacing: .01em;
 }
 .brand svg { color: var(--rose); filter: drop-shadow(0 0 10px rgba(255, 95, 131, .5)); }
+.brand > .brand__admin { margin-left: auto; display: none; }
+.brand__admin svg { color: currentColor; filter: none; }
 
 .sidebar-search {
   min-height: 42px;
@@ -473,6 +475,7 @@ nav button.active svg { color: var(--rose); }
   display: flex; justify-content: space-between;
   color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums;
 }
+.progress-times.is-idle { opacity: .55; }
 .volume-row { display: grid; grid-template-columns: auto 1fr auto; gap: var(--s3); align-items: center; }
 .volume-row svg { color: var(--muted); }
 .volume-row span { min-width: 3.5ch; text-align: right; color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -810,8 +813,7 @@ nav button.active svg { color: var(--rose); }
 .empty-state {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   text-align: center; gap: var(--s2);
-  flex: 1; min-height: 260px; padding: var(--s7) var(--s4);
-  border: 1px dashed var(--line); border-radius: var(--r-card); background: var(--bg-soft);
+  flex: 1; min-height: 220px; padding: var(--s6) var(--s4);
 }
 .empty-state__mark {
   display: grid; place-items: center;
@@ -925,6 +927,11 @@ nav button.active svg { color: var(--rose); }
     position: static; height: auto; overflow: visible;
     border-right: 0; border-bottom: 1px solid var(--line);
   }
+  /* On narrow the sidebar stacks above the main header, so the desktop top-right
+     Admin link would float orphaned — pair it with the wordmark as a top bar instead. */
+  .brand > .brand__admin { display: inline-flex; }
+  .hero-row .top-actions { display: none; }
+  .hero-row { min-height: 0; margin-bottom: var(--s2); }
   nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .recent-picks { display: none; }
   .main { padding: var(--s4); gap: var(--s3); }

@@ -408,6 +408,12 @@ function AppShell() {
         <div className="brand">
           <Cloud size={18} fill="currentColor" />
           <span>Squeezebox Cloud</span>
+          {/* Compact top-bar action for narrow layouts, where the sidebar stacks above
+              the main header and the desktop top-right Admin link would float orphaned. */}
+          <a className="brand__admin top-link" href={isAdminRoute ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}admin`}>
+            <ShieldCheck size={16} />
+            {isAdminRoute ? "Public site" : "Admin"}
+          </a>
         </div>
         <div className="sidebar-search">
           <Search size={18} />
@@ -1074,14 +1080,13 @@ function Progress({
           }}
         />
       </div>
-      {/* No orphaned "0:00 / --:--" when nothing is playing; a live stream with
-          unknown length still shows its elapsed time. */}
-      {(duration > 0 || value > 0) && (
-        <div className="progress-times">
-          <span>{formatTime(value)}</span>
-          <span>{duration > 0 ? formatTime(duration) : ""}</span>
-        </div>
-      )}
+      {/* Always show the scrubber's time codes so the seek reads as a real transport
+          control, not a stray line. Idle shows a muted 0:00 / --:-- (a disabled
+          scrubber), not an orphan — a live stream of unknown length still shows elapsed. */}
+      <div className={`progress-times ${disabled && duration <= 0 && value <= 0 ? "is-idle" : ""}`}>
+        <span>{formatTime(value)}</span>
+        <span>{duration > 0 ? formatTime(duration) : "--:--"}</span>
+      </div>
     </div>
   );
 }
