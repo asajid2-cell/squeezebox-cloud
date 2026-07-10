@@ -79,7 +79,6 @@ import {
   searchSpotifyGrouped,
   seekPlayer,
   setPlayerVolume,
-  updateQueueItem,
   uploadTrack,
 } from "./lib/api";
 import type { ArchiveFile, ArchiveJob, ArchiveGroup, ArchiveScan } from "./lib/api";
@@ -596,14 +595,14 @@ function PublicScreen({
   // on Now Playing (fixing the original's irrelevant-rail-on-Library defect).
   if (activeScreen === "Queue") {
     return (
-      <div className="stage">
+      <div className="stage stage--fill">
         {mode === "local" ? <LocalQueuePanel /> : <QueuePanel queue={state.queue} requestsOpen={publicRequestsOpen(state)} onRefresh={onRefresh} onAction={onAction} />}
       </div>
     );
   }
 
   if (activeScreen === "Library") {
-    return <div className="stage">{commonSearch}</div>;
+    return <div className="stage stage--fill">{commonSearch}</div>;
   }
 
   if (activeScreen === "Playlists") {
@@ -1091,23 +1090,8 @@ function VolumeControl({ volume, onChange }: { volume: number; onChange: (volume
 }
 
 function QueuePanel({ queue, requestsOpen, onRefresh, onAction }: { queue: AppState["queue"]; requestsOpen: boolean; onRefresh: () => void; onAction: ActionRunner }) {
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [draft, setDraft] = useState({ title: "", artist: "" });
   const [showAll, setShowAll] = useState(false);
   const visibleQueue = showAll ? queue : queue.slice(0, 12);
-
-  function beginEdit(item: AppState["queue"][number]) {
-    setEditingId(item.id);
-    setDraft({ title: item.title, artist: item.artist });
-  }
-
-  async function saveEdit(id: string) {
-    await onAction(async () => {
-      await updateQueueItem(id, draft);
-      setEditingId(null);
-      await onRefresh();
-    });
-  }
 
   return (
     <section className="panel queue-panel" aria-label="Up next">
@@ -1119,7 +1103,7 @@ function QueuePanel({ queue, requestsOpen, onRefresh, onAction }: { queue: AppSt
       <div className="queue-list">
         {queue.length === 0 && <EmptyState title="Queue is empty" detail="Requests will appear here after someone adds a real local or Spotify track." />}
         {visibleQueue.map((item, index) => (
-          <QueueRow key={item.id} item={item} index={index} queueLength={queue.length} requestsOpen={requestsOpen} editingId={editingId} draft={draft} setDraft={setDraft} beginEdit={beginEdit} saveEdit={saveEdit} cancelEdit={() => setEditingId(null)} onRefresh={onRefresh} onAction={onAction} />
+          <QueueRow key={item.id} item={item} index={index} queueLength={queue.length} requestsOpen={requestsOpen} onRefresh={onRefresh} onAction={onAction} />
         ))}
         {queue.length > 12 && (
           <button className="ghost-add queue-show-all" aria-expanded={showAll} onClick={() => setShowAll((value) => !value)}>
@@ -1139,12 +1123,6 @@ function QueueRow({
   index,
   queueLength,
   requestsOpen,
-  editingId,
-  draft,
-  setDraft,
-  beginEdit,
-  saveEdit,
-  cancelEdit,
   onRefresh,
   onAction
 }: {
@@ -1152,74 +1130,71 @@ function QueueRow({
   index: number;
   queueLength: number;
   requestsOpen: boolean;
-  editingId: string | null;
-  draft: { title: string; artist: string };
-  setDraft: (draft: { title: string; artist: string }) => void;
-  beginEdit: (item: AppState["queue"][number]) => void;
-  saveEdit: (id: string) => void;
-  cancelEdit: () => void;
   onRefresh: () => void;
   onAction: ActionRunner;
 }) {
-  const isEditing = editingId === item.id;
-  // External tracks carry their identity in uri OR in id (spotify:/archive:), and
-  // Spotify rows aren't locally editable — only auto-queued shuffle rows are excluded too.
-  const isExternal = Boolean(item.uri) || /^(spotify|archive):/.test(item.id) || item.source === "Spotify";
-  const editable = !isExternal && item.requestedBy !== "shuffle" && item.requestedBy !== "smart shuffle";
 
   return (
-    <div className={`queue-row ${isEditing ? "is-editing" : ""}`}>
+    <div className="queue-row">
       <div className="mini-art">
         {item.art || item.artwork ? <img src={item.art || item.artwork || ""} alt="" /> : <Music2 size={18} />}
       </div>
-      {isEditing ? (
-        <div className="queue-edit-fields">
-          <small>Editing queue item</small>
-          <input aria-label="Queue title" value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.currentTarget.value })} />
-          <input aria-label="Queue artist" value={draft.artist} onChange={(event) => setDraft({ ...draft, artist: event.currentTarget.value })} />
-        </div>
-      ) : (
-        <div>
-          <strong>{item.title}</strong>
-          <small>{item.artist}</small>
-          {/* On phones the requested-by/ETA columns have no headers, so the same
-              facts are composed into the meta cell as one labelled line. */}
-          <small className="queue-row__request">Requested by {item.requestedBy} · ~{item.etaMinutes} min</small>
-        </div>
-      )}
+      <div>
+        <strong>{item.title}</strong>
+        <small>{item.artist}</small>
+        <small className="queue-row__request" aria-label={`Requested by ${item.requestedBy}; ETA about ${item.etaMinutes} minutes`}>
+          {item.requestedBy} - ~{item.etaMinutes} min
+        </small>
+      </div>
       <span>{item.requestedBy}</span>
       <span>~{item.etaMinutes} min</span>
       <div className="queue-actions">
         <button className="primary-small row-play" disabled={!requestsOpen} onClick={() => onAction(async () => { await playTrack("play-now", item); await onRefresh(); })}>
           <Play size={14} />Play
         </button>
-        <RowMenu label={`More queue actions for ${item.title}`}>
-          <button className="row-menu__item" disabled={index === 0 || !requestsOpen} onClick={() => onAction(async () => { await moveQueueItem(item.id, "up"); await onRefresh(); })}>
-            <ChevronUp size={15} /> Move earlier
-          </button>
-          <button className="row-menu__item" disabled={index === queueLength - 1 || !requestsOpen} onClick={() => onAction(async () => { await moveQueueItem(item.id, "down"); await onRefresh(); })}>
-            <ChevronDown size={15} /> Move later
-          </button>
-          {isEditing ? (
-            <button className="row-menu__item" disabled={!requestsOpen} onClick={() => saveEdit(item.id)}>
-              <Check size={15} /> Save edits
-            </button>
-          ) : editable ? (
-            <button className="row-menu__item" disabled={!requestsOpen} onClick={() => beginEdit(item)}>
-              <SlidersHorizontal size={15} /> Edit details
-            </button>
-          ) : null}
-          {isEditing && (
-            <button className="row-menu__item" onClick={cancelEdit}>
-              <XCircle size={15} /> Cancel editing
-            </button>
-          )}
-          <button className="row-menu__item danger" disabled={!requestsOpen} onClick={() => onAction(async () => { await removeQueueItem(item.id); await onRefresh(); })}>
-            <XCircle size={15} /> Remove
-          </button>
-        </RowMenu>
+        <QueueRowMenu item={item} index={index} queueLength={queueLength} requestsOpen={requestsOpen} onRefresh={onRefresh} onAction={onAction} />
       </div>
     </div>
+  );
+}
+
+function QueueRowMenu({
+  item,
+  index,
+  queueLength,
+  requestsOpen,
+  onRefresh,
+  onAction
+}: {
+  item: AppState["queue"][number];
+  index: number;
+  queueLength: number;
+  requestsOpen: boolean;
+  onRefresh: () => void;
+  onAction: ActionRunner;
+}) {
+  async function move(direction: "up" | "down" | number) {
+    await onAction(async () => {
+      await moveQueueItem(item.id, direction);
+      await onRefresh();
+    });
+  }
+
+  return (
+    <RowMenu label={`Queue actions for ${item.title}`}>
+      <button className="row-menu__item" disabled={index === 0 || !requestsOpen} onClick={() => move(0)}>
+        <ListPlus size={15} /> Play next
+      </button>
+      <button className="row-menu__item" disabled={index === 0 || !requestsOpen} onClick={() => move("up")}>
+        <ChevronUp size={15} /> Move up
+      </button>
+      <button className="row-menu__item" disabled={index === queueLength - 1 || !requestsOpen} onClick={() => move("down")}>
+        <ChevronDown size={15} /> Move down
+      </button>
+      <button className="row-menu__item danger" disabled={!requestsOpen} onClick={() => onAction(async () => { await removeQueueItem(item.id); await onRefresh(); })}>
+        <XCircle size={15} /> Remove from queue
+      </button>
+    </RowMenu>
   );
 }
 

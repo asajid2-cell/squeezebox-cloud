@@ -285,11 +285,11 @@ export async function removeQueueItem(id: string) {
   return responseJson(response, "Queue removal failed");
 }
 
-export async function moveQueueItem(id: string, direction: "up" | "down") {
+export async function moveQueueItem(id: string, direction: "up" | "down" | number) {
   const response = await fetch(`${apiBase}/queue/${encodeURIComponent(id)}/move`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ direction })
+    body: JSON.stringify(typeof direction === "number" ? { index: direction } : { direction })
   });
   return responseJson(response, "Queue move failed");
 }

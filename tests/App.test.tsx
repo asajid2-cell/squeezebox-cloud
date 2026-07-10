@@ -277,17 +277,18 @@ describe("Cloud Squeeze UI", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("That song is already in the queue");
   });
 
-  it("does not send requester ownership when editing queue metadata", async () => {
+  it("uses queue-specific actions and moves an existing row to play next", async () => {
     const fetchMock = vi.mocked(fetch);
     const defaultFetch = fetchMock.getMockImplementation();
-    // Editing is only offered for LOCAL queue items (you don't own a Spotify track's
-    // metadata) — so seed an editable local item rather than the default Spotify one.
     fetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
       if (url.includes("/api/state")) {
         return jsonResponse({
           player: { id: "p1", name: "Test Speaker", connected: true, online: true, mode: "play", volume: 68 },
           nowPlaying: { id: "t1", title: "Midnight City", artist: "M83", album: "Hurry Up", source: "Spotify", duration: 243, elapsed: 151, canSeek: true },
-          queue: [{ id: "q1", title: "Awake", artist: "Tycho", source: "Local library", path: "/music/Awake.mp3", requestedBy: "alex", etaMinutes: 7 }],
+          queue: [
+            { id: "q1", title: "Awake", artist: "Tycho", source: "Local library", path: "/music/Awake.mp3", requestedBy: "alex", etaMinutes: 7 },
+            { id: "q2", title: "Hours", artist: "Tycho", source: "Local library", path: "/music/Hours.mp3", requestedBy: "sam", etaMinutes: 14 }
+          ],
           recentPicks: [],
           schedule: { current: { name: "Open Queue", until: "10:00 PM", requestsPaused: false }, next: { name: "Quiet Hours", time: "10:00 PM - 8:00 AM", requestsPaused: true } },
           rules: [],
@@ -304,56 +305,29 @@ describe("Cloud Squeeze UI", () => {
     });
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Queue" }));
-    const row = (await screen.findByText("Awake")).closest(".queue-row") as HTMLElement;
-    await userEvent.click(within(row).getByRole("button", { name: /More queue actions/ }));
-    await userEvent.click(screen.getByRole("button", { name: "Edit details" }));
+    const row = (await screen.findByText("Hours")).closest(".queue-row") as HTMLElement;
+    await userEvent.click(within(row).getByRole("button", { name: "Queue actions for Hours" }));
 
-    expect(screen.queryByLabelText("Requested by")).not.toBeInTheDocument();
-    await userEvent.clear(screen.getByLabelText("Queue title"));
-    await userEvent.type(screen.getByLabelText("Queue title"), "Edited Awake");
-    await userEvent.clear(screen.getByLabelText("Queue artist"));
-    await userEvent.type(screen.getByLabelText("Queue artist"), "Edited Tycho");
-    await userEvent.click(within(row).getByRole("button", { name: /More queue actions/ }));
-    await userEvent.click(screen.getByRole("button", { name: "Save edits" }));
+    expect(screen.getByRole("button", { name: "Play next" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Move up" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Move down" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Remove from queue" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add to queue" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Play next" }));
 
     await waitFor(() => {
-      const patchCall = fetchMock.mock.calls.find(([url, options]) => String(url).includes("/api/queue/") && options?.method === "PATCH");
-      expect(patchCall).toBeTruthy();
-      expect(JSON.parse(String(patchCall?.[1]?.body))).toEqual({ title: "Edited Awake", artist: "Edited Tycho" });
+      const moveCall = fetchMock.mock.calls.find(([url, options]) => String(url).includes("/api/queue/q2/move") && options?.method === "POST");
+      expect(moveCall).toBeTruthy();
+      expect(JSON.parse(String(moveCall?.[1]?.body))).toEqual({ index: 0 });
     });
   });
 
-  it("does not offer metadata editing for Spotify queue rows", async () => {
-    const fetchMock = vi.mocked(fetch);
-    const defaultFetch = fetchMock.getMockImplementation();
-    fetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
-      if (url.includes("/api/state")) {
-        return jsonResponse({
-          player: { id: "p1", name: "Test Speaker", connected: true, online: true, mode: "play", volume: 68 },
-          nowPlaying: { id: "t1", title: "Midnight City", artist: "M83", album: "Hurry Up", source: "Spotify", duration: 243, elapsed: 151, canSeek: true },
-          queue: [{ id: "q1", title: "Awake", artist: "Tycho", source: "Spotify", uri: "spotify:track:awake", requestedBy: "alex", etaMinutes: 7 }],
-          recentPicks: [],
-          schedule: { current: { name: "Open Queue", until: "10:00 PM", requestsPaused: false }, next: { name: "Quiet Hours", time: "10:00 PM - 8:00 AM", requestsPaused: true } },
-          rules: [],
-          services: {
-            spotify: { configured: true, reachable: true, detail: "ok" },
-            localLibrary: { root: "Downloads", reachable: true, trackCount: 2 },
-            musicInfo: { configured: true, reachable: true, detail: "Plugin ready" }
-          },
-          trackInfo: { artistBio: "", albumReview: "", lyrics: "" },
-          admin: { publicRequests: true, maxQueuePerUser: 3, moderation: "basic", scheduleEnabled: true }
-        });
-      }
-      return defaultFetch?.(url, options) ?? jsonResponse({ ok: true });
-    });
-
+  it("renders requester and ETA together in mobile queue metadata", async () => {
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Queue" }));
 
     const row = (await screen.findByText("Awake")).closest(".queue-row") as HTMLElement;
-    await userEvent.click(within(row).getByRole("button", { name: /More queue actions/ }));
-    expect(screen.queryByRole("button", { name: "Edit details" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Remove" })).toBeInTheDocument();
+    expect(within(row).getByLabelText("Requested by alex; ETA about 7 minutes")).toHaveTextContent("alex - ~7 min");
   });
 
   it("disables public track actions when requests are paused", async () => {

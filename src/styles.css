@@ -279,6 +279,7 @@ nav button.active svg { color: var(--rose); }
 .main {
   grid-area: main;
   min-width: 0;
+  min-height: 0;
   padding: var(--s6) var(--s6) var(--s6);
   display: flex;
   flex-direction: column;
@@ -311,6 +312,21 @@ nav button.active svg { color: var(--rose); }
 
 /* the content stage IS the active section */
 .stage { display: grid; gap: var(--s4); align-content: start; min-height: 0; }
+.stage--fill {
+  flex: 1;
+  grid-template-rows: minmax(min-content, 1fr);
+}
+.stage--fill > .panel {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.stage--fill .queue-list,
+.stage--fill .search-panel > .result-list,
+.stage--fill .search-panel > .search-detail {
+  flex: 1;
+  align-content: start;
+}
 .stage--split {
   grid-template-columns: minmax(0, 1.6fr) minmax(280px, .9fr);
   align-items: start;
@@ -535,7 +551,6 @@ nav button.active svg { color: var(--rose); }
 /* result rows carry 4 cells: art · meta · duration · actions */
 .result-row { grid-template-columns: 44px minmax(0, 1fr) 60px minmax(148px, auto); }
 .queue-row:hover, .result-row:hover { background: var(--panel-2); }
-.queue-row.is-editing { align-items: start; }
 .queue-row + .queue-row, .result-row + .result-row { border-top: 1px solid var(--line-soft); }
 .mini-art, .cover-thumb {
   width: 44px; height: 44px; flex: none;
@@ -621,11 +636,6 @@ nav button.active svg { color: var(--rose); }
 .icon-text { display: inline-flex; align-items: center; gap: 5px; }
 .inline-status { color: var(--muted); white-space: nowrap; font-size: 12px; }
 .danger-text { color: var(--danger-text); }
-
-/* queue inline edit */
-.queue-edit-fields { display: grid; gap: 6px; }
-.queue-edit-fields small { color: var(--rose); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
-.queue-edit-fields input { min-height: 32px; padding: 0 var(--s2); border: 1px solid var(--line); border-radius: 10px; background: var(--field); }
 
 /* ============================================================= LIBRARY + PLAYLISTS */
 .source-tabs { display: flex; flex-wrap: wrap; gap: var(--s2); margin: var(--s3) 0 var(--s4); }
