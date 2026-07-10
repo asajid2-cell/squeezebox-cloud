@@ -1,0 +1,20 @@
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const { chromium } = require('z:/328/CMPUT328-A2/codexworks/301/tandem/node_modules/playwright');
+const dir = 'Z:/328/CMPUT328-A2/codexworks/301/cloud-squeeze-matureui-v3/matureui-artifacts/current';
+const b = await chromium.launch();
+const ctx = await b.newContext({ viewport: { width:1440, height:900 } });
+const page = await ctx.newPage();
+page.on('console', m => { if (m.type()==='error') console.log('CONSOLE.ERR', m.text()); });
+page.on('pageerror', e => console.log('PAGEERROR', e.message));
+await page.goto('http://127.0.0.1:5177', { waitUntil: 'networkidle' }).catch(e=>console.log('goto', e.message));
+await page.waitForTimeout(3000);
+const html = await page.evaluate(() => document.getElementById('root')?.innerHTML?.length || 0);
+console.log('root innerHTML length', html);
+const bg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+console.log('body bg', bg);
+await page.screenshot({ path: `${dir}/desk-01-nowplaying.png`, fullPage: true });
+// also viewport-only
+await page.screenshot({ path: `${dir}/desk-01-viewport.png` });
+console.log('done');
+await b.close();

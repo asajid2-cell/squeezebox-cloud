@@ -327,6 +327,13 @@ nav button.active svg { color: var(--rose); }
   flex: 1;
   align-content: start;
 }
+/* When a fill-stage list holds only its empty state, drop the top-packed grid and let
+   the composed empty panel grow to center in the reclaimed space (no dead band). */
+.stage--fill .queue-list:has(> .empty-state),
+.stage--fill .result-list:has(> .empty-state) {
+  display: flex;
+  flex-direction: column;
+}
 .stage--split {
   grid-template-columns: minmax(0, 1.6fr) minmax(280px, .9fr);
   align-items: start;
@@ -798,13 +805,25 @@ nav button.active svg { color: var(--rose); }
 .info-artwork { width: 100%; aspect-ratio: 1; object-fit: cover; border: 1px solid var(--line-soft); border-radius: var(--r-control); margin-bottom: var(--s3); }
 
 /* ============================================================= EMPTY / STATUS */
+/* Composed intent panel: a mark, a heading, one line of guidance, a next action —
+   centered so a sparse screen reads as designed calm, never a top-packed void. */
 .empty-state {
-  display: grid; align-content: center; gap: var(--s1);
-  min-height: 78px; padding: var(--s4);
-  border: 1px dashed var(--line); border-radius: var(--r-control); background: var(--bg-soft);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; gap: var(--s2);
+  flex: 1; min-height: 260px; padding: var(--s7) var(--s4);
+  border: 1px dashed var(--line); border-radius: var(--r-card); background: var(--bg-soft);
 }
-.empty-state strong { color: var(--text); font-size: 14px; }
-.empty-state small { color: var(--muted); }
+.empty-state__mark {
+  display: grid; place-items: center;
+  width: 60px; height: 60px; margin-bottom: var(--s2);
+  border-radius: var(--r-card);
+  border: 1px solid var(--rose-line); color: var(--rose);
+  background: radial-gradient(120% 120% at 50% 12%, var(--rose-soft), transparent 72%);
+}
+.empty-state strong { color: var(--text); font-size: var(--step-1); font-weight: 700; line-height: 1.2; }
+.empty-state small { color: var(--muted); font-size: 14px; line-height: 1.55; max-width: 44ch; }
+.empty-state__actions { display: flex; flex-wrap: wrap; gap: var(--s2); justify-content: center; margin-top: var(--s3); }
+.link-inline { display: inline; min-height: 0; padding: 0; vertical-align: baseline; }
 
 /* ============================================================= DIALOG */
 .dialog-overlay { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: var(--s5); background: rgba(1, 2, 4, .74); }

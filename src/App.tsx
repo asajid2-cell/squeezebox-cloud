@@ -266,6 +266,12 @@ export default function App() {
   );
 }
 
+// Lightweight cross-tree navigation: a composed empty state deep in the render can
+// steer the top-level screen without threading a setter through every layer.
+function navigateTo(screen: PublicScreenName) {
+  window.dispatchEvent(new CustomEvent("sqz:navigate", { detail: screen }));
+}
+
 function AppShell() {
   const [state, setState] = useState<AppState | null>(null);
   const [activeScreen, setActiveScreen] = useState<PublicScreenName>("Now Playing");
@@ -291,6 +297,16 @@ function AppShell() {
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Empty-state "next action" buttons navigate through this event (see navigateTo).
+  useEffect(() => {
+    function onNav(event: Event) {
+      const screen = (event as CustomEvent<PublicScreenName>).detail;
+      if (screen) setActiveScreen(screen);
+    }
+    window.addEventListener("sqz:navigate", onNav);
+    return () => window.removeEventListener("sqz:navigate", onNav);
   }, []);
 
   const refresh = useCallback(async () => {
@@ -676,7 +692,12 @@ function NowPlayingPanel({
             </span>
             <PlaybackOptions state={state} disabled={controlsDisabled || !publicRequestsOpen(state)} onRefresh={onRefresh} onAction={onAction} />
             <ArchiveButton track={hasTrack ? state.nowPlaying : null} />
-            {!hasTrack && <p className="empty-copy">Queue a song from the Library to get started.</p>}
+            {!hasTrack && (
+              <p className="empty-copy">
+                Queue a song from the library to get started.{" "}
+                <button type="button" className="link-button link-inline" onClick={() => navigateTo("Library")}>Browse library</button>
+              </p>
+            )}
           </div>
         </div>
       </section>
@@ -855,7 +876,12 @@ function ArchivePanel() {
       {loading && totalFiles === 0 ? (
         <p className="empty-copy">Loading…</p>
       ) : totalFiles === 0 ? (
-        <p className="empty-copy">Nothing saved yet. Click the archive icon on any song to queue it, or add songs to a Spotify playlist named “archive”.</p>
+        <EmptyState
+          title="Nothing archived yet"
+          detail="Click the archive icon on any song to save a lossless copy, or add tracks to a Spotify playlist named “archive” and they get pulled in automatically."
+          icon={<Download size={26} />}
+          actions={<button className="primary-small" onClick={() => navigateTo("Library")}><Search size={15} /> Browse library</button>}
+        />
       ) : (
         shownGroups.map((group) => (
           <div key={group.name} className="archive-group">
@@ -1101,7 +1127,14 @@ function QueuePanel({ queue, requestsOpen, onRefresh, onAction }: { queue: AppSt
         <span>ETA</span>
       </div>
       <div className="queue-list">
-        {queue.length === 0 && <EmptyState title="Queue is empty" detail="Requests will appear here after someone adds a real local or Spotify track." />}
+        {queue.length === 0 && (
+          <EmptyState
+            title="Queue is empty"
+            detail="Requests appear here once someone adds a local or Spotify track. Start by browsing the library."
+            icon={<ListMusic size={26} />}
+            actions={<button className="primary-small" onClick={() => navigateTo("Library")}><Search size={15} /> Browse library</button>}
+          />
+        )}
         {visibleQueue.map((item, index) => (
           <QueueRow key={item.id} item={item} index={index} queueLength={queue.length} requestsOpen={requestsOpen} onRefresh={onRefresh} onAction={onAction} />
         ))}
@@ -1358,7 +1391,12 @@ function SearchPanel({
 
       {sourceFilter === "spotify" && !spotifyAvailable && (
         <div className="result-list">
-          <EmptyState title="Spotify is not linked" detail="Connect Spotty in LMS to enable public Spotify search — the VPS library and Uploaded tabs work in the meantime." />
+          <EmptyState
+            title="Spotify is not linked"
+            detail="Connect Spotty in LMS to enable public Spotify search. The VPS library and uploaded tracks are searchable right now."
+            icon={<Search size={26} />}
+            actions={<button className="primary-small" onClick={() => setSourceFilter("local")}><HardDriveDownload size={15} /> Browse VPS library</button>}
+          />
         </div>
       )}
 
@@ -2734,11 +2772,23 @@ function StatusPill({ ok, label }: { ok: boolean; label: string }) {
   );
 }
 
-function EmptyState({ title, detail }: { title: string; detail: string }) {
+function EmptyState({
+  title,
+  detail,
+  icon,
+  actions
+}: {
+  title: string;
+  detail: string;
+  icon?: ReactNode;
+  actions?: ReactNode;
+}) {
   return (
     <div className="empty-state">
+      <div className="empty-state__mark" aria-hidden="true">{icon ?? <ListMusic size={26} />}</div>
       <strong>{title}</strong>
       <small>{detail}</small>
+      {actions && <div className="empty-state__actions">{actions}</div>}
     </div>
   );
 }
