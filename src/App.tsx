@@ -607,7 +607,7 @@ function PublicScreen({
 
   if (activeScreen === "Playlists") {
     return (
-      <div className="stage">
+      <div className="stage stage--fill">
         <PlaylistsPanel requestsOpen={publicRequestsOpen(state)} onRefresh={onRefresh} onAction={onAction} />
       </div>
     );
@@ -615,7 +615,7 @@ function PublicScreen({
 
   if (activeScreen === "Archive") {
     return (
-      <div className="stage">
+      <div className="stage stage--fill">
         <ArchivePanel />
       </div>
     );

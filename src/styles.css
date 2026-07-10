@@ -626,6 +626,7 @@ nav button.active svg { color: var(--rose); }
 }
 .row-menu__pop button:hover, .row-menu__pop .ghost-add:hover { background: var(--line-soft); border-color: transparent; }
 .row-menu__pop .ghost-add.danger-text, .row-menu__pop .ghost-add.danger-text:hover { color: var(--danger-text); }
+.row-menu__pop button.danger, .row-menu__pop button.danger:hover { color: var(--danger-text); }
 /* inside the menu, "Save to playlist" expands INLINE as a submenu (never a nested
    floating popover that could clip at a viewport edge) */
 .row-menu__pop .add-to-playlist { position: static; width: 100%; display: flex; flex-direction: column; }
