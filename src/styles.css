@@ -31,9 +31,9 @@
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px; --s8: 64px;
   --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
   --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px;
-  /* radii — tap (12 control, 16 card) */
-  --r-control: 12px; --r-card: 16px;
-  --radius-row: 10px; --radius-control: 12px; --radius-panel: 16px;
+  /* radii — chrome/rows/inputs ≤8px; cards 12px (mature-ui R6) */
+  --r-control: 8px; --r-card: 12px;
+  --radius-row: 8px; --radius-control: 8px; --radius-panel: 12px;
   /* type — tap fluid scale + fixed aliases */
   --step-0: clamp(0.82rem, 0.78rem + 0.2vw, 0.92rem);
   --step-1: clamp(0.95rem, 0.9rem + 0.3vw, 1.06rem);
@@ -69,16 +69,19 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
 button:disabled { cursor: not-allowed; opacity: .46; }
 input { color: var(--text); background: transparent; border: 0; min-width: 0; outline: 0; }
 h1, h2, h3, p { margin-top: 0; }
-h1 { margin-bottom: 2px; font-size: var(--step-3); line-height: 1.05; letter-spacing: 0; }
+/* Tool-scale header: page title 20px, not a 38px hero (mature-ui R5). */
+h1 { margin-bottom: 2px; font-size: 20px; font-weight: 600; line-height: 1.2; letter-spacing: 0; }
+/* Panel titles are a QUIET neutral eyebrow — accent (rose) is reserved for signal
+   (active nav, primary action, focus, live status), never used as heading wallpaper (R6). */
 h2 {
-  margin-bottom: 18px;
-  color: var(--rose);
-  font-size: var(--step-0);
-  font-weight: 700;
-  letter-spacing: .04em;
+  margin-bottom: 14px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .05em;
   text-transform: uppercase;
 }
-h3 { margin-bottom: 8px; font-size: 20px; line-height: 1.16; }
+h3 { margin-bottom: 8px; font-size: 16px; line-height: 1.2; }
 p, small { color: var(--muted); }
 small { display: block; font-size: 13px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
@@ -103,11 +106,11 @@ small { display: block; font-size: 13px; }
   height: 100dvh;
   position: sticky;
   top: 0;
-  overflow-y: auto;
-  padding: 54px 20px 20px;
+  overflow: hidden;
+  padding: 26px 18px 18px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
   background: var(--bg);
   border-right: 1px solid var(--line);
 }
@@ -168,6 +171,11 @@ nav button.active {
 nav button.active svg { color: var(--rose); }
 .recent-picks {
   order: 4;
+  /* Recent picks is the only elastic region: it scrolls internally so the speaker
+     status card below it stays pinned and never scrolls out of view. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
   margin-top: 4px;
   padding-top: 16px;
   border-top: 1px solid var(--line-soft);
@@ -219,7 +227,8 @@ nav button.active svg { color: var(--rose); }
 }
 .speaker-card {
   order: 5;
-  margin-top: auto;
+  flex-shrink: 0;
+  margin-top: 14px;
   display: grid;
   grid-template-columns: auto 1fr auto;
   gap: 10px;
@@ -243,15 +252,16 @@ nav button.active svg { color: var(--rose); }
 .main {
   min-width: 0;
   height: 100dvh;
-  padding: 42px 44px 30px;
+  padding: 24px 36px 28px;
   overflow: auto;
 }
 .hero-row {
   display: flex;
-  justify-content: flex-end;
-  align-items: flex-start;
+  justify-content: space-between;
+  align-items: center;
   gap: 22px;
-  margin-bottom: 18px;
+  margin-bottom: 16px;
+  min-height: 40px;
 }
 .hero-row p {
   margin-bottom: 0;
@@ -267,7 +277,7 @@ nav button.active svg { color: var(--rose); }
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  font-weight: 800;
+  font-weight: 600;
 }
 .top-link {
   min-height: 44px;
@@ -298,15 +308,19 @@ nav button.active svg { color: var(--rose); }
 
 .content-grid {
   display: grid;
-  grid-template-columns: minmax(360px, 1.18fr) minmax(330px, .98fr) 260px;
+  grid-template-columns: minmax(360px, 1.18fr) minmax(330px, .98fr) 300px;
   grid-template-areas:
     "now queue rail"
     "search search rail";
-  gap: 14px;
+  gap: 16px;
+  max-width: 1360px;
 }
+/* Single-collection screens (Queue / Library / Playlists) own the full column at a
+   readable measure — no rail, no edge-to-edge sprawl that floats meta columns apart. */
 .focus-grid {
-  grid-template-columns: minmax(0, 1fr) 260px;
-  grid-template-areas: "search rail";
+  grid-template-columns: minmax(0, 900px);
+  grid-template-areas: "search";
+  max-width: 900px;
 }
 .focus-grid .queue-panel,
 .focus-grid .playlist-panel {
@@ -319,8 +333,7 @@ nav button.active svg { color: var(--rose); }
 }
 .now-playing {
   grid-area: now;
-  min-height: 382px;
-  padding: 24px 22px;
+  padding: 22px;
   background: var(--panel);
 }
 .playing-layout {
@@ -366,14 +379,21 @@ nav button.active svg { color: var(--rose); }
   background: var(--bg-soft);
   box-shadow: none;
 }
+.album-empty {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  color: var(--faint);
+}
 .track-core { min-width: 0; }
-.track-core h3 { margin-top: 8px; margin-bottom: 7px; font-size: var(--step-2); overflow-wrap: anywhere; }
+.track-core h3 { margin-top: 8px; margin-bottom: 7px; font-size: 20px; font-weight: 600; overflow-wrap: anywhere; }
 .track-core > p { overflow-wrap: anywhere; }
 .source-chip {
   display: inline-flex;
   align-items: center;
-  min-height: 26px;
-  margin: 8px 0 34px;
+  min-height: 24px;
+  margin: 8px 0 20px;
   padding: 0 10px;
   border-radius: var(--radius-row);
   background: var(--panel-2);
@@ -414,29 +434,44 @@ nav button.active svg { color: var(--rose); }
   justify-content: space-between;
   color: var(--muted);
 }
+/* Compact, player-style transport: circular icon buttons, one filled accent play
+   button — not four full-width stretched boxes (mature-ui R5). */
 .transport {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(44px, 1fr));
+  display: flex;
+  align-items: center;
   gap: 12px;
-  margin-top: 15px;
+  margin-top: 18px;
 }
-.transport button { display: grid; place-items: center; padding: 0; }
+.transport button {
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 999px;
+  color: var(--muted);
+}
+.transport button:hover:not(:disabled) { color: var(--text); }
 .transport .play-button {
+  width: 54px;
+  height: 54px;
   background: var(--rose);
   border-color: var(--rose);
   color: var(--rose-ink);
   box-shadow: none;
 }
-.transport .play-button:hover { background: var(--rose-strong); border-color: var(--rose-strong); }
+.transport .play-button:hover:not(:disabled) { background: var(--rose-strong); border-color: var(--rose-strong); color: var(--rose-ink); }
 .playback-options {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
-  margin-top: 12px;
+  margin-top: 16px;
 }
 .playback-options button {
   min-height: 34px;
-  padding: 0 10px;
+  padding: 0 12px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -446,26 +481,42 @@ nav button.active svg { color: var(--rose); }
   color: var(--muted);
   font-size: 13px;
 }
+.playback-options button:hover:not(:disabled) { color: var(--text); }
 .playback-options button.active-option {
   border-color: rgba(255, 95, 131, .5);
   color: var(--rose);
   background: rgba(255, 95, 131, .08);
 }
+/* Smart-shuffle source: an attached segmented control, not three loose buttons. */
 .shuffle-source {
-  grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: var(--field);
 }
 .shuffle-source button {
+  min-height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
   text-transform: capitalize;
+}
+.shuffle-source button.active-option {
+  background: var(--rose-soft);
+  color: var(--text);
+  border: 0;
 }
 .volume-row {
   display: grid;
   grid-template-columns: auto 1fr 42px;
   gap: 12px;
   align-items: center;
-  margin-top: 34px;
+  margin-top: 20px;
 }
 input[type="range"] {
   accent-color: var(--rose);
@@ -679,8 +730,7 @@ input[type="range"] {
 
 .queue-panel {
   grid-area: queue;
-  min-height: 382px;
-  padding: 24px 20px 12px;
+  padding: 22px 20px 14px;
 }
 .queue-show-all { width: 100%; justify-content: center; margin-top: 8px; }
 .section-head {
@@ -936,8 +986,7 @@ input[type="range"] {
   padding: 21px 20px 15px;
 }
 .playlist-panel {
-  min-height: 382px;
-  padding: 24px 20px;
+  padding: 22px 20px;
 }
 .playlist-title-row {
   display: flex;
@@ -1003,8 +1052,16 @@ input[type="range"] {
 }
 .source-tabs {
   display: flex;
-  gap: 10px;
-  margin: 14px 0 10px;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 12px;
+}
+.result-count {
+  margin-left: auto;
+  color: var(--faint);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .suggestion-row {
   display: flex;
@@ -1046,7 +1103,7 @@ input[type="range"] {
   color: var(--faint);
   background: var(--field);
 }
-.primary-small { font-weight: 800; }
+.primary-small { font-weight: 700; }
 .result-row {
   grid-template-columns: 42px minmax(0, 1fr) 64px minmax(220px, auto);
   min-height: 57px;
@@ -1155,7 +1212,8 @@ input[type="range"] {
   align-content: start;
   gap: 10px;
 }
-.schedule-card, .rules-card { padding: 24px 22px; }
+.schedule-card, .rules-card, .info-panel { padding: 20px; }
+.info-panel .info-block:first-of-type { border-top: 0; padding-top: 4px; }
 .schedule-card h3 { margin: 6px 0; }
 .schedule-card button {
   width: 100%;
@@ -1190,6 +1248,7 @@ input[type="range"] {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 14px;
+  max-width: 1100px;
 }
 .login-panel {
   max-width: 460px;
@@ -1353,7 +1412,6 @@ input[type="range"] {
 @media (max-width: 1365px) {
   body { overflow: auto; }
   .desktop-shell { grid-template-columns: 260px minmax(0, 1fr); }
-  .right-rail { grid-template-columns: 1fr 1fr; }
 }
 
 /* The 3-col content grid only has room for the now-playing column to fit its
@@ -1362,12 +1420,13 @@ input[type="range"] {
    stack to a single column. */
 @media (max-width: 1500px) {
   .content-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 900px);
     grid-template-areas:
       "now"
       "queue"
       "search"
       "rail";
+    max-width: 900px;
   }
 }
 
@@ -1532,6 +1591,30 @@ input[type="range"] {
 
 .ghost-add.danger { color: var(--danger-text); }
 .muted { color: var(--muted); }
+
+/* Row interaction model (mature-ui R2): the primary action (Play) stays visible, but
+   the secondary overflow menu recedes — it appears on row hover/focus so every row
+   isn't stamped with an always-visible identical control pair. Keyboard users reveal
+   it via :focus-within; touch devices keep it visible for reachability. */
+.result-row .row-menu,
+.queue-row .queue-actions .row-menu {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.result-row:hover .row-menu,
+.result-row:focus-within .row-menu,
+.queue-row:hover .queue-actions .row-menu,
+.queue-row:focus-within .queue-actions .row-menu {
+  opacity: 1;
+}
+@media (pointer: coarse) {
+  .result-row .row-menu,
+  .queue-row .queue-actions .row-menu { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .result-row .row-menu,
+  .queue-row .queue-actions .row-menu { transition: none; }
+}
 
 /* Touch devices: every actionable control gets a 44px target (a11y floor). Scoped to
    coarse pointers so narrow desktop windows don't bloat compact controls. */

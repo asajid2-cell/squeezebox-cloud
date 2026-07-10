@@ -494,7 +494,6 @@ function PublicScreen({
     return (
       <div className="content-grid focus-grid">
         {mode === "local" ? <LocalQueuePanel /> : <QueuePanel queue={state.queue} requestsOpen={publicRequestsOpen(state)} onRefresh={onRefresh} onAction={onAction} />}
-        <RightRail state={state} />
       </div>
     );
   }
@@ -503,7 +502,6 @@ function PublicScreen({
     return (
       <div className="content-grid focus-grid">
         {commonSearch}
-        <RightRail state={state} />
       </div>
     );
   }
@@ -512,7 +510,6 @@ function PublicScreen({
     return (
       <div className="content-grid focus-grid">
         <PlaylistsPanel requestsOpen={publicRequestsOpen(state)} onRefresh={onRefresh} onAction={onAction} />
-        <RightRail state={state} />
       </div>
     );
   }
@@ -883,10 +880,13 @@ function AlbumArt({ track }: { track: Track }) {
     <div className={`album-art ${empty ? "is-empty" : ""}`}>
       {art ? (
         <img src={art} alt={`${track.album || track.title} cover`} />
+      ) : empty ? (
+        // Idle: a quiet, intentional empty state — not a placeholder monogram.
+        <div className="album-empty"><Music2 size={38} strokeWidth={1.5} /></div>
       ) : (
+        // A real track with no cover falls back to the artist initial.
         <>
-          <div className="album-noise" />
-          <strong>{empty ? "CS." : `${track.artist.split(" ")[0]}.`}</strong>
+          <strong>{`${track.artist.split(" ")[0]}.`}</strong>
           <span>{track.album || "No Album"}</span>
         </>
       )}
@@ -1166,7 +1166,7 @@ function SearchPanel({
   const [detail, setDetail] = useState<{ track: Track; tracks: Track[]; loading: boolean } | null>(null);
   const spotifyAvailable = state.services.spotify.configured;
   const requestsOpen = publicRequestsOpen(state);
-  const visibleResults = showAllResults ? results : results.slice(0, 3);
+  const visibleResults = showAllResults ? results : results.slice(0, 12);
   const filteredCollections = collections.filter((item) =>
     `${item.collection} ${item.folder} ${item.sample.join(" ")}`.toLowerCase().includes(query.toLowerCase())
   );
@@ -1175,6 +1175,14 @@ function SearchPanel({
     spotifyGroups.artists.length === 0 &&
     spotifyGroups.albums.length === 0 &&
     spotifyGroups.playlists.length === 0;
+
+  const spotifyCount =
+    spotifyGroups.tracks.length + spotifyGroups.artists.length + spotifyGroups.albums.length + spotifyGroups.playlists.length;
+  const resultCount =
+    sourceFilter === "spotify" ? spotifyCount
+    : sourceFilter === "playlists" ? filteredCollections.length
+    : results.length;
+  const resultNoun = sourceFilter === "playlists" ? "collection" : "result";
 
   useEffect(() => {
     fetchCollections().then(setCollections);
@@ -1213,6 +1221,9 @@ function SearchPanel({
         <button aria-pressed={sourceFilter === "playlists"} className={sourceFilter === "playlists" ? "primary-small" : ""} onClick={() => setSourceFilter("playlists")}>
           Playlists
         </button>
+        {resultCount > 0 && (
+          <span className="result-count">{resultCount} {resultNoun}{resultCount === 1 ? "" : "s"}</span>
+        )}
       </div>
       {sourceFilter === "archived" && (
         <div className="upload-box">
@@ -1327,7 +1338,7 @@ function SearchPanel({
                 <SearchResultRow key={track.id} track={track} requestsOpen={requestsOpen} onRefresh={onRefresh} onAction={onAction} />
               ))}
           </div>
-          {(sourceFilter === "local" || sourceFilter === "uploaded" || sourceFilter === "archived") && results.length > 3 && (
+          {(sourceFilter === "local" || sourceFilter === "uploaded" || sourceFilter === "archived") && results.length > 12 && (
             <button className="link-button" onClick={() => setShowAllResults(!showAllResults)}>
               {showAllResults ? "Show fewer" : `View all ${results.length} results`}
             </button>
@@ -2302,42 +2313,43 @@ function PlaylistTracks({
 }
 
 function RightRail({ state }: { state: AppState }) {
-  const musicInfo = state.services.musicInfo || {
-    configured: false,
-    detail: "Enable the Music and Artist Information plugin in LMS for artist bios, album reviews, and lyrics."
-  };
-  const trackInfo = state.trackInfo || {
-    artistBio: "Connect a player and enable the LMS Music and Artist Information plugin.",
-    albumReview: "No album review available yet.",
-    lyrics: "Lyrics will appear when available."
-  };
-  const hasAutoInfo = Boolean(trackInfo.artistBio || trackInfo.albumReview || trackInfo.lyrics);
+  const trackInfo = state.trackInfo || {};
+  const playing = state.nowPlaying.id !== "idle";
+  // Suppress placeholder prose: only surface artist/album/lyrics blocks when a real
+  // track is playing and the field actually carries content (mature-ui R7). When idle
+  // this is one quiet line, not two large cards of "connect a player…" boilerplate.
+  const art = playing ? usableArt(trackInfo.art) : undefined;
+  const artistBio = playing && trackInfo.artistBio ? trackInfo.artistBio : "";
+  const albumReview = playing && trackInfo.albumReview ? trackInfo.albumReview : "";
+  const lyrics = playing && trackInfo.lyrics ? trackInfo.lyrics : "";
+  const hasContent = Boolean(art || artistBio || albumReview || lyrics);
+
   return (
     <aside className="right-rail">
-      <section className="panel schedule-card" aria-label="Track information">
-        <h2>Track information</h2>
-        <small>MusicBrainz, lyrics lookup, LMS plugin</small>
-        <h3>{musicInfo.configured ? "LMS plugin ready" : hasAutoInfo ? "Auto track info active" : "Track info pending"}</h3>
-        <p>
-          {musicInfo.configured
-            ? musicInfo.detail
-            : "The LMS plugin is not reporting as enabled, so this site is using automatic artist and lyrics lookup from the current track title."}
-        </p>
-        <div className="soft-divider" />
-        <small>Artist bio</small>
-        <p>{trackInfo.artistBio}</p>
-      </section>
-      <section className="panel rules-card" aria-label="Album and lyrics">
-        <h2>Album and lyrics</h2>
-        {trackInfo.art && <img className="info-artwork" src={trackInfo.art} alt="" />}
-        <div className="info-block">
-          <strong>Album review</strong>
-          <small>{trackInfo.albumReview}</small>
-        </div>
-        <div className="info-block">
-          <strong>Lyrics</strong>
-          <small>{trackInfo.lyrics}</small>
-        </div>
+      <section className="panel info-panel" aria-label="Track information">
+        <h2>Track info</h2>
+        {!hasContent && (
+          <p className="empty-copy">Artist bio, album notes, and lyrics appear here while a track is playing.</p>
+        )}
+        {art && <img className="info-artwork" src={art} alt="" />}
+        {artistBio && (
+          <div className="info-block">
+            <strong>Artist</strong>
+            <small>{artistBio}</small>
+          </div>
+        )}
+        {albumReview && (
+          <div className="info-block">
+            <strong>Album</strong>
+            <small>{albumReview}</small>
+          </div>
+        )}
+        {lyrics && (
+          <div className="info-block">
+            <strong>Lyrics</strong>
+            <small>{lyrics}</small>
+          </div>
+        )}
       </section>
     </aside>
   );
