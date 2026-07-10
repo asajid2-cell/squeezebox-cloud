@@ -409,7 +409,7 @@ function AppShell() {
           <span className={speakerOnline ? "status-dot online" : reconnecting ? "status-dot connecting" : "status-dot offline"} />
           <div>
             <strong>{speakerOnline ? "Speaker online" : reconnecting ? "Reconnecting…" : "Speaker offline"}</strong>
-            <small>{speakerOnline ? state.player.name : state.player.detail || "LMS player not connected"}</small>
+            <small>{speakerOnline ? state.player.name : reconnecting ? "Trying to reach the speaker…" : friendlySpeakerDetail(state.player.detail)}</small>
           </div>
           <Radio size={22} />
         </div>
@@ -665,6 +665,21 @@ function ArchiveTrackButton({ track }: { track: Track }) {
       {state === "queued" ? <Check size={15} /> : <HardDriveDownload size={15} />}
     </button>
   );
+}
+
+function trackCountLabel(count: number): string {
+  return `${count} track${count === 1 ? "" : "s"}`;
+}
+
+// The raw LMS connection detail can be a Node errno ("connect ECONNREFUSED
+// 127.0.0.1:9090") — fine for the admin's Service Providers row, but not something a
+// public guest should see in the sidebar. Show a plain-language status instead.
+function friendlySpeakerDetail(detail: string | undefined): string {
+  if (!detail) return "No LMS player connected yet";
+  if (/ECONNREFUSED|ETIMEDOUT|ENOTFOUND|ECONNRESET|errno|127\.0\.0\.1|:\d{2,5}\b/i.test(detail)) {
+    return "No LMS player connected yet";
+  }
+  return detail;
 }
 
 function formatBytes(bytes: number | null): string {
@@ -1166,7 +1181,7 @@ function SearchPanel({
   const [detail, setDetail] = useState<{ track: Track; tracks: Track[]; loading: boolean } | null>(null);
   const spotifyAvailable = state.services.spotify.configured;
   const requestsOpen = publicRequestsOpen(state);
-  const visibleResults = showAllResults ? results : results.slice(0, 3);
+  const visibleResults = showAllResults ? results : results.slice(0, 10);
   const filteredCollections = collections.filter((item) =>
     `${item.collection} ${item.folder} ${item.sample.join(" ")}`.toLowerCase().includes(query.toLowerCase())
   );
@@ -1202,7 +1217,7 @@ function SearchPanel({
           Spotify{spotifyAvailable ? "" : " not linked"}
         </button>
         <button aria-pressed={sourceFilter === "local"} className={sourceFilter === "local" ? "primary-small" : ""} onClick={() => setSourceFilter("local")}>
-          VPS library
+          Local
         </button>
         <button aria-pressed={sourceFilter === "uploaded"} className={sourceFilter === "uploaded" ? "primary-small" : ""} onClick={() => setSourceFilter("uploaded")}>
           Uploaded
@@ -1327,7 +1342,7 @@ function SearchPanel({
                 <SearchResultRow key={track.id} track={track} requestsOpen={requestsOpen} onRefresh={onRefresh} onAction={onAction} />
               ))}
           </div>
-          {(sourceFilter === "local" || sourceFilter === "uploaded" || sourceFilter === "archived") && results.length > 3 && (
+          {(sourceFilter === "local" || sourceFilter === "uploaded" || sourceFilter === "archived") && results.length > 10 && (
             <button className="link-button" onClick={() => setShowAllResults(!showAllResults)}>
               {showAllResults ? "Show fewer" : `View all ${results.length} results`}
             </button>
@@ -1844,13 +1859,12 @@ function PlaylistsPanel({ requestsOpen, onRefresh, onAction }: { requestsOpen: b
       {!selectedTitle && source === "local" && <div className="collection-list">
         {collections.map((item) => (
           <button className="collection-row" key={`${item.collection}-${item.folder}`} onClick={() => openLocal(item)}>
-            <div className="cover-thumb">{item.art && <img src={item.art} alt="" />}</div>
+            <div className="cover-thumb">{item.art ? <img src={item.art} alt="" /> : <FallbackArt kind="playlist" />}</div>
             <div>
               <strong>{item.folder}</strong>
-              <small>{item.collection}</small>
               <small>{item.sample.join(", ")}</small>
             </div>
-            <span>{item.count} tracks</span>
+            <span>{trackCountLabel(item.count)}</span>
             <ChevronRight size={16} />
           </button>
         ))}
@@ -1858,7 +1872,7 @@ function PlaylistsPanel({ requestsOpen, onRefresh, onAction }: { requestsOpen: b
       {!selectedTitle && source === "spotify" && <div className="collection-list">
         {spotifyItems.map((track) => (
           <button className="collection-row spotify-collection" key={track.id} onClick={() => openSpotify(track)}>
-            <div className="cover-thumb">{track.art && <img src={track.art} alt="" />}</div>
+            <div className="cover-thumb">{track.art ? <img src={track.art} alt="" /> : <FallbackArt kind={track.kind} />}</div>
             <div>
               <strong>{track.title}</strong>
               <small>{track.artist || track.album || track.source}</small>
@@ -1983,12 +1997,12 @@ function AppPlaylistsView({ requestsOpen, onRefresh, onAction }: { requestsOpen:
       <div className="collection-list">
         {playlists.map((playlist) => (
           <button className="collection-row" key={playlist.id} onClick={() => openDetail(playlist.id)}>
-            <div className="cover-thumb">{playlist.art && <img src={playlist.art} alt="" />}</div>
+            <div className="cover-thumb">{playlist.art ? <img src={playlist.art} alt="" /> : <FallbackArt kind="playlist" />}</div>
             <div>
               <strong>{playlist.name}</strong>
               <small>{playlist.description || playlist.sample.join(", ") || "Empty playlist"}</small>
             </div>
-            <span>{playlist.trackCount} tracks</span>
+            <span>{trackCountLabel(playlist.trackCount)}</span>
             <ChevronRight size={16} />
           </button>
         ))}
@@ -2312,6 +2326,19 @@ function RightRail({ state }: { state: AppState }) {
     lyrics: "Lyrics will appear when available."
   };
   const hasAutoInfo = Boolean(trackInfo.artistBio || trackInfo.albumReview || trackInfo.lyrics);
+  const hasTrack = state.nowPlaying.id !== "idle";
+  // No live track → there is nothing real to show. One slim hint beats two panels of
+  // "not available yet" placeholder copy occupying the whole rail.
+  if (!hasTrack) {
+    return (
+      <aside className="right-rail">
+        <section className="panel rail-empty" aria-label="Track information">
+          <h2>Track info</h2>
+          <p>Artist bios, album reviews, and lyrics appear here once a song is playing.</p>
+        </section>
+      </aside>
+    );
+  }
   return (
     <aside className="right-rail">
       <section className="panel schedule-card" aria-label="Track information">

@@ -31,9 +31,9 @@
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px; --s8: 64px;
   --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
   --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px;
-  /* radii — tap (12 control, 16 card) */
-  --r-control: 12px; --r-card: 16px;
-  --radius-row: 10px; --radius-control: 12px; --radius-panel: 16px;
+  /* radii — tool discipline: 8px on chrome/rows/inputs, 12px on cards/overlays */
+  --r-control: 8px; --r-card: 12px;
+  --radius-row: 8px; --radius-control: 8px; --radius-panel: 12px;
   /* type — tap fluid scale + fixed aliases */
   --step-0: clamp(0.82rem, 0.78rem + 0.2vw, 0.92rem);
   --step-1: clamp(0.95rem, 0.9rem + 0.3vw, 1.06rem);
@@ -57,8 +57,8 @@ a { color: inherit; text-decoration: none; }
 button {
   border: 1px solid var(--line);
   border-radius: var(--r-control);
-  min-height: 44px;
-  padding: 0 16px;
+  min-height: 36px;
+  padding: 0 14px;
   color: var(--text);
   background: var(--btn);
   font-weight: 600;
@@ -69,16 +69,19 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
 button:disabled { cursor: not-allowed; opacity: .46; }
 input { color: var(--text); background: transparent; border: 0; min-width: 0; outline: 0; }
 h1, h2, h3, p { margin-top: 0; }
-h1 { margin-bottom: 2px; font-size: var(--step-3); line-height: 1.05; letter-spacing: 0; }
+/* tool-scale title — not marketing hero type */
+h1 { margin-bottom: 2px; font-size: 22px; font-weight: 700; line-height: 1.1; letter-spacing: 0; }
+/* section label — neutral, so the rose accent stays a signal (active nav / primary / live),
+   not wallpaper on every panel header. */
 h2 {
-  margin-bottom: 18px;
-  color: var(--rose);
-  font-size: var(--step-0);
+  margin-bottom: 14px;
+  color: var(--faint);
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: .04em;
+  letter-spacing: .06em;
   text-transform: uppercase;
 }
-h3 { margin-bottom: 8px; font-size: 20px; line-height: 1.16; }
+h3 { margin-bottom: 8px; font-size: 16px; line-height: 1.2; }
 p, small { color: var(--muted); }
 small { display: block; font-size: 13px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
@@ -342,7 +345,6 @@ nav button.active svg { color: var(--rose); }
   border: 1px solid var(--line);
   border-radius: var(--radius-panel);
   background: var(--panel-2);
-  box-shadow: 0 22px 64px -34px rgba(255, 95, 131, .45);
 }
 .album-noise {
   position: absolute;
@@ -372,8 +374,8 @@ nav button.active svg { color: var(--rose); }
 .source-chip {
   display: inline-flex;
   align-items: center;
-  min-height: 26px;
-  margin: 8px 0 34px;
+  min-height: 24px;
+  margin: 6px 0 20px;
   padding: 0 10px;
   border-radius: var(--radius-row);
   background: var(--panel-2);
@@ -414,14 +416,30 @@ nav button.active svg { color: var(--rose); }
   justify-content: space-between;
   color: var(--muted);
 }
+/* compact transport cluster — a control surface, not four stretched slabs of dead space */
 .transport {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(44px, 1fr));
-  gap: 12px;
-  margin-top: 15px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 18px;
 }
-.transport button { display: grid; place-items: center; padding: 0; }
+.transport button {
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 999px;
+  background: transparent;
+  border-color: var(--line);
+  color: var(--muted);
+}
+.transport button:hover:not(:disabled) { color: var(--text); border-color: rgba(255, 95, 131, .45); }
 .transport .play-button {
+  width: 54px;
+  height: 54px;
   background: var(--rose);
   border-color: var(--rose);
   color: var(--rose-ink);
@@ -429,43 +447,54 @@ nav button.active svg { color: var(--rose); }
 }
 .transport .play-button:hover { background: var(--rose-strong); border-color: var(--rose-strong); }
 .playback-options {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
-  margin-top: 12px;
+  margin-top: 18px;
 }
 .playback-options button {
-  min-height: 34px;
-  padding: 0 10px;
+  min-height: 32px;
+  padding: 0 12px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 7px;
   border-color: var(--line-soft);
-  background: var(--field);
+  background: transparent;
   color: var(--muted);
   font-size: 13px;
 }
+.playback-options button:hover:not(:disabled) { color: var(--text); border-color: var(--line); }
 .playback-options button.active-option {
   border-color: rgba(255, 95, 131, .5);
   color: var(--rose);
   background: rgba(255, 95, 131, .08);
 }
+/* segmented control for the smart-shuffle source — one bordered group, not 3 loose slabs */
 .shuffle-source {
-  grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: var(--field);
 }
 .shuffle-source button {
+  min-height: 26px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
   text-transform: capitalize;
 }
+.shuffle-source button.active-option { background: var(--rose-soft); }
 .volume-row {
   display: grid;
   grid-template-columns: auto 1fr 42px;
   gap: 12px;
   align-items: center;
-  margin-top: 34px;
+  margin-top: 24px;
 }
 input[type="range"] {
   accent-color: var(--rose);
@@ -853,6 +882,31 @@ input[type="range"] {
   justify-content: flex-end;
   gap: 6px;
 }
+/* Row interaction model (R2): the row's actions are quiet until the row is hovered or
+   focused — no wall of always-visible Play/⋯ buttons stamped on every record. Layout is
+   reserved (opacity, not display) so nothing reflows on hover. Coarse pointers keep them
+   visible (see the pointer:coarse block). */
+@media (hover: hover) and (pointer: fine) {
+  .result-row .track-actions,
+  .queue-row .queue-actions {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .12s ease;
+  }
+  .result-row:hover .track-actions,
+  .result-row:focus-within .track-actions,
+  .queue-row:hover .queue-actions,
+  .queue-row:focus-within .queue-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  /* keep an open overflow menu visible even if the pointer drifts off the row */
+  .result-row .track-actions:has(.row-menu__pop),
+  .queue-row .queue-actions:has(.row-menu__pop) {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
 .icon-button {
   position: relative;
   width: 30px;
@@ -920,14 +974,14 @@ input[type="range"] {
 }
 .empty-state {
   grid-column: 1 / -1;
-  min-height: 78px;
+  min-height: 72px;
   display: grid;
   align-content: center;
   gap: 4px;
-  padding: 14px;
-  border: 1px dashed rgba(255, 95, 131, .26);
+  padding: 16px;
+  border: 1px solid var(--line-soft);
   border-radius: var(--radius-row);
-  background: rgba(0, 0, 0, .18);
+  background: var(--panel-soft);
 }
 .empty-state strong { color: var(--text); }
 
@@ -967,27 +1021,31 @@ input[type="range"] {
   color: var(--muted);
   font-size: 13px;
 }
+/* dense list (R1): homogeneous collections scan better as a list than a stack of padded
+   cards — hairline separators + hover shading, no per-row border/radius. */
 .collection-list {
   display: grid;
-  gap: 8px;
+  gap: 0;
 }
 .collection-row {
   display: grid;
-  grid-template-columns: 48px minmax(0, 1fr) auto auto;   /* art · title · count · chevron */
-  gap: 14px;
+  grid-template-columns: 40px minmax(0, 1fr) auto auto;   /* art · title · count · chevron */
+  gap: 12px;
   align-items: center;
-  min-height: 64px;
-  padding: 10px 14px;
-  border: 1px solid var(--line);
+  min-height: 52px;
+  padding: 6px 10px;
+  border: 0;
   border-radius: var(--r-control);
-  background: var(--panel);
+  background: transparent;
   color: var(--muted);
   text-align: left;
 }
-.collection-row:hover { border-color: rgba(255, 95, 131, .5); }
+.collection-row + .collection-row { border-top: 1px solid var(--line-soft); }
+.collection-row:hover { background: var(--rose-soft); border-radius: var(--r-control); }
+.collection-row:hover + .collection-row { border-top-color: transparent; }
 .collection-row svg { color: var(--faint); }
 .collection-row.spotify-collection {
-  grid-template-columns: 42px minmax(0, 1fr) auto auto;
+  grid-template-columns: 40px minmax(0, 1fr) auto auto;
 }
 .collection-row strong {
   display: block;
@@ -1066,6 +1124,8 @@ input[type="range"] {
   height: auto;            /* override the shared .mini-art 42px so aspect-ratio wins */
   aspect-ratio: 1;
   align-self: center;
+  display: grid;
+  place-items: center;
   border-radius: var(--radius-row);
   border: 1px solid var(--line);
   background: var(--panel-2);
@@ -1156,6 +1216,8 @@ input[type="range"] {
   gap: 10px;
 }
 .schedule-card, .rules-card { padding: 24px 22px; }
+.rail-empty { padding: 18px 20px; }
+.rail-empty p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
 .schedule-card h3 { margin: 6px 0; }
 .schedule-card button {
   width: 100%;
@@ -1286,25 +1348,28 @@ input[type="range"] {
   counter-reset: connect-step;
 }
 .connect-steps li {
-  min-height: 116px;
-  padding: 14px;
+  min-height: 0;
+  padding: 12px 14px;
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-row);
   background: var(--field);
   color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
   counter-increment: connect-step;
 }
 .connect-steps li::before {
   content: counter(connect-step);
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
   display: grid;
   place-items: center;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
   border-radius: 50%;
-  background: var(--rose);
-  color: var(--rose-ink);
-  font-weight: 900;
+  background: var(--rose-soft);
+  color: var(--rose);
+  font-weight: 800;
+  font-size: 12px;
 }
 .port-row {
   display: grid;
