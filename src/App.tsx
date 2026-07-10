@@ -1930,27 +1930,27 @@ function PlaylistsPanel({ requestsOpen, onRefresh, onAction }: { requestsOpen: b
 
   return (
     <section className="panel playlist-panel" aria-label="Playlists">
-      {source !== "mine" && (
-        <div className="playlist-title-row">
-          <div>
-            <h2>{selectedTitle ? selectedTitle : "Collections"}</h2>
-            {selectedTitle && <small>{selectedSubtitle}</small>}
-          </div>
-          {selectedTitle && (
-            <button
-              className="ghost-add"
-              onClick={() => {
-                setSelectedLocal(null);
-                setSelectedSpotify(null);
-                setDetailTracks([]);
-                setHasMoreDetail(false);
-              }}
-            >
-              Back
-            </button>
-          )}
+      {/* Every list page carries a rose eyebrow header for a consistent hierarchy;
+          on the collection tabs it names the current context (or the drilled-in title). */}
+      <div className="playlist-title-row">
+        <div>
+          <h2>{source === "mine" ? "Playlists" : selectedTitle ? selectedTitle : "Collections"}</h2>
+          {source !== "mine" && selectedTitle && <small>{selectedSubtitle}</small>}
         </div>
-      )}
+        {source !== "mine" && selectedTitle && (
+          <button
+            className="ghost-add"
+            onClick={() => {
+              setSelectedLocal(null);
+              setSelectedSpotify(null);
+              setDetailTracks([]);
+              setHasMoreDetail(false);
+            }}
+          >
+            Back
+          </button>
+        )}
+      </div>
       <div className="source-tabs">
         <button className={source === "mine" ? "primary-small" : ""} aria-pressed={source === "mine"} onClick={() => { setSource("mine"); setSelectedLocal(null); setSelectedSpotify(null); setDetailTracks([]); }}>
           My Playlists

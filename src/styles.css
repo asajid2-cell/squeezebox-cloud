@@ -429,25 +429,27 @@ nav button.active svg { color: var(--rose); }
 @keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
 .empty-copy { margin: var(--s2) 0 0; color: var(--faint); font-size: 13px; line-height: 1.5; max-width: 48ch; }
 
-/* playback options (shuffle / repeat / source) — role: quiet toggle */
+/* playback options (shuffle / repeat / source) — role: quiet toggle.
+   Toggles wear the pill shape (the spec's shape for toggles/status), so the whole
+   control row — Shuffle/Repeat toggles and the source segment — shares one language. */
 .playback-options {
-  display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s2);
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin-top: var(--s2);
 }
 .playback-options button {
-  min-height: 34px; padding: 0 var(--s3);
+  min-height: 34px; padding: 0 var(--s4);
   display: inline-flex; align-items: center; gap: var(--s2);
   border-color: var(--line); background: var(--field);
-  color: var(--muted); font-size: 13px; font-weight: 600; border-radius: var(--r-control);
+  color: var(--muted); font-size: 13px; font-weight: 600; border-radius: var(--r-pill);
 }
 .playback-options button:hover { color: var(--text); border-color: var(--rose-line); }
 .playback-options button.active-option { border-color: var(--rose-line); color: var(--rose); background: var(--rose-soft); }
 .shuffle-source {
-  display: inline-flex; gap: 3px; padding: 3px; margin-left: auto;
+  display: inline-flex; gap: 3px; padding: 2px; margin-left: auto;
   border: 1px solid var(--line); border-radius: var(--r-pill); background: var(--field);
 }
 .shuffle-source button {
   min-height: 28px; padding: 0 var(--s3); border: 0; border-radius: var(--r-pill);
-  background: transparent; color: var(--muted); font-size: 12px; text-transform: capitalize;
+  background: transparent; color: var(--muted); font-size: 12px; font-weight: 600; text-transform: capitalize;
 }
 .shuffle-source button:hover { color: var(--text); }
 .shuffle-source button.active-option { background: var(--rose-soft); color: var(--text); border: 0; }
