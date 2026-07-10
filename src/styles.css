@@ -554,11 +554,12 @@ nav button.active svg { color: var(--rose); }
 /* row actions — one primary (Play) + a "More" overflow; actions reveal on hover/focus */
 .queue-actions, .track-actions { display: flex; justify-content: flex-end; align-items: center; gap: var(--s2); flex-wrap: wrap; }
 .track-actions .ghost-add, .queue-actions .ghost-add { min-width: 0; }
-.result-row .track-actions, .queue-row .queue-actions { opacity: 1; }
+/* secondary row actions stay VISIBLE (discoverable) but recede to a quiet 60%
+   until the row is hovered or focused — never hidden entirely */
 @media (hover: hover) and (pointer: fine) {
   .result-row .track-actions .row-menu,
   .result-row .track-actions .add-to-playlist,
-  .queue-row .queue-actions .row-menu { opacity: 0; transition: opacity .12s ease; }
+  .queue-row .queue-actions .row-menu { opacity: .6; transition: opacity .12s ease; }
   .result-row:hover .track-actions .row-menu,
   .result-row:focus-within .track-actions .row-menu,
   .result-row:hover .track-actions .add-to-playlist,
@@ -899,13 +900,19 @@ nav button.active svg { color: var(--rose); }
     position: sticky; bottom: 0; z-index: 50;
     grid-template-columns: 1fr; gap: var(--s2); padding: var(--s3) var(--s4);
   }
-  .player-bar__volume { display: none; }        /* volume lives in the Now Playing detail on phones */
+  /* Speaker volume is REMOTE volume (hardware buttons can't change it) — it must
+     stay reachable on phones, as a compact full-width row in the bar. */
+  .player-bar__volume { justify-content: stretch; }
+  .player-bar__volume .volume-row { width: 100%; }
   .player-bar__seek { max-width: none; }
   .queue-row, .result-row {
     grid-template-columns: 44px minmax(0, 1fr) auto;
     row-gap: 6px;
   }
-  .queue-row > span, .result-row > span { grid-column: 2 / -1; }
+  /* requested-by / ETA read as unlabeled debris without their desktop column
+     headers — drop them on phones (the row keeps title/artist + actions). */
+  .queue-row > span { display: none; }
+  .result-row > span { grid-column: 2 / -1; }
   .queue-row .queue-actions, .result-row .track-actions { grid-column: 1 / -1; justify-content: flex-start; }
   .queue-row strong, .result-row strong { white-space: normal; }
   .section-head { grid-template-columns: 1fr; }

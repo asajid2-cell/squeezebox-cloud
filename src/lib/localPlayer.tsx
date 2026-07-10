@@ -429,7 +429,7 @@ export function LocalNowPlayingPanel() {
             </button>
           </div>
           <LocalArchiveButton track={p.current} />
-          {!has && <p className="empty-copy">Plays in your browser, separate from the Squeezebox. Add songs from search with “Play here” — transport stays live in the bar below.</p>}
+          {!has && <p className="empty-copy">Plays in this browser, separate from the Squeezebox — use “Play here” on any song.</p>}
         </div>
       </div>
     </section>

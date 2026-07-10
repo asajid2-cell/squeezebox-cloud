@@ -677,7 +677,7 @@ function NowPlayingPanel({
             </span>
             <PlaybackOptions state={state} disabled={controlsDisabled || !publicRequestsOpen(state)} onRefresh={onRefresh} onAction={onAction} />
             <ArchiveButton track={hasTrack ? state.nowPlaying : null} />
-            {!hasTrack && <p className="empty-copy">Transport controls stay live in the bar below. Queue a local-library or Spotify song, or connect the Squeezebox, to start playback.</p>}
+            {!hasTrack && <p className="empty-copy">Queue a song from the Library to get started.</p>}
           </div>
         </div>
       </section>
@@ -1376,7 +1376,7 @@ function SearchPanel({
 
       {sourceFilter === "spotify" && !spotifyAvailable && (
         <div className="result-list">
-          <EmptyState title="Spotify is not linked" detail="Connect Spotty in LMS before public Spotify search is enabled." />
+          <EmptyState title="Spotify is not linked" detail="Connect Spotty in LMS to enable public Spotify search — the VPS library and Uploaded tabs work in the meantime." />
         </div>
       )}
 
