@@ -550,6 +550,8 @@ nav button.active svg { color: var(--rose); }
 }
 .queue-row small, .result-row small { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .queue-row > span, .result-row > span { color: var(--faint); font-size: 12px; min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+/* phone-only composed request line (desktop shows the labelled columns instead) */
+.queue-row__request { display: none; }
 
 /* row actions — one primary (Play) + a "More" overflow; actions reveal on hover/focus */
 .queue-actions, .track-actions { display: flex; justify-content: flex-end; align-items: center; gap: var(--s2); flex-wrap: wrap; }
@@ -910,8 +912,10 @@ nav button.active svg { color: var(--rose); }
     row-gap: 6px;
   }
   /* requested-by / ETA read as unlabeled debris without their desktop column
-     headers — drop them on phones (the row keeps title/artist + actions). */
+     headers — on phones the same facts render as one labelled line in the meta
+     cell instead (.queue-row__request). */
   .queue-row > span { display: none; }
+  .queue-row__request { display: block; color: var(--faint); font-size: 11px; }
   .result-row > span { grid-column: 2 / -1; }
   .queue-row .queue-actions, .result-row .track-actions { grid-column: 1 / -1; justify-content: flex-start; }
   .queue-row strong, .result-row strong { white-space: normal; }

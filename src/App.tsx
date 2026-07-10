@@ -1049,10 +1049,14 @@ function Progress({
           }}
         />
       </div>
-      <div className="progress-times">
-        <span>{formatTime(value)}</span>
-        <span>{duration > 0 ? formatTime(duration) : "--:--"}</span>
-      </div>
+      {/* No orphaned "0:00 / --:--" when nothing is playing; a live stream with
+          unknown length still shows its elapsed time. */}
+      {(duration > 0 || value > 0) && (
+        <div className="progress-times">
+          <span>{formatTime(value)}</span>
+          <span>{duration > 0 ? formatTime(duration) : ""}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -1178,6 +1182,9 @@ function QueueRow({
         <div>
           <strong>{item.title}</strong>
           <small>{item.artist}</small>
+          {/* On phones the requested-by/ETA columns have no headers, so the same
+              facts are composed into the meta cell as one labelled line. */}
+          <small className="queue-row__request">Requested by {item.requestedBy} · ~{item.etaMinutes} min</small>
         </div>
       )}
       <span>{item.requestedBy}</span>
