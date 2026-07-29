@@ -1,0 +1,6947 @@
+import request from "supertest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { createApp, maintainVisiblePlaybackQueueForTests, nextQueueItemForPlayback, prewarmSpotifySearchCaches, refreshLmsForTests, resetRefreshStateForTests, sameContinuingPlayback, shouldNudgePlayback, syncVisibleQueueWithCurrentTrack } from "../server/app.js";
+import { clearLibraryCaches } from "../server/library.js";
+import { addQueueItem, appState, config, removeQueueItem, updateNowPlaying, updatePlayback, updateSpotifyStatus } from "../server/state.js";
+import { createPlaylistStore } from "../server/playlists.js";
+import { createCurationStore } from "../server/curation.js";
+import { createTapStore } from "../server/tapStore.js";
+import { verifyTag } from "../server/tapToken.js";
+import { __archiveServiceTestHooks } from "../server/archiveService.js";
+import crypto from "node:crypto";
+
+const tinyMp3 = Buffer.from(
+  "SUQzBAAAAAAAIlRTU0UAAAAOAAADTGF2ZjYyLjMuMTAwAAAAAAAAAAAAAAD/+0DAAAAAAAAAAAAAAAAAAAAAAABJbmZvAAAADwAAAAUAAAK+AGhoaGhoaGhoaGhoaGhoaGhoaGiOjo6Ojo6Ojo6Ojo6Ojo6Ojo6OjrS0tLS0tLS0tLS0tLS0tLS0tLS02tra2tra2tra2tra2tra2tra2tr//////////////////////////wAAAABMYXZjNjIuMTEAAAAAAAAAAAAAAAAkAwYAAAAAAAACvhC6F/0AAAAAAP/7EMQAA8AAAaQAAAAgAAA0gAAABExBTUUzLjEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//sQxCmDwAABpAAAACAAADSAAAAEVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVX/+xDEUwPAAAGkAAAAIAAANIAAAARVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVf/7EMR8g8AAAaQAAAAgAAA0gAAABFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//sQxKYDwAABpAAAACAAADSAAAAEVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU=",
+  "base64"
+);
+
+const mockLms = {
+  async status() {
+    return {
+      id: "player-1",
+      name: "Test Speaker",
+      connected: true,
+      online: true,
+      mode: "play",
+      volume: 44,
+      detail: "test player connected"
+    };
+  },
+  async nowPlaying() {
+    return {
+      id: "track-1",
+      title: "Test Song",
+      artist: "Test Artist",
+      album: "Test Album",
+      duration: 100,
+      elapsed: 20,
+      canSeek: true,
+      art: "api/artwork/test-cover",
+      source: "LMS"
+    };
+  },
+  async control() {
+    return "ok";
+  },
+  async playTrack() {
+    return "ok";
+  },
+  async spotifySearch() {
+    return [{ id: "spotify:1", title: "Headlines", artist: "Drake", source: "Spotify", uri: "spotify:track:0000000000000000000101", kind: "track" }];
+  },
+  async spotifyLibrary() {
+    return [{ id: "spotify:playlist:1", title: "Test Playlist", artist: "Spotify", source: "Spotify playlist", uri: "spotify:playlist:1", kind: "playlist" }];
+  },
+  async spotifyChildren() {
+    return [{ id: "spotify:track:0000000000000000000102", title: "Playlist Track", artist: "Spotify", source: "Spotify", uri: "spotify:track:0000000000000000000102", kind: "track" }];
+  },
+  async artwork() {
+    return { contentType: "image/jpeg", bytes: Buffer.from("fake-jpeg") };
+  },
+  async spotifyStatus() {
+    return { configured: true, reachable: true, detail: "Spotty detected" };
+  },
+  async musicInfoStatus() {
+    return { configured: false, reachable: true, detail: "Plugin not enabled" };
+  },
+  async rescanLibrary() {
+    return { result: {} };
+  }
+};
+
+describe("Cloud Squeeze API", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("returns speaker and now playing state", async () => {
+    const response = await request(createApp({ lms: mockLms })).get("/api/state").expect(200);
+    expect(response.body.player.connected).toBe(true);
+    expect(response.body.nowPlaying.title).toBe("Test Song");
+  });
+
+  it("falls back to Spotty browse when archive Web API scan is rate-limited", async () => {
+    const spotifyEnvKeys = ["SPOTIFY_REFRESH_TOKEN", "SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET", "SPOTIFY_WEB_MAX_RETRIES"] as const;
+    const originalEnv = Object.fromEntries(spotifyEnvKeys.map((key) => [key, process.env[key]]));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    process.env.SPOTIFY_REFRESH_TOKEN = "refresh-token";
+    process.env.SPOTIFY_CLIENT_ID = "client-id";
+    process.env.SPOTIFY_CLIENT_SECRET = "client-secret";
+    process.env.SPOTIFY_WEB_MAX_RETRIES = "0";
+    __archiveServiceTestHooks.resetSpotifyWebForTests();
+    const lms = {
+      ...mockLms,
+      async spotifyLibrary(_playerId: string, type: string) {
+        return type === "playlists"
+          ? [{ title: "Archive", uri: "spotify:playlist:archive", browseId: "8.0", kind: "playlist" }]
+          : [];
+      },
+      async spotifyChildren() {
+        return [];
+      }
+    };
+    vi.stubGlobal("fetch", vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ access_token: "access-token", expires_in: 3600 })
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        headers: { get: () => "60" },
+        text: async () => "Too many requests",
+        json: async () => ({ error: "rate limited" })
+      }));
+
+    try {
+      const response = await request(createApp({ lms })).post("/api/archive/scan").expect(200);
+
+      expect(response.body).toMatchObject({ ok: true, scanning: false, queued: 0, playlists: 1 });
+      expect(response.body.scan.scanning).toBe(false);
+      expect(response.body.scan.watching).toEqual([expect.objectContaining({ name: "Archive", trackCount: 0 })]);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("falling back to Spotty browse"));
+      expect(fetch).toHaveBeenCalledTimes(2);
+
+      const second = await request(createApp({ lms })).post("/api/archive/scan").expect(200);
+
+      expect(second.body).toMatchObject({ ok: true, scanning: false, queued: 0, playlists: 1 });
+      expect(second.body.scan.scanning).toBe(false);
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+      for (const key of spotifyEnvKeys) {
+        const original = originalEnv[key];
+        if (original === undefined) delete process.env[key];
+        else process.env[key] = original;
+      }
+      __archiveServiceTestHooks.resetSpotifyWebForTests();
+    }
+  });
+
+  it("accepts the full local search limit used by typed library searches", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-full-search-"));
+    config.musicSourceDir = root;
+    try {
+      await fs.writeFile(path.join(root, "Artist - Search Match.mp3"), "ID3");
+      const response = await request(createApp({ lms: mockLms }))
+        .get("/api/library/search?q=match&limit=2000&source=local")
+        .expect(200);
+
+      expect(response.body.results).toEqual([expect.objectContaining({ title: "Search Match" })]);
+      await request(createApp({ lms: mockLms }))
+        .get("/api/library/search?q=match&limit=2001&source=local")
+        .expect(400);
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns bounded LMS artwork enrichment for local search rows", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-art-search-"));
+    config.musicSourceDir = root;
+    try {
+      const trackPath = path.join(root, "Artist - Art Match.mp3");
+      await fs.writeFile(trackPath, "ID3");
+      let enrichmentLimit = 0;
+      const response = await request(createApp({
+        lms: {
+          ...mockLms,
+          async enrichLocalArtwork(tracks: Array<{ title: string; path?: string }>, options?: { limit?: number }) {
+            enrichmentLimit = Number(options?.limit || 0);
+            return tracks.map((track) => ({ ...track, art: "api/artwork/local-cover" }));
+          }
+        }
+      }))
+        .get("/api/library/search?q=art&limit=10&source=local")
+        .expect(200);
+
+      expect(response.body.results[0]).toMatchObject({ title: "Art Match", art: "api/artwork/local-cover" });
+      expect(enrichmentLimit).toBeGreaterThan(0);
+      expect(enrichmentLimit).toBeLessThanOrEqual(60);
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("shares in-flight enriched local search results across identical requests", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-enriched-search-cache-"));
+    config.musicSourceDir = root;
+    try {
+      await fs.writeFile(path.join(root, "Artist - Cached Art.mp3"), "ID3");
+      let enrichCalls = 0;
+      const app = createApp({
+        lms: {
+          ...mockLms,
+          async enrichLocalArtwork(tracks: Array<{ title: string; path?: string }>) {
+            enrichCalls += 1;
+            await new Promise((resolve) => setTimeout(resolve, 25));
+            return tracks.map((track) => ({ ...track, art: "api/artwork/cached-cover" }));
+          }
+        }
+      });
+      const [first, second, third] = await Promise.all([
+        request(app).get("/api/library/search?q=cached&limit=10&source=local").expect(200),
+        request(app).get("/api/library/search?q=cached&limit=10&source=local").expect(200),
+        request(app).get("/api/library/search?q=cached&limit=10&source=local").expect(200)
+      ]);
+
+      expect(enrichCalls).toBe(1);
+      for (const response of [first, second, third]) {
+        expect(response.body.results[0]).toMatchObject({ title: "Cached Art", art: "api/artwork/cached-cover" });
+      }
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("inherits local artwork across tracks in the same folder", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-art-inherit-"));
+    config.musicSourceDir = root;
+    try {
+      const albumDir = path.join(root, "Collection", "Shared Album");
+      await fs.mkdir(albumDir, { recursive: true });
+      await fs.writeFile(path.join(albumDir, "Artist - Inherit Source.mp3"), "ID3");
+      await fs.writeFile(path.join(albumDir, "Artist - Inherit Missing.mp3"), "ID3");
+      const response = await request(createApp({
+        lms: {
+          ...mockLms,
+          async enrichLocalArtwork(tracks: Array<{ title: string }>) {
+            return tracks.map((track) => track.title === "Inherit Source" ? { ...track, art: "api/artwork/shared-cover" } : track);
+          }
+        }
+      }))
+        .get("/api/library/search?q=inherit&limit=10&source=local")
+        .expect(200);
+
+      expect(response.body.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({ title: "Inherit Source", art: "api/artwork/shared-cover" }),
+        expect.objectContaining({ title: "Inherit Missing", art: "api/artwork/shared-cover" })
+      ]));
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("enriches uploaded search rows with external artwork when tags have no embedded cover", async () => {
+    const previousUploadDir = config.uploadDir;
+    const previousAllowNetwork = process.env.TRACK_INFO_ALLOW_NETWORK_IN_TESTS;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-upload-art-"));
+    config.uploadDir = root;
+    process.env.TRACK_INFO_ALLOW_NETWORK_IN_TESTS = "1";
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.startsWith("https://itunes.apple.com/search")) {
+        return {
+          ok: true,
+          json: async () => ({
+            results: [{ artworkUrl100: "https://is1-ssl.mzstatic.com/image/thumb/Music/test/100x100bb.jpg" }]
+          })
+        };
+      }
+      return { ok: false, json: async () => ({}) };
+    }));
+    try {
+      await fs.writeFile(path.join(root, "Drake - Shabang.mp3"), "ID3");
+      const response = await request(createApp({ lms: mockLms }))
+        .get("/api/library/search?q=shabang&limit=10&source=uploaded")
+        .expect(200);
+
+      expect(response.body.results[0]).toMatchObject({
+        title: "Shabang",
+        source: "Uploaded",
+        art: "api/image-proxy?url=https%3A%2F%2Fis1-ssl.mzstatic.com%2Fimage%2Fthumb%2FMusic%2Ftest%2F600x600bb.jpg"
+      });
+    } finally {
+      config.uploadDir = previousUploadDir;
+      if (previousAllowNetwork === undefined) delete process.env.TRACK_INFO_ALLOW_NETWORK_IN_TESTS;
+      else process.env.TRACK_INFO_ALLOW_NETWORK_IN_TESTS = previousAllowNetwork;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses exact Spotify artwork matches for uploaded search rows", async () => {
+    const previousUploadDir = config.uploadDir;
+    const previousPlayer = { ...appState.player };
+    const previousSpotify = { ...appState.services.spotify };
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-upload-spotify-art-"));
+    config.uploadDir = root;
+    appState.player = { ...appState.player, id: "player-1", connected: true, online: true };
+    updateSpotifyStatus({ configured: true, reachable: true, detail: "Spotty detected" });
+    try {
+      await fs.writeFile(path.join(root, "Drake - Shabang.mp3"), "ID3");
+      const response = await request(createApp({
+        lms: {
+          ...mockLms,
+          async spotifySearch() {
+            return [
+              { title: "Wrong Song", artist: "Drake", art: "https://i.scdn.co/image/wrong", uri: "spotify:track:wrong", kind: "track" },
+              { title: "Shabang", artist: "Drake", art: "https://i.scdn.co/image/right", uri: "spotify:track:right", kind: "track" }
+            ];
+          }
+        }
+      }))
+        .get("/api/library/search?q=shabang&limit=10&source=uploaded")
+        .expect(200);
+
+      expect(response.body.results[0]).toMatchObject({
+        title: "Shabang",
+        source: "Uploaded",
+        art: "https://i.scdn.co/image/right"
+      });
+    } finally {
+      config.uploadDir = previousUploadDir;
+      appState.player = previousPlayer;
+      updateSpotifyStatus(previousSpotify);
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses exact Spotify artwork matches for local search rows missing LMS art", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const previousPlayer = { ...appState.player };
+    const previousSpotify = { ...appState.services.spotify };
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-local-spotify-art-"));
+    config.musicSourceDir = root;
+    appState.player = { ...appState.player, id: "player-1", connected: true, online: true };
+    updateSpotifyStatus({ configured: true, reachable: true, detail: "Spotty detected" });
+    try {
+      await fs.writeFile(path.join(root, "Juice WRLD - Lucid Dreams.mp3"), "ID3");
+      const response = await request(createApp({
+        lms: {
+          ...mockLms,
+          async enrichLocalArtwork(tracks: Array<{ title: string }>) {
+            return tracks;
+          },
+          async spotifySearch() {
+            return [
+              { title: "Wrong Song", artist: "Juice WRLD", art: "https://i.scdn.co/image/wrong", uri: "spotify:track:wrong", kind: "track" },
+              { title: "Lucid Dreams", artist: "Juice WRLD", art: "https://i.scdn.co/image/right", uri: "spotify:track:right", kind: "track" }
+            ];
+          }
+        }
+      }))
+        .get("/api/library/search?q=lucid&limit=10&source=local")
+        .expect(200);
+
+      expect(response.body.results[0]).toMatchObject({
+        title: "Lucid Dreams",
+        source: "Local library",
+        art: "https://i.scdn.co/image/right"
+      });
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      appState.player = previousPlayer;
+      updateSpotifyStatus(previousSpotify);
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("inherits fallback local artwork across tracks in the same folder", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const previousPlayer = { ...appState.player };
+    const previousSpotify = { ...appState.services.spotify };
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-local-fallback-inherit-"));
+    config.musicSourceDir = root;
+    appState.player = { ...appState.player, id: "player-1", connected: true, online: true };
+    updateSpotifyStatus({ configured: true, reachable: true, detail: "Spotty detected" });
+    try {
+      const albumDir = path.join(root, "Collection", "Shared Fallback");
+      await fs.mkdir(albumDir, { recursive: true });
+      await fs.writeFile(path.join(albumDir, "Artist - Fallback Source.mp3"), "ID3");
+      await fs.writeFile(path.join(albumDir, "Artist - Fallback Mate.mp3"), "ID3");
+      const response = await request(createApp({
+        lms: {
+          ...mockLms,
+          async enrichLocalArtwork(tracks: Array<{ title: string }>) {
+            return tracks;
+          },
+          async spotifySearch(_playerId: string, query: string) {
+            return query.toLowerCase().includes("fallback source")
+              ? [{ title: "Fallback Source", artist: "Artist", art: "https://i.scdn.co/image/fallback", uri: "spotify:track:fallback", kind: "track" }]
+              : [];
+          }
+        }
+      }))
+        .get("/api/library/search?q=fallback&limit=10&source=local")
+        .expect(200);
+
+      expect(response.body.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({ title: "Fallback Source", art: "https://i.scdn.co/image/fallback" }),
+        expect.objectContaining({ title: "Fallback Mate", art: "https://i.scdn.co/image/fallback" })
+      ]));
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      appState.player = previousPlayer;
+      updateSpotifyStatus(previousSpotify);
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not wait for slow Spotify artwork before using external uploaded artwork", async () => {
+    const previousUploadDir = config.uploadDir;
+    const previousAllowNetwork = process.env.TRACK_INFO_ALLOW_NETWORK_IN_TESTS;
+    const previousPlayer = { ...appState.player };
+    const previousSpotify = { ...appState.services.spotify };
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-upload-fast-art-"));
+    config.uploadDir = root;
+    process.env.TRACK_INFO_ALLOW_NETWORK_IN_TESTS = "1";
+    appState.player = { ...appState.player, id: "player-1", connected: true, online: true };
+    updateSpotifyStatus({ configured: true, reachable: true, detail: "Spotty detected" });
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.startsWith("https://itunes.apple.com/search")) {
+        return {
+          ok: true,
+          json: async () => ({
+            results: [{ artworkUrl100: "https://is1-ssl.mzstatic.com/image/thumb/Music/fast/100x100bb.jpg" }]
+          })
+        };
+      }
+      return { ok: false, json: async () => ({}) };
+    }));
+    try {
+      await fs.writeFile(path.join(root, "Jackson Ivy - Sleep Paralysis.mp3"), "ID3");
+      const response = await request(createApp({
+        lms: {
+          ...mockLms,
+          async spotifySearch() {
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            return [{ title: "Sleep Paralysis", artist: "Jackson Ivy", art: "https://i.scdn.co/image/slow", uri: "spotify:track:slow", kind: "track" }];
+          }
+        }
+      }))
+        .get("/api/library/search?q=sleep&limit=10&source=uploaded")
+        .expect(200);
+
+      expect(response.body.results[0]).toMatchObject({
+        title: "Sleep Paralysis",
+        source: "Uploaded",
+        art: "api/image-proxy?url=https%3A%2F%2Fis1-ssl.mzstatic.com%2Fimage%2Fthumb%2FMusic%2Ffast%2F600x600bb.jpg"
+      });
+    } finally {
+      config.uploadDir = previousUploadDir;
+      appState.player = previousPlayer;
+      updateSpotifyStatus(previousSpotify);
+      if (previousAllowNetwork === undefined) delete process.env.TRACK_INFO_ALLOW_NETWORK_IN_TESTS;
+      else process.env.TRACK_INFO_ALLOW_NETWORK_IN_TESTS = previousAllowNetwork;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves uploaded artwork and tags when LMS now playing metadata is weaker", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "player-1", connected: true, online: true, mode: "stop" };
+    const uploaded = {
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      album: "Uploaded",
+      source: "Uploaded",
+      path: "/music/uploads/Sleep Paralysis-Jackson Ivy.mp3",
+      art: "https://covers.example/sleep.jpg"
+    };
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async nowPlaying() {
+          return {
+            id: "local-uploaded",
+            title: "Sleep Paralysis Jackson Ivy",
+            artist: "",
+            album: "",
+            source: "LMS",
+            path: uploaded.path,
+            duration: 158,
+            elapsed: 0,
+            canSeek: true,
+            art: null
+          };
+        }
+      }
+    }))
+      .post("/api/player/track")
+      .send({ action: "play-now", track: uploaded })
+      .expect(200);
+
+    expect(response.body.nowPlaying).toMatchObject({
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      album: "Uploaded",
+      source: "Uploaded",
+      art: "https://covers.example/sleep.jpg",
+      duration: 158
+    });
+  });
+
+  it("keeps uploaded artwork and tags during LMS polling refreshes", async () => {
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    appState.nowPlaying = {
+      id: "local-uploaded",
+      title: "Shabang",
+      artist: "Drake",
+      album: "uploads",
+      source: "Uploaded",
+      path: "/music/uploads/Drake - Shabang.mp3",
+      duration: 188,
+      elapsed: 0,
+      canSeek: true,
+      art: "https://covers.example/shabang.jpg"
+    };
+
+    await refreshLmsForTests({
+      ...mockLms,
+      async nowPlaying() {
+        return {
+          id: "local-uploaded",
+          title: "Drake - Shabang",
+          artist: "",
+          album: "",
+          source: "LMS",
+          path: "/music/uploads/Drake - Shabang.mp3",
+          duration: 188,
+          elapsed: 42,
+          canSeek: true,
+          art: null
+        };
+      }
+    }, { force: true });
+
+    expect(appState.nowPlaying).toMatchObject({
+      title: "Shabang",
+      artist: "Drake",
+      album: "uploads",
+      source: "Uploaded",
+      art: "https://covers.example/shabang.jpg",
+      elapsed: 42
+    });
+  });
+
+  it("prewarms the Spotify library tabs exposed in the UI during state refresh", async () => {
+    resetRefreshStateForTests();
+    const calls: string[] = [];
+    const childCalls: Array<{ title?: string; uri?: string }> = [];
+    const searchCalls: Array<{ query: string; limit: number }> = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async spotifySearch(_playerId: string, query: string, limit: number) {
+          searchCalls.push({ query, limit });
+          return [];
+        },
+        async spotifyLibrary(_playerId: string, type: string) {
+          calls.push(type);
+          if (type === "playlists") {
+            return [
+              { title: "First Playlist", uri: "spotify:playlist:first", kind: "playlist", browseId: "8.0" },
+              { title: "Second Playlist", uri: "spotify:playlist:second", kind: "playlist", browseId: "8.1" }
+            ];
+          }
+          if (type === "home") {
+            return [
+              { title: "First Playlist Duplicate", uri: "spotify:playlist:first", kind: "playlist", browseId: "0.0" },
+              { title: "Daily Mix", uri: "spotify:playlist:daily", kind: "playlist", browseId: "0.1" }
+            ];
+          }
+          if (type === "artists") {
+            return [
+              { title: "Ado", uri: "spotify:artist:ado", kind: "artist", browseId: "7.0" },
+              { title: "Aimer", uri: "spotify:artist:aimer", kind: "artist", browseId: "7.1" },
+              { title: "Ado Duplicate", uri: "spotify:artist:ado", kind: "artist", browseId: "7.2" }
+            ];
+          }
+          return [];
+        },
+        async spotifyChildren(_playerId: string, item: { title?: string; uri?: string }) {
+          childCalls.push(item);
+          return [];
+        }
+      }
+    });
+
+    await request(app).get("/api/state").expect(200);
+    await vi.waitFor(() => expect(childCalls).toHaveLength(5));
+    await vi.waitFor(() => expect(searchCalls).toEqual(expect.arrayContaining([
+      { query: "drake", limit: 50 },
+      { query: "juice wrld", limit: 50 },
+      { query: "the weeknd", limit: 50 },
+      { query: "travis scott", limit: 50 }
+    ])));
+
+    expect(calls).toEqual(expect.arrayContaining(["playlists", "home", "artists", "tracks"]));
+    expect(childCalls.map((item) => item.uri)).toEqual(expect.arrayContaining([
+      "spotify:playlist:first",
+      "spotify:playlist:second",
+      "spotify:playlist:daily",
+      "spotify:artist:ado",
+      "spotify:artist:aimer"
+    ]));
+  });
+
+  it("adds queue items and rejects duplicates", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const app = createApp({ lms: mockLms });
+    const payload = { title: "Unit Test Track", artist: "Tester", path: "/music/test/unit-test-track.mp3", requestedBy: "vitest" };
+    const created = await request(app).post("/api/queue").send(payload).expect(201);
+    expect(created.body.title).toBe(payload.title);
+    expect(created.body.requestedBy).toBe("guest");
+    await request(app).post("/api/queue").send(payload).expect(409);
+  });
+
+  it("keeps manually queued songs advancing after the current playing track ends", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "player-1", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = {
+      id: "current-track",
+      title: "Current Track",
+      artist: "Tester",
+      album: "",
+      source: "LMS",
+      duration: 100,
+      elapsed: 20,
+      canSeek: true,
+      art: null,
+      path: "/music/test/current-track.mp3"
+    };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, appManagedPlayback: false, previousTracks: [] };
+    const played: Array<{ title?: string; path?: string }> = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async playTrack(_playerId: string, track: { title?: string; path?: string }) {
+          played.push(track);
+          return "ok";
+        },
+        async nowPlaying() {
+          return {
+            id: "current-track",
+            title: "Current Track",
+            artist: "Tester",
+            album: "",
+            source: "LMS",
+            duration: 100,
+            elapsed: 100,
+            canSeek: true,
+            art: null,
+            path: "/music/test/current-track.mp3"
+          };
+        }
+      }
+    });
+
+    await request(app)
+      .post("/api/queue")
+      .send({ title: "Queued After Current", artist: "Tester", path: "/music/test/queued-after-current.mp3" })
+      .expect(201);
+
+    expect(appState.playback.appManagedPlayback).toBe(true);
+
+    await maintainVisiblePlaybackQueueForTests(
+      {
+        ...mockLms,
+        async playTrack(_playerId: string, track: { title?: string; path?: string }) {
+          played.push(track);
+          return "ok";
+        }
+      },
+      { id: "player-1", mode: "stopped" },
+      appState.nowPlaying
+    );
+
+    expect(played).toEqual([expect.objectContaining({ title: "Queued After Current" })]);
+    expect(appState.queue).toEqual([]);
+    expect(appState.nowPlaying.title).toBe("Queued After Current");
+    expect(appState.playback.previousTracks[0]).toMatchObject({ title: "Current Track" });
+  });
+
+  it("deduplicates direct queue posts by playable key instead of title", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const app = createApp({ lms: mockLms });
+
+    await request(app)
+      .post("/api/queue")
+      .send({ title: "Same Title", artist: "Artist A", path: "/music/test/same-title-a.mp3" })
+      .expect(201);
+    await request(app)
+      .post("/api/queue")
+      .send({ title: "Same Title", artist: "Artist B", path: "/music/test/same-title-b.mp3" })
+      .expect(201);
+    await request(app)
+      .post("/api/queue")
+      .send({ title: "Renamed Same File", artist: "Artist C", path: "/music/test/same-title-a.mp3" })
+      .expect(409);
+
+    expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Same Title", "Same Title"]);
+  });
+
+  it("clears the visible queue and disables generated queue modes", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: true, smartQueue: true, lastShuffleRefillAt: 123, lastShuffleSeed: "stale", lastSmartQueueBase: "stale" };
+    addQueueItem({ title: "Manual Leftover", artist: "Tester", path: "/music/test/manual-leftover.mp3", requestedBy: "guest" });
+    addQueueItem({ title: "Generated Leftover", artist: "Tester", uri: "spotify:track:0000000000000000000301", source: "Spotify", requestedBy: "smart shuffle" });
+
+    const response = await request(createApp({ lms: mockLms })).delete("/api/queue").expect(200);
+
+    expect(response.body.removed.map((item: { title: string }) => item.title)).toEqual(["Manual Leftover", "Generated Leftover"]);
+    expect(response.body.queue).toEqual([]);
+    expect(response.body.playback).toMatchObject({ shuffle: false, smartQueue: false, lastShuffleRefillAt: 0, lastShuffleSeed: "", lastSmartQueueBase: "" });
+    expect(appState.queue).toEqual([]);
+  });
+
+  it("trims queue text fields and rejects whitespace-only titles", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const app = createApp({ lms: mockLms });
+    await request(app).post("/api/queue").send({ title: "   ", artist: "Tester" }).expect(400);
+
+    const created = await request(app)
+      .post("/api/queue")
+      .send({ title: "  Trimmed Track  ", artist: "  Trimmed Artist  ", path: "  /music/test/trimmed-track.mp3  ", requestedBy: "  guest  " })
+      .expect(201);
+
+    expect(created.body).toMatchObject({ title: "Trimmed Track", artist: "Trimmed Artist", requestedBy: "guest" });
+  });
+
+  it("rejects text-only queue rows that transport cannot play", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const response = await request(createApp({ lms: mockLms }))
+      .post("/api/queue")
+      .send({ title: "Text Only", artist: "Tester" })
+      .expect(400);
+
+    expect(response.body.error).toBe("Playable local path, LMS track id, or Spotify URI is required");
+    expect(appState.queue).toHaveLength(0);
+  });
+
+  it("rejects malformed direct queue item fields before mutating queue state", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const app = createApp({ lms: mockLms });
+
+    await request(app).post("/api/queue").send({ title: "Extra Queue", path: "/music/test/extra-queue.mp3", extra: true }).expect(400);
+    await request(app).post("/api/queue").send({ title: "Array Path Queue", path: [] }).expect(400);
+    await request(app).post("/api/queue").send({ title: "Object Id Queue", lmsTrackId: { x: 1 } }).expect(400);
+    await request(app).post("/api/queue").send({ title: "Array Uri Queue", uri: ["spotify:track:0000000000000000000101"], kind: "track", source: "Spotify" }).expect(400);
+
+    expect(appState.queue).toHaveLength(0);
+  });
+
+  it("rejects nonexistent local paths when strict public validation is enabled", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const previousStrict = process.env.STRICT_PUBLIC_TRACK_VALIDATION;
+    const previousMusicDir = config.musicSourceDir;
+    const previousUploadDir = config.uploadDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-strict-paths-"));
+    const uploads = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-strict-uploads-"));
+    const realPath = path.join(root, "real.mp3");
+    await fs.writeFile(realPath, Buffer.from("ID3"));
+    process.env.STRICT_PUBLIC_TRACK_VALIDATION = "1";
+    config.musicSourceDir = root;
+    config.uploadDir = uploads;
+    try {
+      const app = createApp({ lms: mockLms });
+      await request(app)
+        .post("/api/player/track")
+        .send({ action: "add-queue", track: { title: "Missing Local", artist: "Tester", path: path.join(root, "missing.mp3") } })
+        .expect(400);
+
+      await request(app)
+        .post("/api/player/track")
+        .send({ action: "add-queue", track: { title: "Real Local", artist: "Tester", path: realPath } })
+        .expect(200);
+
+      expect(appState.queue).toEqual([expect.objectContaining({ title: "Real Local", path: realPath })]);
+    } finally {
+      if (previousStrict === undefined) delete process.env.STRICT_PUBLIC_TRACK_VALIDATION;
+      else process.env.STRICT_PUBLIC_TRACK_VALIDATION = previousStrict;
+      config.musicSourceDir = previousMusicDir;
+      config.uploadDir = previousUploadDir;
+      await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(uploads, { recursive: true, force: true });
+    }
+  });
+
+  it("edits reorders and removes queue items", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const app = createApp({ lms: mockLms });
+    const first = await request(app).post("/api/queue").send({ title: "First", artist: "Tester", path: "/music/test/first.mp3" }).expect(201);
+    const second = await request(app).post("/api/queue").send({ title: "Second", artist: "Tester", path: "/music/test/second.mp3" }).expect(201);
+
+    const edited = await request(app).patch(`/api/queue/${first.body.id}`).send({ title: "Edited First" }).expect(200);
+    expect(edited.body.item.title).toBe("Edited First");
+    await request(app).patch(`/api/queue/${first.body.id}`).send({ title: "   " }).expect(400);
+
+    const moved = await request(app).post(`/api/queue/${second.body.id}/move`).send({ direction: "up" }).expect(200);
+    const movedIds = moved.body.queue.map((item: { id: string }) => item.id);
+    expect(movedIds.indexOf(second.body.id)).toBeLessThan(movedIds.indexOf(first.body.id));
+
+    const removed = await request(app).delete(`/api/queue/${second.body.id}`).expect(200);
+    expect(removed.body.queue.some((item: { id: string }) => item.id === second.body.id)).toBe(false);
+  });
+
+  it("rejects invalid queue move requests", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const app = createApp({ lms: mockLms });
+    const item = await request(app).post("/api/queue").send({ title: "Move Me", artist: "Tester", path: "/music/test/move-me.mp3" }).expect(201);
+
+    await request(app).post(`/api/queue/${item.body.id}/move`).send({ direction: "up" }).expect(200);
+    await request(app).post(`/api/queue/${item.body.id}/move`).send({ direction: "sideways" }).expect(400);
+    await request(app).post(`/api/queue/${item.body.id}/move`).send({ direction: null }).expect(400);
+    await request(app).post(`/api/queue/${item.body.id}/move`).send({ direction: [] }).expect(400);
+    await request(app).post(`/api/queue/${item.body.id}/move`).send({ direction: "0" }).expect(400);
+    await request(app).post(`/api/queue/${item.body.id}/move`).send({ index: "0" }).expect(400);
+    await request(app).post(`/api/queue/${item.body.id}/move`).send({ direction: "down", extra: true }).expect(400);
+    await request(app).post(`/api/queue/${item.body.id}/move`).send({ index: 99 }).expect(400);
+    await request(app).post("/api/queue/not-real/move").send({ direction: "up" }).expect(404);
+    expect(appState.queue.map((queued) => queued.id)).toEqual([item.body.id]);
+  });
+
+  it("generates unique queue ids for rapid inserts", () => {
+    appState.queue.splice(0, appState.queue.length);
+    const first = addQueueItem({ title: "Rapid One", artist: "Tester" });
+    const second = addQueueItem({ title: "Rapid Two", artist: "Tester" });
+    expect(first.id).not.toBe(second.id);
+  });
+
+  it("does not record generated shuffle rows as recent user picks", () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.recentPicks.splice(0, appState.recentPicks.length);
+
+    addQueueItem({ title: "Generated Pick", artist: "Tester", requestedBy: "smart shuffle", path: "/music/generated.mp3" });
+    addQueueItem({ title: "Manual Pick", artist: "Tester", requestedBy: "guest", path: "/music/manual.mp3" });
+
+    expect(appState.recentPicks).toEqual([
+      expect.objectContaining({ title: "Manual Pick", artist: "Tester", status: "Queued" }),
+    ]);
+  });
+
+  it("removes recent pick entries when queued rows are removed", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.recentPicks.splice(0, appState.recentPicks.length);
+
+    const item = addQueueItem({ title: "Remove Recent", artist: "Tester", requestedBy: "guest", path: "/music/remove.mp3" });
+    expect(appState.recentPicks).toEqual([
+      expect.objectContaining({ id: item.id, title: "Remove Recent", artist: "Tester", status: "Queued" }),
+    ]);
+
+    await request(createApp({ lms: mockLms }))
+      .patch(`/api/queue/${item.id}`)
+      .send({ title: "Remove Recent Edited", artist: "Edited Tester" })
+      .expect(200);
+    expect(appState.recentPicks).toEqual([
+      expect.objectContaining({ id: item.id, title: "Remove Recent Edited", artist: "Edited Tester", status: "Queued" }),
+    ]);
+
+    removeQueueItem(item.id);
+
+    expect(appState.recentPicks).toEqual([]);
+  });
+
+  it("tracks recent picks by queue id when duplicate songs are queued", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.recentPicks.splice(0, appState.recentPicks.length);
+
+    const first = addQueueItem({ title: "Same Song", artist: "Tester", requestedBy: "guest", path: "/music/one.mp3" });
+    const second = addQueueItem({ title: "Same Song", artist: "Tester", requestedBy: "guest", path: "/music/two.mp3" });
+
+    await request(createApp({ lms: mockLms }))
+      .patch(`/api/queue/${first.id}`)
+      .send({ title: "Edited Same Song", artist: "Tester" })
+      .expect(200);
+
+    expect(appState.recentPicks).toEqual([
+      expect.objectContaining({ id: second.id, title: "Same Song", artist: "Tester", status: "Queued" }),
+      expect.objectContaining({ id: first.id, title: "Edited Same Song", artist: "Tester", status: "Queued" }),
+    ]);
+
+    removeQueueItem(second.id);
+
+    expect(appState.recentPicks).toEqual([
+      expect.objectContaining({ id: first.id, title: "Edited Same Song", artist: "Tester", status: "Queued" }),
+    ]);
+  });
+
+  it("returns a compact error for malformed JSON bodies", async () => {
+    const response = await request(createApp({ lms: mockLms }))
+      .post("/api/player/playback")
+      .set("content-type", "application/json")
+      .send("{bad-json")
+      .expect(400);
+
+    expect(response.body).toEqual({ error: "Invalid JSON request body" });
+  });
+
+  it("updates player volume", async () => {
+    const response = await request(createApp({ lms: mockLms })).post("/api/player/volume").send({ volume: 33 }).expect(200);
+    expect(response.body.volume).toBe(33);
+  });
+
+  it("does not mutate volume when LMS volume control fails", async () => {
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, volume: 44 };
+    const lms = {
+      ...mockLms,
+      async control() {
+        throw new Error("LMS volume failed");
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/volume").send({ volume: 33 }).expect(502);
+
+    expect(response.body.error).toContain("LMS volume failed");
+    expect(appState.player.volume).toBe(44);
+  });
+
+  it("rejects invalid volume values", async () => {
+    const app = createApp({ lms: mockLms });
+
+    await request(app).post("/api/player/volume").send({ volume: "loud" }).expect(400);
+    await request(app).post("/api/player/volume").send({ volume: null }).expect(400);
+    await request(app).post("/api/player/volume").send({ volume: "" }).expect(400);
+    await request(app).post("/api/player/volume").send({ volume: false }).expect(400);
+    await request(app).post("/api/player/volume").send({ volume: [] }).expect(400);
+    await request(app).post("/api/player/volume").send({ volume: -1 }).expect(400);
+    await request(app).post("/api/player/volume").send({ volume: 101 }).expect(400);
+  });
+
+  it("rejects extra volume command fields before sending LMS controls", async () => {
+    const controls: Array<{ action: string; value: unknown }> = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string, value: unknown) {
+          controls.push({ action, value });
+          return "ok";
+        }
+      }
+    });
+
+    await request(app).post("/api/player/volume").send({ volume: 45, extra: true }).expect(400);
+    await request(app).post("/api/player/volume").send({ volume: 45, seconds: 10 }).expect(400);
+
+    expect(controls).toEqual([]);
+  });
+
+  it("does not mutate player mode when play pause or stop control fails", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
+    updateNowPlaying({ id: "stale-track", title: "Stale Track", artist: "Tester", source: "LMS" });
+    const lms = {
+      ...mockLms,
+      async control() {
+        throw new Error("LMS control failed");
+      }
+    };
+
+    await request(createApp({ lms })).post("/api/player/play").expect(502);
+    expect(appState.player.mode).toBe("stop");
+
+    appState.player = { ...appState.player, mode: "play" };
+    await request(createApp({ lms })).post("/api/player/pause").expect(502);
+    expect(appState.player.mode).toBe("play");
+
+    await request(createApp({ lms })).post("/api/player/stop").expect(502);
+    expect(appState.player.mode).toBe("play");
+    expect(appState.nowPlaying.title).toBe("Stale Track");
+  });
+
+  it("plays the visible queue when play is pressed while stopped", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
+    updateNowPlaying({ id: "idle", title: "No track playing", artist: "Connect a player or request a song", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null });
+    addQueueItem({ title: "Queued Play", artist: "Tester", path: "/music/test/queued-play.mp3", requestedBy: "guest" });
+    const played: Array<{ action: string; title?: string }> = [];
+    const controls: string[] = [];
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async playTrack(_playerId: string, track: { title?: string }, action: string) {
+          played.push({ action, title: track.title });
+          return "ok";
+        },
+        async control(_playerId: string, action: string) {
+          controls.push(action);
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/play")
+      .expect(200);
+
+    expect(response.body.action).toBe("visible-queue-play");
+    expect(response.body.nowPlaying.title).toBe("Queued Play");
+    expect(response.body.queue).toHaveLength(0);
+    expect(played).toEqual([{ action: "play-now", title: "Queued Play" }]);
+    expect(controls).not.toContain("play");
+  });
+
+  it("rejects track payloads sent to the transport play endpoint", async () => {
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    const controls: string[] = [];
+    const played: string[] = [];
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string) {
+          controls.push(action);
+          return "ok";
+        },
+        async playTrack() {
+          played.push("playTrack");
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/play")
+      .send({ action: "play-now", track: { title: "Wrong Route", uri: "spotify:track:0000000000000000000001", kind: "track" } })
+      .expect(400);
+
+    expect(response.body.error).toBe("Unexpected transport control body");
+    expect(response.body.detail).toContain("/api/player/track");
+    expect(controls).toEqual([]);
+    expect(played).toEqual([]);
+  });
+
+  it("allows empty transport control bodies", async () => {
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    const controls: string[] = [];
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string) {
+          controls.push(action);
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/pause")
+      .send({})
+      .expect(200);
+
+    expect(response.body.mode).toBe("pause");
+    expect(controls).toEqual(["pause"]);
+  });
+
+  it("keeps app-managed playback when resuming a paused visible queue", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "pause" };
+    appState.playback = { ...appState.playback, appManagedPlayback: true, shuffle: false, smartQueue: false };
+    addQueueItem({ title: "Visible Next", artist: "Tester", requestedBy: "guest", path: "/music/visible-next.mp3" });
+    const controls: string[] = [];
+
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string) {
+          controls.push(action);
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/play")
+      .send({})
+      .expect(200);
+
+    expect(response.body.action).toBe("play");
+    expect(response.body.queue).toEqual([expect.objectContaining({ title: "Visible Next" })]);
+    expect(response.body.playback.appManagedPlayback).toBe(true);
+    expect(controls).toEqual(["play"]);
+    appState.queue.splice(0, appState.queue.length);
+  });
+
+  it("rejects non-json transport control bodies", async () => {
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    const controls: string[] = [];
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string) {
+          controls.push(action);
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/play")
+      .set("Content-Type", "text/plain")
+      .send("not-json")
+      .expect(400);
+
+    expect(response.body.error).toBe("Unexpected transport control body");
+    expect(controls).toEqual([]);
+  });
+
+  it("does not parse playback settings as a transport text body", async () => {
+    const app = createApp({ lms: mockLms });
+    const response = await request(app)
+      .post("/api/player/playback")
+      .send({ repeat: "all" })
+      .expect(200);
+
+    expect(response.body.playback.repeat).toBe("all");
+    await request(app).post("/api/player/playback").send({ repeat: "off" }).expect(200);
+  });
+
+  it("stops playback and clears stale now playing after LMS accepts stop", async () => {
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      manualShuffle: false,
+      smartQueue: false,
+      repeat: "off",
+      lastShuffleRefillAt: 12345,
+      lastShuffleSeed: "drake",
+      lastSmartQueueBase: "idle",
+      appManagedPlayback: true,
+      history: ["spotify:track:stale-history"],
+      previousTracks: [{ title: "Previous Track", artist: "Tester", path: "/music/previous.mp3", source: "Local library" }]
+    };
+    updateNowPlaying({ id: "stale-track", title: "Stale Track", artist: "Tester", source: "LMS", duration: 100, elapsed: 12 });
+    addQueueItem({ title: "Stale Queued Track", artist: "Tester", requestedBy: "guest", path: "/music/stale-queued.mp3" });
+    const controls: string[] = [];
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string) {
+          controls.push(action);
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/stop")
+      .expect(200);
+
+    expect(controls).toEqual(["stop"]);
+    expect(response.body.mode).toBe("stop");
+    expect(appState.player.mode).toBe("stop");
+    expect(appState.nowPlaying).toMatchObject({ id: "idle", title: "No track playing", elapsed: 0, canSeek: false });
+    expect(appState.queue).toEqual([]);
+    expect(response.body.queue).toEqual([]);
+    expect(appState.playback).toMatchObject({
+      shuffle: false,
+      manualShuffle: false,
+      smartQueue: false,
+      repeat: "off",
+      lastShuffleRefillAt: 0,
+      lastShuffleSeed: "",
+      lastSmartQueueBase: "",
+      appManagedPlayback: false,
+      history: [],
+      previousTracks: []
+    });
+    expect(response.body.playback).toMatchObject({
+      shuffle: false,
+      manualShuffle: false,
+      smartQueue: false,
+      repeat: "off",
+      lastShuffleRefillAt: 0,
+      lastShuffleSeed: "",
+      lastSmartQueueBase: "",
+      appManagedPlayback: false,
+      history: [],
+      previousTracks: []
+    });
+  });
+
+  it("clears stale manual shuffle when a manually shuffled queue ends", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      manualShuffle: true,
+      smartQueue: false,
+      appManagedPlayback: true,
+      history: ["manual-stale-history"],
+      previousTracks: [{ title: "Previous Track", artist: "Tester", path: "/music/previous.mp3", source: "Local library" }]
+    };
+    updateNowPlaying({ id: "last-manual-track", title: "Last Manual Track", artist: "Tester", source: "LMS", duration: 100, elapsed: 99, canSeek: true });
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async status() {
+          return { id: "hot-player", name: "Test Speaker", connected: true, online: true, mode: "stop", volume: 44 };
+        },
+        async nowPlaying() {
+          return { id: "idle", title: "No track playing", artist: "Connect a player or request a song", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null };
+        }
+      }
+    });
+
+    resetRefreshStateForTests();
+    const response = await request(app).get("/api/state").expect(200);
+
+    expect(response.body.nowPlaying).toMatchObject({ id: "idle", title: "No track playing" });
+    expect(response.body.playback).toMatchObject({
+      shuffle: false,
+      manualShuffle: false,
+      smartQueue: false,
+      appManagedPlayback: false,
+      history: [],
+      previousTracks: []
+    });
+  });
+
+  it("seeks the current player position", async () => {
+    updateNowPlaying({ id: "seek-track", title: "Seek Track", artist: "Tester", source: "LMS", duration: 100, elapsed: 12, canSeek: true });
+    const response = await request(createApp({ lms: mockLms })).post("/api/player/seek").send({ seconds: 42 }).expect(200);
+    expect(response.body.ok).toBe(true);
+    expect(response.body.seconds).toBe(42);
+    expect(response.body.nowPlaying.canSeek).toBe(true);
+  });
+
+  it("rejects seek requests when no seekable track is playing", async () => {
+    const controls: Array<{ action: string; value?: number }> = [];
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
+    updateNowPlaying({ id: "idle", title: "No track playing", artist: "Connect a player or request a song", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null });
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string, value?: number) {
+          controls.push({ action, value });
+          return "ok";
+        }
+      }
+    })).post("/api/player/seek").send({ seconds: 999999 }).expect(409);
+
+    expect(response.body.error).toContain("No seekable track");
+    expect(appState.nowPlaying.elapsed).toBe(0);
+    expect(controls).toEqual([]);
+  });
+
+  it("clamps seek requests to the current track duration", async () => {
+    const controls: Array<{ action: string; value?: number }> = [];
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "pause" };
+    updateNowPlaying({ id: "seek-track", title: "Seek Track", artist: "Tester", source: "LMS", duration: 100, elapsed: 12, canSeek: true });
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string, value?: number) {
+          controls.push({ action, value });
+          return "ok";
+        }
+      }
+    })).post("/api/player/seek").send({ seconds: 999999 }).expect(200);
+
+    expect(response.body.seconds).toBe(100);
+    expect(response.body.nowPlaying.elapsed).toBe(100);
+    expect(controls).toEqual([{ action: "seek", value: 100 }]);
+  });
+
+  it("keeps public elapsed near the seek target while LMS catches up", async () => {
+    resetRefreshStateForTests();
+    appState.player = { ...appState.player, id: "player-1", connected: true, online: true, mode: "play" };
+    updateNowPlaying({
+      id: "track-1",
+      title: "Test Song",
+      artist: "Test Artist",
+      album: "Test Album",
+      source: "LMS",
+      duration: 100,
+      elapsed: 20,
+      canSeek: true,
+      art: null
+    });
+
+    const app = createApp({ lms: mockLms });
+    await request(app).post("/api/player/seek").send({ seconds: 42 }).expect(200);
+    const state = await request(app).get("/api/state").expect(200);
+
+    expect(state.body.nowPlaying.title).toBe("Test Song");
+    expect(state.body.nowPlaying.elapsed).toBeGreaterThan(41.9);
+    expect(state.body.nowPlaying.elapsed).toBeLessThan(45);
+  });
+
+  it("estimates elapsed after LMS has reported real track progress", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:01.000Z"));
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    let elapsed = 4;
+    const stuckElapsedLms = {
+      ...mockLms,
+      async nowPlaying() {
+        return {
+          id: "spotify:track:stuck-elapsed",
+          title: "Stuck Elapsed",
+          artist: "Tester",
+          album: "",
+          source: "Spotify",
+          uri: "spotify:track:stuck-elapsed",
+          duration: 100,
+          elapsed,
+          canSeek: true,
+          art: null
+        };
+      }
+    };
+
+    await refreshLmsForTests(stuckElapsedLms, { force: true });
+    const initialElapsed = appState.nowPlaying.elapsed;
+    elapsed = 4;
+    vi.advanceTimersByTime(3200);
+    await refreshLmsForTests(stuckElapsedLms, { force: true });
+    const laterElapsed = appState.nowPlaying.elapsed;
+
+    expect(initialElapsed).toBe(4);
+    expect(laterElapsed).toBeGreaterThan(7);
+    expect(laterElapsed).toBeLessThan(8);
+  });
+
+  it("does not estimate progress for a Spotify track stuck at zero", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:01.000Z"));
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    const stuckSpotifyLms = {
+      ...mockLms,
+      async nowPlaying() {
+        return {
+          id: "spotify:track:not-streaming",
+          title: "Not Streaming",
+          artist: "Tester",
+          album: "",
+          source: "Spotify",
+          uri: "spotify:track:not-streaming",
+          duration: 100,
+          elapsed: 0,
+          canSeek: true,
+          art: null
+        };
+      }
+    };
+
+    await refreshLmsForTests(stuckSpotifyLms, { force: true });
+    vi.advanceTimersByTime(3200);
+    await refreshLmsForTests(stuckSpotifyLms, { force: true });
+
+    expect(appState.nowPlaying.elapsed).toBe(0);
+  });
+
+  it("does not consume the visible queue immediately after seeking near the end", async () => {
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "player-1", connected: true, online: true, mode: "play" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, appManagedPlayback: true, previousTracks: [], history: [] };
+    updateNowPlaying({
+      id: "current",
+      title: "Current Track",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      path: "/music/current.mp3",
+      duration: 100,
+      elapsed: 20,
+      canSeek: true,
+      art: null
+    });
+    addQueueItem({ title: "Queued Track", artist: "Tester", requestedBy: "guest", path: "/music/queued.mp3" });
+    const played: string[] = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async nowPlaying() {
+          return { id: "current", title: "Current Track", artist: "Tester", album: "", source: "Local library", path: "/music/current.mp3", duration: 100, elapsed: 99, canSeek: true, art: null };
+        },
+        async control() {
+          return "ok";
+        },
+        async playTrack(_playerId: string, track: { title?: string }) {
+          played.push(String(track.title || ""));
+          return "ok";
+        }
+      }
+    });
+
+    await request(app).post("/api/player/seek").send({ seconds: 99 }).expect(200);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(played).toEqual([]);
+    expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Queued Track"]);
+    expect(appState.nowPlaying.title).toBe("Current Track");
+  });
+
+  it("rejects invalid seek values", async () => {
+    const app = createApp({ lms: mockLms });
+
+    await request(app).post("/api/player/seek").send({ seconds: "later" }).expect(400);
+    await request(app).post("/api/player/seek").send({ seconds: null }).expect(400);
+    await request(app).post("/api/player/seek").send({ seconds: "" }).expect(400);
+    await request(app).post("/api/player/seek").send({ seconds: false }).expect(400);
+    await request(app).post("/api/player/seek").send({ seconds: [] }).expect(400);
+    await request(app).post("/api/player/seek").send({ seconds: -1 }).expect(400);
+  });
+
+  it("rejects extra seek command fields before checking playback state", async () => {
+    const controls: Array<{ action: string; value: unknown }> = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string, value: unknown) {
+          controls.push({ action, value });
+          return "ok";
+        }
+      }
+    });
+
+    await request(app).post("/api/player/seek").send({ seconds: 0, extra: true }).expect(400);
+    await request(app).post("/api/player/seek").send({ seconds: 0, volume: 45 }).expect(400);
+
+    expect(controls).toEqual([]);
+  });
+
+  it("restarts the current track when previous has no app history", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = {
+      id: "spotify://track:fresh", title: "Fresh Song", artist: "Someone", album: "", source: "Spotify",
+      duration: 200, elapsed: 5, canSeek: true, art: null, uri: "spotify:track:fresh"
+    };
+    appState.playback = { ...appState.playback, previousTracks: [] };
+    const controls: Array<{ action: string; value?: number }> = [];
+    const lms = {
+      ...mockLms,
+      async status() { return { id: "hot-player", connected: true, online: true, mode: "play" }; },
+      async nowPlaying() { return appState.nowPlaying; },
+      async control(_playerId: string, action: string, value?: number) {
+        controls.push({ action, value });
+        return "ok";
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/previous").expect(200);
+
+    // A fresh track with nothing before it should restart from 0, not no-op.
+    expect(response.body.action).toBe("restart");
+    expect(controls).toContainEqual({ action: "seek", value: 0 });
+  });
+
+  it("does not resume stale LMS playback when previous is pressed after stop", async () => {
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
+    appState.playback = { ...appState.playback, previousTracks: [] };
+    updateNowPlaying({ id: "idle", title: "No track playing", artist: "Connect a player or request a song", album: "", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null });
+    const controls: Array<{ action: string }> = [];
+    const lms = {
+      ...mockLms,
+      async status() {
+        throw new Error("status should not block stopped previous");
+      },
+      async control(_playerId: string, action: string) {
+        controls.push({ action });
+        return "ok";
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/previous").expect(200);
+
+    expect(response.body.action).toBe("noop");
+    expect(response.body.mode).toBe("stop");
+    expect(response.body.nowPlaying.title).toBe("No track playing");
+    expect(controls).toEqual([]);
+  });
+
+  it("does not call LMS previous when app previous history is empty", async () => {
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "pause" };
+    appState.playback = { ...appState.playback, previousTracks: [] };
+    const controls: string[] = [];
+    const lms = {
+      ...mockLms,
+      async control(_playerId: string, action: string) {
+        controls.push(action);
+        return "ok";
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/previous").expect(200);
+
+    expect(response.body.action).toBe("noop");
+    expect(controls).toEqual([]);
+    expect(appState.player.mode).toBe("pause");
+  });
+
+  it("plays the previous app track before falling back to LMS previous", async () => {
+    const played: Array<{ action: string; track: { title?: string; path?: string } }> = [];
+    const controls: Array<{ action: string }> = [];
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = {
+      id: "current",
+      title: "Current Track",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 10,
+      canSeek: true,
+      art: null,
+      path: "/music/current.mp3"
+    };
+    appState.playback = {
+      ...appState.playback,
+      previousTracks: [{ title: "Previous Track", artist: "Tester", path: "/music/previous.mp3", source: "Local library" }]
+    };
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string; path?: string }, action: string) {
+        played.push({ action, track });
+        return "ok";
+      },
+      async control(_playerId: string, action: string) {
+        controls.push({ action });
+        return "ok";
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/previous").expect(200);
+
+    expect(response.body.action).toBe("app-previous");
+    expect(response.body.nowPlaying.title).toBe("Previous Track");
+    expect(played).toEqual([{ action: "play-now", track: expect.objectContaining({ title: "Previous Track", path: "/music/previous.mp3" }) }]);
+    expect(controls).not.toContainEqual({ action: "previous" });
+    expect(appState.playback.previousTracks).toEqual([]);
+  });
+
+  it("skips stale current-track entries when restoring app previous history", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = {
+      id: "current",
+      title: "Current Track",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 12,
+      canSeek: true,
+      art: null,
+      path: "/music/current.mp3"
+    };
+    appState.playback = {
+      ...appState.playback,
+      appManagedPlayback: true,
+      previousTracks: [
+        { title: "Current Track", artist: "Tester", path: "/music/current.mp3", source: "Local library" },
+        { title: "Actual Previous", artist: "Tester", path: "/music/actual-previous.mp3", source: "Local library" }
+      ]
+    };
+    const played: Array<{ action: string; title?: string; path?: string }> = [];
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string; path?: string }, action: string) {
+        played.push({ action, title: track.title, path: track.path });
+        return "ok";
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/previous").expect(200);
+
+    expect(response.body.action).toBe("app-previous");
+    expect(response.body.nowPlaying).toMatchObject({ title: "Actual Previous", path: "/music/actual-previous.mp3" });
+    expect(played).toEqual([{ action: "play-now", title: "Actual Previous", path: "/music/actual-previous.mp3" }]);
+    expect(response.body.queue).toEqual([expect.objectContaining({ title: "Current Track", path: "/music/current.mp3" })]);
+    expect(response.body.playback.previousTracks).toEqual([]);
+  });
+
+  it("consumes queued previous target before requeueing the forward track", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = {
+      id: "sleep",
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      album: "",
+      source: "Uploaded",
+      duration: 100,
+      elapsed: 12,
+      canSeek: true,
+      art: null,
+      path: "/music/uploads/Sleep Paralysis-Jackson Ivy.mp3"
+    };
+    addQueueItem({ title: "Shabang", artist: "Drake", path: "/music/uploads/Drake - Shabang.mp3", source: "Uploaded", requestedBy: "guest" });
+    appState.playback = {
+      ...appState.playback,
+      appManagedPlayback: true,
+      previousTracks: [{ title: "Shabang", artist: "Drake", path: "/music/uploads/Drake - Shabang.mp3", source: "Uploaded" }]
+    };
+    const played: Array<{ action: string; title?: string; path?: string }> = [];
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string; path?: string }, action: string) {
+        played.push({ action, title: track.title, path: track.path });
+        return "ok";
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/previous").expect(200);
+
+    expect(response.body.action).toBe("app-previous");
+    expect(response.body.nowPlaying).toMatchObject({ title: "Shabang", path: "/music/uploads/Drake - Shabang.mp3" });
+    expect(played).toEqual([{ action: "play-now", title: "Shabang", path: "/music/uploads/Drake - Shabang.mp3" }]);
+    expect(response.body.queue).toEqual([expect.objectContaining({ title: "Sleep Paralysis", path: "/music/uploads/Sleep Paralysis-Jackson Ivy.mp3" })]);
+    expect(response.body.queue).toHaveLength(1);
+  });
+
+  it("restarts the current track (not a previous step) when history only contains self entries", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = {
+      id: "current",
+      title: "Current Track",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 12,
+      canSeek: true,
+      art: null,
+      path: "/music/current.mp3"
+    };
+    appState.playback = {
+      ...appState.playback,
+      previousTracks: [
+        { title: "Current Track", artist: "Tester", path: "/music/current.mp3", source: "Local library" }
+      ]
+    };
+    const played: string[] = [];
+    const controls: Array<{ action: string; value?: number }> = [];
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string }) {
+        played.push(String(track.title || ""));
+        return "ok";
+      },
+      async control(_playerId: string, action: string, value?: number) {
+        controls.push({ action, value });
+        return "ok";
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/previous").expect(200);
+
+    // Only self-entries in history => nothing earlier to step to => restart current.
+    expect(response.body.action).toBe("restart");
+    expect(controls).toContainEqual({ action: "seek", value: 0 });
+    expect(played).toEqual([]);
+    expect(response.body.playback.previousTracks).toEqual([]);
+  });
+
+  it("restores the forward track after app previous so next can return to it", async () => {
+    const played: Array<{ action: string; track: { title?: string; uri?: string } }> = [];
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = {
+      id: "spotify://track:current",
+      title: "Current Forward",
+      artist: "Tester",
+      album: "",
+      source: "Spotify",
+      duration: 100,
+      elapsed: 10,
+      canSeek: true,
+      art: null,
+      uri: "spotify:track:current"
+    };
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      manualShuffle: true,
+      smartQueue: false,
+      appManagedPlayback: true,
+      previousTracks: [{ title: "Previous Track", artist: "Tester", uri: "spotify:track:previous", source: "Spotify", kind: "track" }]
+    };
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string; uri?: string }, action: string) {
+        played.push({ action, track });
+        return "ok";
+      },
+      async nowPlaying() {
+        return appState.nowPlaying;
+      }
+    };
+    const app = createApp({ lms });
+
+    const previous = await request(app).post("/api/player/previous").expect(200);
+    const next = await request(app).post("/api/player/next").expect(200);
+
+    expect(previous.body.action).toBe("app-previous");
+    expect(previous.body.queue).toEqual([expect.objectContaining({ title: "Current Forward", uri: "spotify:track:current" })]);
+    expect(next.body.action).toBe("visible-queue-next");
+    expect(next.body.nowPlaying.title).toBe("Current Forward");
+    expect(played).toEqual([
+      { action: "play-now", track: expect.objectContaining({ title: "Previous Track", uri: "spotify:track:previous" }) },
+      { action: "play-now", track: expect.objectContaining({ title: "Current Forward", uri: "spotify:track:current" }) }
+    ]);
+  });
+
+  it("preserves generated queue ownership when app previous restores the forward track", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = {
+      id: "spotify://track:current-smart",
+      title: "Current Smart",
+      artist: "Tester",
+      album: "",
+      source: "Spotify",
+      duration: 100,
+      elapsed: 10,
+      canSeek: true,
+      art: null,
+      uri: "spotify:track:current-smart",
+      requestedBy: "smart shuffle"
+    };
+    appState.playback = {
+      ...appState.playback,
+      smartQueue: true,
+      shuffle: false,
+      manualShuffle: false,
+      appManagedPlayback: true,
+      previousTracks: [{ title: "Previous Track", artist: "Tester", uri: "spotify:track:previous", source: "Spotify", kind: "track" }]
+    };
+
+    const previous = await request(createApp({ lms: mockLms })).post("/api/player/previous").expect(200);
+
+    expect(previous.body.action).toBe("app-previous");
+    expect(previous.body.queue).toEqual([
+      expect.objectContaining({ title: "Current Smart", uri: "spotify:track:current-smart", requestedBy: "smart shuffle" })
+    ]);
+  });
+
+  it("keeps generated ownership after LMS refresh before app previous restores the forward track", async () => {
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = { id: "current", title: "Current", artist: "Tester", album: "", source: "Local library", duration: 100, elapsed: 10, canSeek: true, art: null, path: "/music/current.mp3" };
+    appState.playback = { ...appState.playback, smartQueue: true, shuffle: false, manualShuffle: false, previousTracks: [], appManagedPlayback: true };
+    addQueueItem({ title: "Generated Smart", artist: "Tester", uri: "spotify:track:generated-smart", source: "Spotify", kind: "track", requestedBy: "smart shuffle", art: "api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Fgenerated" });
+    const lms = {
+      ...mockLms,
+      async playTrack() {
+        return "ok";
+      },
+      async nowPlaying() {
+        return {
+          id: "spotify://track:generated-smart",
+          title: "Generated Smart",
+          artist: "Tester",
+          album: "",
+          source: "Spotify",
+          duration: 100,
+          elapsed: 2,
+          canSeek: true,
+          art: null,
+          uri: "spotify:track:generated-smart"
+        };
+      }
+    };
+    const app = createApp({ lms });
+
+    await request(app).post("/api/player/next").expect(200);
+    await refreshLmsForTests(lms, { force: true });
+    expect(appState.nowPlaying).toMatchObject({ title: "Generated Smart", requestedBy: "smart shuffle" });
+    const previous = await request(app).post("/api/player/previous").expect(200);
+
+    expect(previous.body.queue).toEqual([
+      expect.objectContaining({ title: "Generated Smart", uri: "spotify:track:generated-smart", requestedBy: "smart shuffle" })
+    ]);
+  });
+
+  it("does not duplicate the forward queue on repeated app previous presses", async () => {
+    const played: Array<{ action: string; track: { title?: string; uri?: string } }> = [];
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = {
+      id: "spotify://track:current",
+      title: "Current Forward",
+      artist: "Tester",
+      album: "",
+      source: "Spotify",
+      duration: 100,
+      elapsed: 10,
+      canSeek: true,
+      art: null,
+      uri: "spotify:track:current"
+    };
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      manualShuffle: true,
+      smartQueue: false,
+      appManagedPlayback: true,
+      previousTracks: [{ title: "Previous Track", artist: "Tester", uri: "spotify:track:previous", source: "Spotify", kind: "track" }]
+    };
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string; uri?: string }, action: string) {
+        played.push({ action, track });
+        return "ok";
+      },
+      async nowPlaying() {
+        return appState.nowPlaying;
+      }
+    };
+    const app = createApp({ lms });
+
+    const previous = await request(app).post("/api/player/previous").expect(200);
+    const repeatedPrevious = await request(app).post("/api/player/previous").expect(200);
+
+    expect(previous.body.action).toBe("app-previous");
+    // Second press: history is exhausted, so it restarts the (now-current) track
+    // rather than doing nothing — without re-touching the forward queue.
+    expect(repeatedPrevious.body.action).toBe("restart");
+    expect(appState.queue).toEqual([expect.objectContaining({ title: "Current Forward", uri: "spotify:track:current" })]);
+    expect(appState.playback.previousTracks).toEqual([]);
+    expect(played).toEqual([
+      { action: "play-now", track: expect.objectContaining({ title: "Previous Track", uri: "spotify:track:previous" }) }
+    ]);
+  });
+
+  it("remembers the pre-command current track when next playback updates LMS immediately", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = {
+      id: "current",
+      title: "Current Before Next",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 20,
+      canSeek: true,
+      art: null,
+      path: "/music/current-before-next.mp3"
+    };
+    appState.playback = { ...appState.playback, previousTracks: [], shuffle: false, smartQueue: false, appManagedPlayback: true };
+    addQueueItem({ title: "Queued Immediate", artist: "Tester", requestedBy: "guest", path: "/music/queued-immediate.mp3" });
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string; path?: string }) {
+        updateNowPlaying({
+          id: "queued",
+          title: track.title || "",
+          artist: "Tester",
+          album: "",
+          source: "Local library",
+          duration: 100,
+          elapsed: 0,
+          canSeek: true,
+          art: null,
+          path: track.path
+        });
+        return "ok";
+      },
+      async nowPlaying() {
+        return appState.nowPlaying;
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/next").send("").expect(200);
+
+    expect(response.body.action).toBe("visible-queue-next");
+    expect(response.body.nowPlaying.title).toBe("Queued Immediate");
+    expect(response.body.playback.previousTracks[0]).toMatchObject({
+      title: "Current Before Next",
+      path: "/music/current-before-next.mp3"
+    });
+  });
+
+  it("does not mutate previous history when app previous playback fails", async () => {
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = {
+      id: "current",
+      title: "Current Track",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 10,
+      canSeek: true,
+      art: null,
+      path: "/music/current.mp3"
+    };
+    const previousTrack = { title: "Previous Track", artist: "Tester", path: "/music/previous.mp3", source: "Local library" };
+    appState.playback = { ...appState.playback, previousTracks: [previousTrack] };
+    const lms = {
+      ...mockLms,
+      async playTrack() {
+        throw new Error("LMS refused previous playback");
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/previous").expect(502);
+
+    expect(response.body.error).toContain("LMS refused previous playback");
+    expect(appState.nowPlaying.title).toBe("Current Track");
+    expect(appState.player.mode).toBe("play");
+    expect(appState.playback.previousTracks).toEqual([expect.objectContaining(previousTrack)]);
+  });
+
+  it("remembers LMS-observed track changes for the previous button", async () => {
+    appState.playback = { ...appState.playback, previousTracks: [] };
+    appState.nowPlaying = {
+      id: "idle",
+      title: "No track playing",
+      artist: "Connect a player or request a song",
+      album: "",
+      source: "LMS",
+      duration: 0,
+      elapsed: 0,
+      canSeek: false,
+      art: null
+    };
+    const observedTracks = [
+      { id: "track-a", title: "Track A", artist: "Tester", album: "", source: "LMS", path: "/music/a.mp3", duration: 120, elapsed: 10, canSeek: true, art: null },
+      { id: "track-b", title: "Track B", artist: "Tester", album: "", source: "LMS", path: "/music/b.mp3", duration: 120, elapsed: 5, canSeek: true, art: null }
+    ];
+    const played: Array<{ action: string; track: { title?: string; path?: string } }> = [];
+    const controls: Array<{ action: string }> = [];
+    let nowPlayingIndex = 0;
+    const lms = {
+      ...mockLms,
+      async nowPlaying() {
+        return observedTracks[nowPlayingIndex];
+      },
+      async playTrack(_playerId: string, track: { title?: string; path?: string }, action: string) {
+        played.push({ action, track });
+        return "ok";
+      },
+      async control(_playerId: string, action: string) {
+        controls.push({ action });
+        return "ok";
+      }
+    };
+    const app = createApp({ lms });
+
+    resetRefreshStateForTests();
+    await request(app).get("/api/state").expect(200);
+    nowPlayingIndex = 1;
+    resetRefreshStateForTests();
+    const state = await request(app).get("/api/state").expect(200);
+
+    expect(state.body.nowPlaying.title).toBe("Track B");
+    expect(appState.playback.previousTracks[0]).toMatchObject({ title: "Track A", path: "/music/a.mp3" });
+
+    const previous = await request(app).post("/api/player/previous").expect(200);
+
+    expect(previous.body.action).toBe("app-previous");
+    expect(played).toEqual([{ action: "play-now", track: expect.objectContaining({ title: "Track A", path: "/music/a.mp3" }) }]);
+    expect(controls).not.toContainEqual({ action: "previous" });
+    expect(appState.playback.previousTracks).toEqual([]);
+    expect(appState.queue[0]).toMatchObject({ title: "Track B", path: "/music/b.mp3" });
+  });
+
+  it("keeps manual queue previous and next out of generated shuffle history", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.nowPlaying = {
+      id: "track-a",
+      title: "Track A",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      path: "/music/a.mp3",
+      duration: 120,
+      elapsed: 10,
+      canSeek: true,
+      art: null
+    };
+    appState.playback = {
+      ...appState.playback,
+      shuffle: false,
+      manualShuffle: false,
+      smartQueue: false,
+      history: [],
+      previousTracks: [],
+      appManagedPlayback: true
+    };
+    addQueueItem({ title: "Track B", artist: "Tester", source: "Local library", path: "/music/b.mp3", requestedBy: "guest" });
+    addQueueItem({ title: "Track C", artist: "Tester", source: "Local library", path: "/music/c.mp3", requestedBy: "guest" });
+
+    let observed = appState.nowPlaying;
+    const lms = {
+      ...mockLms,
+      async nowPlaying() {
+        return observed;
+      },
+      async playTrack(_playerId: string, track: typeof observed) {
+        observed = { ...observed, ...track, elapsed: 0, canSeek: true };
+        return "ok";
+      }
+    };
+    const app = createApp({ lms });
+
+    const next = await request(app).post("/api/player/next").expect(200);
+    expect(next.body.action).toBe("visible-queue-next");
+    expect(next.body.nowPlaying.title).toBe("Track B");
+    expect(next.body.queue.map((item: { title: string }) => item.title)).toEqual(["Track C"]);
+    expect(next.body.playback.history).toEqual([]);
+
+    const previous = await request(app).post("/api/player/previous").expect(200);
+    expect(previous.body.action).toBe("app-previous");
+    expect(previous.body.nowPlaying.title).toBe("Track A");
+    expect(previous.body.queue.map((item: { title: string }) => item.title)).toEqual(["Track B", "Track C"]);
+    expect(previous.body.playback.history).toEqual([]);
+
+    resetRefreshStateForTests();
+    const state = await request(app).get("/api/state").expect(200);
+    expect(state.body.nowPlaying.title).toBe("Track A");
+    expect(state.body.queue.map((item: { title: string }) => item.title)).toEqual(["Track B", "Track C"]);
+    expect(state.body.playback.history).toEqual([]);
+  });
+
+  it("remembers LMS-observed Spotify id-only tracks for the previous button", async () => {
+    appState.playback = { ...appState.playback, previousTracks: [] };
+    appState.nowPlaying = {
+      id: "idle",
+      title: "No track playing",
+      artist: "Connect a player or request a song",
+      album: "",
+      source: "LMS",
+      duration: 0,
+      elapsed: 0,
+      canSeek: false,
+      art: null
+    };
+    const observedTracks = [
+      { id: "spotify://track:29TPjc8wxfz4XMn21O7VsZ", title: "Sky", artist: "Playboi Carti", album: "", source: "Spotify", duration: 193, elapsed: 20, canSeek: true, art: null },
+      { id: "spotify://track:6IYcyuk3ob0NPmdAdURn1W", title: "Skyfull", artist: "Arjan Dhillon", album: "", source: "Spotify", duration: 200, elapsed: 3, canSeek: true, art: null }
+    ];
+    const played: Array<{ action: string; track: { title?: string; uri?: string } }> = [];
+    let nowPlayingIndex = 0;
+    const lms = {
+      ...mockLms,
+      async nowPlaying() {
+        return observedTracks[nowPlayingIndex];
+      },
+      async playTrack(_playerId: string, track: { title?: string; uri?: string }, action: string) {
+        played.push({ action, track });
+        return "ok";
+      }
+    };
+    const app = createApp({ lms });
+
+    resetRefreshStateForTests();
+    await request(app).get("/api/state").expect(200);
+    nowPlayingIndex = 1;
+    resetRefreshStateForTests();
+    const state = await request(app).get("/api/state").expect(200);
+
+    expect(state.body.nowPlaying.title).toBe("Skyfull");
+    expect(appState.playback.previousTracks[0]).toMatchObject({
+      title: "Sky",
+      uri: "spotify:track:29TPjc8wxfz4XMn21O7VsZ"
+    });
+
+    const previous = await request(app).post("/api/player/previous").expect(200);
+
+    expect(previous.body.action).toBe("app-previous");
+    expect(played).toEqual([
+      {
+        action: "play-now",
+        track: expect.objectContaining({ title: "Sky", uri: "spotify:track:29TPjc8wxfz4XMn21O7VsZ" })
+      }
+    ]);
+  });
+
+  it("no-ops previous with the hot player id without waiting on a fresh status call", async () => {
+    appState.playback = { ...appState.playback, previousTracks: [] };
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true };
+    // Idle (nothing playing) => no track to restart and no previous => clean no-op,
+    // which is what lets us assert the status call is never made.
+    appState.nowPlaying = { id: "idle", title: "No track playing", artist: "", album: "", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null };
+    const controls: Array<{ playerId: string; action: string }> = [];
+    const lms = {
+      ...mockLms,
+      async status() {
+        throw new Error("status should not block previous");
+      },
+      async control(playerId: string, action: string) {
+        controls.push({ playerId, action });
+        return "ok";
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/previous").expect(200);
+
+    expect(response.body.action).toBe("noop");
+    expect(controls).toEqual([]);
+  });
+
+  it("proxies LMS artwork", async () => {
+    const response = await request(createApp({ lms: mockLms })).get("/api/artwork/test-cover").expect(200);
+    expect(response.headers["content-type"]).toContain("image/jpeg");
+    expect(response.text || response.body.toString()).toContain("fake-jpeg");
+  });
+
+  it("limits image proxy responses to real images under the size cap", async () => {
+    const imageBytes = Buffer.from("fake-image");
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("too-large-header")) {
+        return new Response(Buffer.from(""), { status: 200, headers: { "content-type": "image/jpeg", "content-length": String(9 * 1024 * 1024) } });
+      }
+      if (url.includes("too-large-body")) {
+        return new Response(Buffer.alloc(9 * 1024 * 1024), { status: 200, headers: { "content-type": "image/jpeg" } });
+      }
+      if (url.includes("not-image")) {
+        return new Response("<html></html>", { status: 200, headers: { "content-type": "text/html" } });
+      }
+      if (url.includes("missing")) {
+        return new Response("missing", { status: 404, headers: { "content-type": "text/plain" } });
+      }
+      return new Response(imageBytes, { status: 200, headers: { "content-type": "image/jpeg", "content-length": String(imageBytes.length) } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const app = createApp({ lms: mockLms });
+
+    const ok = await request(app).get("/api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Fok").expect(200);
+    const cachedOk = await request(app).get("/api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Fok").expect(200);
+    await request(app).get("/api/image-proxy?url=https%3A%2F%2Fblend-playlist-covers.spotifycdn.com%2Fv2%2Fblend_DEFAULT-gold-yellow-en.jpg").expect(200);
+    await request(app).get("/api/image-proxy?url=https%3A%2F%2Fseed-mix-image.spotifycdn.com%2Fv6%2Fimg%2Fdesc%2FAlternative%2520Indie%2Fen%2Fdefault").expect(200);
+    await request(app).get("/api/image-proxy?url=https%3A%2F%2Fevil.example%2Fcover.jpg").expect(400);
+    await request(app).get("/api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Fnot-image").expect(415);
+    await request(app).get("/api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Ftoo-large-header").expect(413);
+    await request(app).get("/api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Ftoo-large-body").expect(413);
+    const missing = await request(app).get("/api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Fmissing").expect(204);
+
+    expect(ok.headers["content-type"]).toContain("image/jpeg");
+    expect(ok.headers["cache-control"]).toContain("immutable");
+    expect(missing.headers["cache-control"]).toContain("max-age=3600");
+    expect(ok.body.toString()).toBe("fake-image");
+    expect(cachedOk.body.toString()).toBe("fake-image");
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("/ok"))).toHaveLength(1);
+    expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining("evil.example"), expect.anything());
+  });
+
+  it("returns speaker connection setup guidance", async () => {
+    const response = await request(createApp({ lms: mockLms })).get("/api/speaker/connect-guide").expect(200);
+    expect(response.body.serverHost).toBeTruthy();
+    expect(response.body.steps).toContain("Open the Squeezebox Server option.");
+    expect(response.body.player.connected).toBe(true);
+  });
+
+  it("keeps single-track queue requests out of the hidden LMS playlist", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.admin = { ...appState.admin, maxQueuePerUser: 3 };
+    const played: Array<{ action: string; track: { title?: string } }> = [];
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string }, action: string) {
+        played.push({ action, track });
+        return "ok";
+      }
+    };
+    const response = await request(createApp({ lms: mockLms }))
+      .post("/api/player/track")
+      .send({ action: "play-next", track: { title: "Local", artist: "Tester", path: "/music/test/local.mp3" } })
+      .expect(200);
+    expect(response.body.ok).toBe(true);
+    expect(response.body.action).toBe("play-next");
+    expect(response.body.queued.title).toBe("Local");
+    await request(createApp({ lms }))
+      .post("/api/player/track")
+      .send({ action: "play-next", track: { title: "Manual Next", artist: "Tester", path: "/music/test/manual.mp3" } })
+      .expect(200);
+    await request(createApp({ lms }))
+      .post("/api/player/track")
+      .send({ action: "add-queue", track: { title: "Manual Add", artist: "Tester", path: "/music/test/manual-add.mp3" } })
+      .expect(200);
+    expect(played).toHaveLength(0);
+  });
+
+  it("rejects Spotify containers as direct playback targets", async () => {
+    const app = createApp({ lms: mockLms });
+    const response = await request(app)
+      .post("/api/player/track")
+      .send({ action: "play-now", track: { title: "Drake", uri: "spotify:artist:3TVXtAsR1Inumwj472S9r4", kind: "artist", source: "Spotify artist" } })
+      .expect(400);
+
+    expect(response.body.error).toBe("Playable local path, LMS track id, or Spotify URI is required");
+  });
+
+  it("rejects malformed Spotify track URIs before they reach LMS", async () => {
+    const played: Array<{ action: string; track: { uri?: string } }> = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async playTrack(_playerId: string, track: { uri?: string }, action: string) {
+          played.push({ action, track });
+          return "ok";
+        }
+      }
+    });
+
+    const response = await request(app)
+      .post("/api/player/track")
+      .send({ action: "play-now", track: { title: "Bad Spotify ID", uri: "spotify:track:not-a-real-id", kind: "track", source: "Spotify" } })
+      .expect(400);
+
+    expect(response.body.error).toBe("Playable local path, LMS track id, or Spotify URI is required");
+    expect(played).toEqual([]);
+  });
+
+  it("rejects unknown Spotify play-now tracks even when their ids are well formed", async () => {
+    const played: Array<{ action: string; track: { uri?: string } }> = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async playTrack(_playerId: string, track: { uri?: string }, action: string) {
+          played.push({ action, track });
+          return "ok";
+        }
+      }
+    });
+
+    const response = await request(app)
+      .post("/api/player/track")
+      .send({ action: "play-now", track: { title: "Unknown Spotify", uri: "spotify:track:0000000000000000000199", kind: "track", source: "Spotify" } })
+      .expect(400);
+
+    expect(response.body.error).toContain("Cloud Squeeze search");
+    expect(played).toEqual([]);
+  });
+
+  it("allows Spotify play-now tracks returned by Cloud Squeeze search", async () => {
+    const played: Array<{ action: string; track: { uri?: string } }> = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async playTrack(_playerId: string, track: { uri?: string }, action: string) {
+          played.push({ action, track });
+          return "ok";
+        }
+      }
+    });
+    const search = await request(app).get("/api/spotify/search?q=drake").expect(200);
+    const track = search.body.results[0];
+
+    await request(app)
+      .post("/api/player/track")
+      .send({ action: "play-now", track })
+      .expect(200);
+
+    expect(played).toEqual([{ action: "play-now", track: expect.objectContaining({ uri: "spotify:track:0000000000000000000101" }) }]);
+  });
+
+  it("does not mutate now playing when direct play-now fails", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
+    appState.nowPlaying = {
+      id: "stable-current",
+      title: "Stable Current",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 20,
+      canSeek: true,
+      art: null,
+      path: "/music/test/stable-current.mp3"
+    };
+    appState.playback = { ...appState.playback, shuffle: true, smartQueue: false, history: ["stable-history"], previousTracks: [] };
+    addQueueItem({ title: "Generated Keeper", artist: "Tester", requestedBy: "shuffle", path: "/music/test/generated-keeper.mp3" });
+    const lms = {
+      ...mockLms,
+      async playTrack() {
+        throw new Error("LMS refused direct playback");
+      }
+    };
+
+    const response = await request(createApp({ lms }))
+      .post("/api/player/track")
+      .send({ action: "play-now", track: { title: "Failed Direct", artist: "Tester", path: "/music/test/failed-direct.mp3", source: "Local library" } })
+      .expect(502);
+
+    expect(response.body.error).toContain("LMS refused direct playback");
+    expect(appState.nowPlaying.title).toBe("Stable Current");
+    expect(appState.player.mode).toBe("stop");
+    expect(appState.playback).toMatchObject({ shuffle: true, smartQueue: false, history: ["stable-history"], previousTracks: [] });
+    expect(appState.queue).toEqual([expect.objectContaining({ title: "Generated Keeper" })]);
+  });
+
+  it("rejects unknown Spotify queue tracks even when their ids are well formed", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const app = createApp({ lms: mockLms });
+
+    await request(app)
+      .post("/api/player/track")
+      .send({ action: "add-queue", track: { title: "Unknown Spotify", uri: "spotify:track:0000000000000000000200", kind: "track", source: "Spotify" } })
+      .expect(400);
+
+    const batch = await request(app)
+      .post("/api/player/tracks")
+      .send({
+        action: "play-next",
+        tracks: [{ title: "Unknown Spotify Batch", uri: "spotify:track:0000000000000000000201", kind: "track", source: "Spotify" }]
+      })
+      .expect(400);
+
+    expect(batch.body.error).toBe("Spotify tracks must come from Cloud Squeeze search, playlist, or library results");
+    expect(appState.queue).toHaveLength(0);
+  });
+
+  it("allows Spotify queue tracks returned by Cloud Squeeze search", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const app = createApp({ lms: mockLms });
+    const search = await request(app).get("/api/spotify/search?q=drake").expect(200);
+    const track = search.body.results[0];
+
+    const response = await request(app)
+      .post("/api/player/tracks")
+      .send({ action: "add-queue", tracks: [track] })
+      .expect(200);
+
+    expect(response.body.queued).toHaveLength(1);
+    expect(response.body.queued[0].uri).toBe("spotify:track:0000000000000000000101");
+    expect(response.body.playback).toMatchObject(appState.playback);
+  });
+
+  it("canonicalizes known Spotify metadata before queueing or playback", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const played: Array<{ title?: string; artist?: string; uri?: string }> = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async playTrack(_playerId: string, track: { title?: string; artist?: string; uri?: string }) {
+          played.push(track);
+          return "ok";
+        }
+      }
+    });
+    const search = await request(app).get("/api/spotify/search?q=drake").expect(200);
+    const track = search.body.results[0];
+    const tampered = { ...track, title: "Wrong Visible Title", artist: "Wrong Artist", album: "Wrong Album", art: "wrong-art" };
+
+    const directQueue = await request(app)
+      .post("/api/queue")
+      .send(tampered)
+      .expect(201);
+
+    expect(directQueue.body).toMatchObject({ title: "Headlines", artist: "Drake", uri: "spotify:track:0000000000000000000101" });
+    appState.queue.splice(0, appState.queue.length);
+
+    const singleQueue = await request(app)
+      .post("/api/player/track")
+      .send({ action: "add-queue", track: tampered })
+      .expect(200);
+
+    expect(singleQueue.body.queued).toMatchObject({ title: "Headlines", artist: "Drake", uri: "spotify:track:0000000000000000000101" });
+    appState.queue.splice(0, appState.queue.length);
+
+    const batchQueue = await request(app)
+      .post("/api/player/tracks")
+      .send({ action: "add-queue", tracks: [tampered] })
+      .expect(200);
+
+    expect(batchQueue.body.queued[0]).toMatchObject({ title: "Headlines", artist: "Drake", uri: "spotify:track:0000000000000000000101" });
+
+    await request(app)
+      .post("/api/player/track")
+      .send({ action: "play-now", track: tampered })
+      .expect(200);
+
+    expect(played[0]).toMatchObject({ title: "Headlines", artist: "Drake", uri: "spotify:track:0000000000000000000101" });
+  });
+
+  it("keeps duplicate Spotify search results distinct by selected URI", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    updateSpotifyStatus({ configured: true, reachable: true, detail: "Spotty detected" });
+    const played: Array<{ title?: string; artist?: string; uri?: string }> = [];
+    const duplicateOne = {
+      id: "spotify:track:1111111111111111111111",
+      title: "Same Song",
+      artist: "Same Artist",
+      source: "Spotify",
+      uri: "spotify:track:1111111111111111111111",
+      kind: "track"
+    };
+    const duplicateTwo = {
+      id: "spotify:track:2222222222222222222222",
+      title: "Same Song",
+      artist: "Same Artist",
+      source: "Spotify",
+      uri: "spotify:track:2222222222222222222222",
+      kind: "track"
+    };
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async spotifySearch() {
+          return [duplicateOne, duplicateTwo];
+        },
+        async playTrack(_playerId: string, track: { title?: string; artist?: string; uri?: string }) {
+          played.push(track);
+          return "ok";
+        }
+      }
+    });
+    const search = await request(app).get("/api/spotify/search?q=same").expect(200);
+    const selected = search.body.results[1];
+
+    const queued = await request(app)
+      .post("/api/player/track")
+      .send({ action: "add-queue", track: selected })
+      .expect(200);
+
+    expect(queued.body.queued).toMatchObject({
+      title: "Same Song",
+      artist: "Same Artist",
+      uri: "spotify:track:2222222222222222222222"
+    });
+    appState.queue.splice(0, appState.queue.length);
+
+    await request(app)
+      .post("/api/player/track")
+      .send({ action: "play-now", track: selected })
+      .expect(200);
+
+    expect(played).toEqual([expect.objectContaining({ uri: "spotify:track:2222222222222222222222" })]);
+  });
+
+  it("preserves Spotify track URI case while canonicalizing metadata", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async spotifyLibrary() {
+          return [{ id: "spotify:track:AbCdEfGhIjKlMnOpQrStUv", title: "Mixed Case", artist: "Tester", source: "Spotify", uri: "spotify:track:AbCdEfGhIjKlMnOpQrStUv", kind: "track" }];
+        }
+      }
+    });
+    const library = await request(app).get("/api/spotify/library?type=tracks").expect(200);
+    const tampered = { ...library.body.results[0], title: "Wrong", artist: "Wrong" };
+
+    const response = await request(app)
+      .post("/api/player/track")
+      .send({ action: "add-queue", track: tampered })
+      .expect(200);
+
+    expect(response.body.queued).toMatchObject({
+      title: "Mixed Case",
+      artist: "Tester",
+      uri: "spotify:track:AbCdEfGhIjKlMnOpQrStUv"
+    });
+  });
+
+  it("preserves selected Spotify metadata when LMS normalizes the now playing title", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const previousSpotify = { ...appState.services.spotify };
+    updateSpotifyStatus({ configured: true, reachable: true, detail: "Spotty detected" });
+    const selected = {
+      id: "spotify:track:0WQiDwKJclirSYG9v5tayI",
+      title: "There Is a Light That Never Goes Out - 2011 Remaster",
+      artist: "The Smiths",
+      album: "The Queen Is Dead",
+      source: "Spotify",
+      uri: "spotify:track:0WQiDwKJclirSYG9v5tayI",
+      kind: "track",
+      art: "https://i.scdn.co/image/cover"
+    };
+    try {
+      const app = createApp({
+        lms: {
+          ...mockLms,
+          async spotifySearch() {
+            return [selected];
+          },
+          async nowPlaying() {
+            return {
+              id: "spotify://track:0WQiDwKJclirSYG9v5tayI",
+              title: "There Is a Light That Never Goes Out",
+              artist: "The Smiths",
+              album: "The Queen Is Dead",
+              source: "Spotify",
+              uri: "spotify:track:0WQiDwKJclirSYG9v5tayI",
+              duration: 244,
+              elapsed: 0,
+              canSeek: true,
+              art: null
+            };
+          }
+        }
+      });
+      const search = await request(app).get("/api/spotify/search?q=smiths").expect(200);
+      const track = search.body.results[0];
+
+      const response = await request(app)
+        .post("/api/player/track")
+        .send({ action: "play-now", track })
+        .expect(200);
+
+      expect(response.body.nowPlaying).toMatchObject({
+        title: "There Is a Light That Never Goes Out - 2011 Remaster",
+        artist: "The Smiths",
+        album: "The Queen Is Dead",
+        source: "Spotify",
+        uri: "spotify:track:0WQiDwKJclirSYG9v5tayI",
+        duration: 244,
+        canSeek: true,
+        art: "https://i.scdn.co/image/cover"
+      });
+    } finally {
+      updateSpotifyStatus(previousSpotify);
+    }
+  });
+
+  it("does not reject skipped Spotify rows beyond the public queue limit", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const previousMaxQueuePerUser = appState.admin.maxQueuePerUser;
+    const previousSpotify = { ...appState.services.spotify };
+    appState.admin = { ...appState.admin, maxQueuePerUser: 2 };
+    updateSpotifyStatus({ configured: true, reachable: true, detail: "Spotty detected" });
+    try {
+      addQueueItem({ title: "Existing Guest", artist: "Tester", path: "/music/test/existing-guest.mp3", requestedBy: "guest" });
+      const app = createApp({ lms: mockLms });
+      const search = await request(app).get("/api/spotify/search?q=drake").expect(200);
+      const knownTrack = search.body.results[0];
+      const unknownTrack = {
+        title: "Skipped Unknown Spotify",
+        uri: "spotify:track:0000000000000000000999",
+        kind: "track",
+        source: "Spotify"
+      };
+
+      const response = await request(app)
+        .post("/api/player/tracks")
+        .send({ action: "add-queue", tracks: [knownTrack, unknownTrack] })
+        .expect(200);
+
+      expect(response.body.accepted).toBe(1);
+      expect(response.body.rejected).toBe(1);
+      expect(response.body.queued).toEqual([expect.objectContaining({ uri: "spotify:track:0000000000000000000101" })]);
+      expect(appState.queue).toEqual(expect.arrayContaining([expect.objectContaining({ uri: "spotify:track:0000000000000000000101" })]));
+      expect(appState.queue).not.toEqual(expect.arrayContaining([expect.objectContaining({ uri: "spotify:track:0000000000000000000999" })]));
+    } finally {
+      appState.admin = { ...appState.admin, maxQueuePerUser: previousMaxQueuePerUser };
+      updateSpotifyStatus(previousSpotify);
+    }
+  });
+
+  it("does not reject skipped local rows beyond the public queue limit", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const previousMaxQueuePerUser = appState.admin.maxQueuePerUser;
+    const previousStrict = process.env.STRICT_PUBLIC_TRACK_VALIDATION;
+    const previousMusicDir = config.musicSourceDir;
+    const previousUploadDir = config.uploadDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-partial-local-"));
+    appState.admin = { ...appState.admin, maxQueuePerUser: 2 };
+    process.env.STRICT_PUBLIC_TRACK_VALIDATION = "1";
+    config.musicSourceDir = root;
+    config.uploadDir = path.join(root, "uploads");
+    try {
+      await fs.mkdir(config.uploadDir, { recursive: true });
+      const existingPath = path.join(root, "Existing Guest.mp3");
+      const acceptedPath = path.join(root, "Accepted Local.mp3");
+      await fs.writeFile(existingPath, "ID3");
+      await fs.writeFile(acceptedPath, "ID3");
+      addQueueItem({ title: "Existing Guest", artist: "Tester", path: existingPath, requestedBy: "guest" });
+      const missingPath = path.join(root, "Missing Local.mp3");
+
+      const response = await request(createApp({ lms: mockLms }))
+        .post("/api/player/tracks")
+        .send({
+          action: "add-queue",
+          tracks: [
+            { title: "Accepted Local", artist: "Tester", path: acceptedPath, source: "Local library" },
+            { title: "Missing Local", artist: "Tester", path: missingPath, source: "Local library" }
+          ]
+        })
+        .expect(200);
+
+      expect(response.body.accepted).toBe(1);
+      expect(response.body.rejected).toBe(1);
+      expect(response.body.queued).toEqual([expect.objectContaining({ title: "Accepted Local", path: acceptedPath })]);
+      expect(appState.queue).toEqual(expect.arrayContaining([expect.objectContaining({ title: "Accepted Local", path: acceptedPath })]));
+      expect(appState.queue).not.toEqual(expect.arrayContaining([expect.objectContaining({ title: "Missing Local" })]));
+    } finally {
+      appState.admin = { ...appState.admin, maxQueuePerUser: previousMaxQueuePerUser };
+      if (previousStrict === undefined) {
+        delete process.env.STRICT_PUBLIC_TRACK_VALIDATION;
+      } else {
+        process.env.STRICT_PUBLIC_TRACK_VALIDATION = previousStrict;
+      }
+      config.musicSourceDir = previousMusicDir;
+      config.uploadDir = previousUploadDir;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a cleared Spotify playlist batch isolated when shuffle is enabled", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    updateSpotifyStatus({ configured: true, reachable: true, detail: "Spotty detected" });
+    addQueueItem({ title: "Stale Local", artist: "Tester", path: "/music/test/stale-local.mp3", requestedBy: "guest" });
+    const playlistTracks = [
+      { id: "spotify:track:0000000000000000000401", title: "Playlist A", artist: "Tester", source: "Spotify", uri: "spotify:track:0000000000000000000401", kind: "track" },
+      { id: "spotify:track:0000000000000000000402", title: "Playlist B", artist: "Tester", source: "Spotify", uri: "spotify:track:0000000000000000000402", kind: "track" },
+      { id: "spotify:track:0000000000000000000403", title: "Playlist C", artist: "Tester", source: "Spotify", uri: "spotify:track:0000000000000000000403", kind: "track" }
+    ];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async spotifyChildren() {
+          return playlistTracks;
+        }
+      }
+    });
+
+    await request(app).get("/api/spotify/children?uri=spotify%3Aplaylist%3A1&kind=playlist").expect(200);
+    await request(app).delete("/api/queue").expect(200);
+    const queued = await request(app).post("/api/player/tracks").send({ action: "add-queue", tracks: playlistTracks }).expect(200);
+    const shuffled = await request(app).post("/api/player/playback").send({ shuffle: true, smartQueue: false }).expect(200);
+
+    const playlistUris = new Set(playlistTracks.map((track) => track.uri));
+    expect(queued.body.accepted).toBe(3);
+    expect(shuffled.body.queued).toHaveLength(3);
+    expect(shuffled.body.playback).toMatchObject({ shuffle: true, manualShuffle: true, smartQueue: false });
+    expect(shuffled.body.queue).toHaveLength(3);
+    expect(shuffled.body.queued.map((item: { uri?: string }) => item.uri)).toEqual(shuffled.body.queue.map((item: { uri?: string }) => item.uri));
+    expect(shuffled.body.queue.every((item: { uri?: string; requestedBy?: string }) => playlistUris.has(item.uri || "") && item.requestedBy === "guest")).toBe(true);
+    expect(shuffled.body.queue.some((item: { title: string }) => item.title === "Stale Local")).toBe(false);
+  });
+
+  it("changes visible queue order when manual shuffle is enabled", async () => {
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.99);
+    appState.queue.splice(0, appState.queue.length);
+    updatePlayback({ shuffle: false, manualShuffle: false, smartQueue: false, repeat: "off", history: [], previousTracks: [] });
+    addQueueItem({ title: "Manual A", artist: "Tester", uri: "spotify:track:0000000000000000000601", source: "Spotify", kind: "track", requestedBy: "guest" });
+    addQueueItem({ title: "Manual B", artist: "Tester", uri: "spotify:track:0000000000000000000602", source: "Spotify", kind: "track", requestedBy: "guest" });
+    try {
+      const response = await request(createApp({ lms: mockLms }))
+        .post("/api/player/playback")
+        .send({ shuffle: true, smartQueue: false })
+        .expect(200);
+
+      expect(response.body.playback).toMatchObject({ shuffle: true, manualShuffle: true, smartQueue: false });
+      expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Manual B", "Manual A"]);
+      expect(response.body.queued.map((item: { title: string }) => item.title)).toEqual(["Manual B", "Manual A"]);
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it("preserves manual shuffle state for a stopped visible queue", async () => {
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    addQueueItem({ title: "Queued A", artist: "Tester", uri: "spotify:track:0000000000000000000501", source: "Spotify", kind: "track", requestedBy: "guest" });
+    addQueueItem({ title: "Queued B", artist: "Tester", uri: "spotify:track:0000000000000000000502", source: "Spotify", kind: "track", requestedBy: "guest" });
+    updatePlayback({ shuffle: true, manualShuffle: true, smartQueue: false, appManagedPlayback: false, history: [], previousTracks: [] });
+
+    await refreshLmsForTests({
+      ...mockLms,
+      async status() {
+        return { id: "player-1", name: "Test Speaker", connected: true, online: true, mode: "stop", volume: 44, detail: "stopped" };
+      },
+      async nowPlaying() {
+        return { id: "idle", title: "No track playing", artist: "Connect a player or request a song", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null };
+      }
+    }, { force: true });
+
+    expect(appState.queue.map((item) => item.title)).toEqual(["Queued A", "Queued B"]);
+    expect(appState.playback).toMatchObject({ shuffle: true, manualShuffle: true, smartQueue: false });
+  });
+
+  it("rejects unknown single-track playback actions", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const beforeMode = appState.player.mode;
+    const beforeTitle = appState.nowPlaying.title;
+    const played: Array<{ action: string; track: { title?: string } }> = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async playTrack(_playerId: string, track: { title?: string }, action: string) {
+          played.push({ action, track });
+          return "ok";
+        }
+      }
+    });
+
+    const response = await request(app)
+      .post("/api/player/track")
+      .send({ action: "bad-action", track: { title: "Should Not Play", artist: "Tester", uri: "spotify:track:bad-action", source: "Spotify", kind: "track" } })
+      .expect(400);
+
+    expect(response.body.error).toBe("Track playback supports add-queue, play-next, or play-now");
+    expect(played).toHaveLength(0);
+    expect(appState.queue).toHaveLength(0);
+    expect(appState.player.mode).toBe(beforeMode);
+    expect(appState.nowPlaying.title).toBe(beforeTitle);
+  });
+
+  it("rejects malformed playback action bodies instead of defaulting to queue actions", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const played: Array<{ action: string; track: { title?: string } }> = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async playTrack(_playerId: string, track: { title?: string }, action: string) {
+          played.push({ action, track });
+          return "ok";
+        }
+      }
+    });
+
+    await request(app).post("/api/player/track").send({ action: null, track: { title: "Null Action", path: "/music/test/null-action.mp3" } }).expect(400);
+    await request(app).post("/api/player/track").send({ action: "", track: { title: "Blank Action", path: "/music/test/blank-action.mp3" } }).expect(400);
+    await request(app).post("/api/player/track").send({ action: "add-queue", track: null }).expect(400);
+    await request(app).post("/api/player/track").send({ action: "add-queue", track: { title: "Extra Body", path: "/music/test/extra-body.mp3" }, extra: true }).expect(400);
+    await request(app).post("/api/player/track").send({ action: "add-queue", track: { title: "Array Path", path: [], source: "Local library" } }).expect(400);
+    await request(app).post("/api/player/track").send({ action: "add-queue", track: { title: "Object Path", path: { x: 1 }, source: "Local library" } }).expect(400);
+    await request(app).post("/api/player/track").send({ action: "add-queue", track: { title: "Array Id", lmsTrackId: [], source: "LMS" } }).expect(400);
+    await request(app).post("/api/player/track").send({ action: "add-queue", track: { title: "Object Id", lmsTrackId: { x: 1 }, source: "LMS" } }).expect(400);
+    await request(app).post("/api/player/track").send({ action: "add-queue", track: { title: "Array Uri", uri: ["spotify:track:0000000000000000000101"], kind: "track", source: "Spotify" } }).expect(400);
+    await request(app).post("/api/player/track").send({ action: "add-queue", track: { title: "Extra Track Field", path: "/music/test/extra-track-field.mp3", extra: true } }).expect(400);
+    await request(app).post("/api/player/tracks").send({ action: null, tracks: [{ title: "Batch Null", path: "/music/test/batch-null.mp3" }] }).expect(400);
+    await request(app).post("/api/player/tracks").send({ action: "add-queue", tracks: [] }).expect(400);
+    await request(app).post("/api/player/tracks").send({ action: "add-queue", tracks: [null] }).expect(400);
+    await request(app).post("/api/player/tracks").send({ action: "add-queue", tracks: [{ title: "Extra Batch", path: "/music/test/extra-batch.mp3" }], extra: true }).expect(400);
+    await request(app).post("/api/player/tracks").send({ action: "add-queue", tracks: [{ title: "Bad Batch Id", lmsTrackId: [] }] }).expect(400);
+    await request(app).post("/api/player/tracks").send({ action: "add-queue", tracks: [{ title: "Extra Batch Track Field", path: "/music/test/extra-batch-track-field.mp3", extra: true }] }).expect(400);
+
+    expect(played).toHaveLength(0);
+    expect(appState.queue).toHaveLength(0);
+  });
+
+  it("filters Spotify containers out of batch playback", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const response = await request(createApp({ lms: mockLms }))
+      .post("/api/player/tracks")
+      .send({
+        action: "add-queue",
+        tracks: [
+          { title: "Artist Container", uri: "spotify:artist:container", kind: "artist", source: "Spotify artist" },
+          { title: "Playable Track", path: "/music/test/playable-track.mp3", source: "Local library" }
+        ]
+      })
+      .expect(200);
+
+    expect(response.body.queued).toHaveLength(1);
+    expect(response.body.queued[0].title).toBe("Playable Track");
+    expect(response.body.accepted).toBe(1);
+    expect(response.body.rejected).toBe(1);
+  });
+
+  it("rejects duplicate direct playback queue requests by playable key", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const app = createApp({ lms: mockLms });
+    const track = { title: "Duplicate Local Track", path: "/music/test/duplicate-track.mp3", source: "Local library" };
+
+    await request(app).post("/api/player/track").send({ action: "add-queue", track }).expect(200);
+    const duplicate = await request(app).post("/api/player/track").send({ action: "add-queue", track }).expect(409);
+
+    expect(duplicate.body.error).toBe("That song is already in the queue");
+    expect(duplicate.body.playback).toMatchObject({ repeat: "off" });
+    expect(duplicate.body.queue).toEqual([
+      expect.objectContaining({ title: "Duplicate Local Track", path: "/music/test/duplicate-track.mp3" })
+    ]);
+    expect(appState.queue.filter((item) => item.path === track.path)).toHaveLength(1);
+  });
+
+  it("deduplicates batch playback by playable key", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    addQueueItem({ title: "Existing", artist: "Tester", path: "/music/test/existing.mp3" });
+
+    const response = await request(createApp({ lms: mockLms }))
+      .post("/api/player/tracks")
+      .send({
+        action: "add-queue",
+        tracks: [
+          { title: "Existing Again", path: "/music/test/existing.mp3", source: "Local library" },
+          { title: "New Track", path: "/music/test/new-track.mp3", source: "Local library" },
+          { title: "New Track Duplicate", path: "/music/test/new-track.mp3", source: "Local library" }
+        ]
+      })
+      .expect(200);
+
+    expect(response.body.queued).toHaveLength(1);
+    expect(response.body.queued[0].title).toBe("New Track");
+    expect(response.body.accepted).toBe(1);
+    expect(response.body.rejected).toBe(2);
+    expect(appState.queue.filter((item) => item.path === "/music/test/new-track.mp3")).toHaveLength(1);
+  });
+
+  it("reports all skipped duplicate playable rows in batch responses", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const app = createApp({ lms: mockLms });
+    const first = { title: "Duplicate Batch One", path: "/music/test/duplicate-batch-one.mp3", source: "Local library" };
+    const second = { title: "Duplicate Batch Two", path: "/music/test/duplicate-batch-two.mp3", source: "Local library" };
+
+    const partial = await request(app)
+      .post("/api/player/tracks")
+      .send({ action: "add-queue", tracks: [first, first, second] })
+      .expect(200);
+
+    expect(partial.body.accepted).toBe(2);
+    expect(partial.body.rejected).toBe(1);
+    expect(partial.body.queued.map((item: { title: string }) => item.title)).toEqual(["Duplicate Batch One", "Duplicate Batch Two"]);
+
+    const allDuplicate = await request(app)
+      .post("/api/player/tracks")
+      .send({ action: "add-queue", tracks: [first, first] })
+      .expect(409);
+
+    expect(allDuplicate.body.accepted).toBe(0);
+    expect(allDuplicate.body.rejected).toBe(2);
+  });
+
+  it("enforces the public guest queue limit for single and batch requests", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.admin = { ...appState.admin, maxQueuePerUser: 3 };
+    addQueueItem({ title: "Limit Existing 1", artist: "Tester", uri: "spotify:track:limit-existing-1", kind: "track", requestedBy: "guest" });
+    addQueueItem({ title: "Limit Existing 2", artist: "Tester", uri: "spotify:track:limit-existing-2", kind: "track", requestedBy: "guest" });
+    addQueueItem({ title: "Generated Does Not Count", artist: "Tester", uri: "spotify:track:generated-limit", kind: "track", requestedBy: "smart shuffle" });
+    const app = createApp({ lms: mockLms });
+
+    const partialBatch = await request(app)
+      .post("/api/player/tracks")
+      .send({
+        action: "add-queue",
+        tracks: [
+          { title: "Limit New 1", path: "/music/test/limit-new-1.mp3", source: "Local library" },
+          { title: "Limit New 2", path: "/music/test/limit-new-2.mp3", source: "Local library" }
+        ]
+      })
+      .expect(200);
+    expect(partialBatch.body.accepted).toBe(1);
+    expect(partialBatch.body.rejected).toBe(1);
+    expect(partialBatch.body.queued).toEqual([expect.objectContaining({ title: "Limit New 1" })]);
+    expect(appState.queue.some((item) => item.title === "Limit New 1")).toBe(true);
+
+    const fullBatch = await request(app)
+      .post("/api/player/tracks")
+      .send({
+        action: "add-queue",
+        tracks: [
+          { title: "Limit Full 1", path: "/music/test/limit-full-1.mp3", source: "Local library" },
+          { title: "Limit Full 2", path: "/music/test/limit-full-2.mp3", source: "Local library" }
+        ]
+      })
+      .expect(429);
+    expect(fullBatch.body.accepted).toBe(0);
+    expect(fullBatch.body.rejected).toBe(2);
+    expect(fullBatch.body.playback).toMatchObject({ repeat: "off" });
+    expect(fullBatch.body.queue.filter((item) => item.requestedBy === "guest")).toHaveLength(3);
+    expect(fullBatch.body.queue[0]).not.toHaveProperty("album");
+
+    await request(app)
+      .post("/api/player/track")
+      .send({ action: "play-next", track: { title: "Limit Allowed", path: "/music/test/limit-allowed.mp3", source: "Local library" } })
+      .expect(429);
+
+    const tooManySingle = await request(app)
+      .post("/api/player/track")
+      .send({ action: "add-queue", track: { title: "Limit Rejected", path: "/music/test/limit-rejected.mp3", source: "Local library" } })
+      .expect(429);
+    expect(tooManySingle.body.error).toContain("max 3");
+    expect(tooManySingle.body.playback).toMatchObject({ repeat: "off" });
+    expect(tooManySingle.body.queue.filter((item) => item.requestedBy === "guest")).toHaveLength(3);
+
+    const spoofed = await request(app)
+      .post("/api/queue")
+      .send({ title: "Limit Spoofed", artist: "Tester", requestedBy: "admin" })
+      .expect(429);
+    expect(spoofed.body.error).toContain("max 3");
+    expect(spoofed.body.playback).toMatchObject({ repeat: "off" });
+    expect(appState.queue.filter((item) => item.requestedBy === "guest")).toHaveLength(3);
+  });
+
+  it("does not allow public queue edits to change request ownership", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const app = createApp({ lms: mockLms });
+    const created = await request(app)
+      .post("/api/queue")
+      .send({ title: "Ownership Lock", artist: "Tester", path: "/music/test/ownership-lock.mp3", requestedBy: "admin" })
+      .expect(201);
+
+    expect(created.body.requestedBy).toBe("guest");
+    await request(app)
+      .patch(`/api/queue/${created.body.id}`)
+      .send({ requestedBy: "admin" })
+      .expect(400);
+    expect(appState.queue.find((item) => item.id === created.body.id)?.requestedBy).toBe("guest");
+  });
+
+  it("accepts queue edit UI payloads without allowing requester spoofing", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const local = addQueueItem({ title: "Local Editable", artist: "Tester", path: "/music/test/local-editable-ui.mp3", requestedBy: "guest" });
+    const app = createApp({ lms: mockLms });
+
+    const edited = await request(app)
+      .patch(`/api/queue/${local.id}`)
+      .send({ title: "Local Edited", artist: "Edited", requestedBy: "guest" })
+      .expect(200);
+    await request(app)
+      .patch(`/api/queue/${local.id}`)
+      .send({ title: "Local Edited Again", artist: "Edited", requestedBy: "admin" })
+      .expect(400);
+
+    expect(edited.body.item).toMatchObject({ title: "Local Edited", artist: "Edited", requestedBy: "guest" });
+    expect(appState.queue.find((item) => item.id === local.id)?.requestedBy).toBe("guest");
+  });
+
+  it("rejects changed Spotify queue metadata while allowing unchanged queue edit payloads", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const local = addQueueItem({ title: "Local Editable", artist: "Tester", path: "/music/test/local-editable.mp3", requestedBy: "guest" });
+    const spotify = addQueueItem({ title: "Spotify Locked", artist: "Tester", uri: "spotify:track:0000000000000000000001", kind: "track", source: "Spotify", requestedBy: "guest" });
+    const app = createApp({ lms: mockLms });
+
+    const edited = await request(app)
+      .patch(`/api/queue/${local.id}`)
+      .send({ title: "Local Edited", artist: "Edited" })
+      .expect(200);
+    const rejected = await request(app)
+      .patch(`/api/queue/${spotify.id}`)
+      .send({ title: "Wrong Spotify Title" })
+      .expect(400);
+    const unchangedSpotify = await request(app)
+      .patch(`/api/queue/${spotify.id}`)
+      .send({ title: "Spotify Locked", artist: "Tester", requestedBy: "guest" })
+      .expect(200);
+
+    expect(edited.body.item).toMatchObject({ title: "Local Edited", artist: "Edited" });
+    expect(rejected.body.error).toContain("Spotify queue item metadata");
+    expect(unchangedSpotify.body.item).toMatchObject({ title: "Spotify Locked", artist: "Tester", requestedBy: "guest" });
+    expect(appState.queue.find((item) => item.id === spotify.id)?.title).toBe("Spotify Locked");
+  });
+
+  it("rejects new public song requests when public requests are paused", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const previousAdmin = { ...appState.admin };
+    const previousSchedule = structuredClone(appState.schedule);
+    appState.admin = { ...appState.admin, publicRequests: false, scheduleEnabled: true };
+    appState.schedule = { ...appState.schedule, current: { ...appState.schedule.current, requestsPaused: false } };
+    try {
+      const app = createApp({ lms: mockLms });
+      await request(app).post("/api/queue").send({ title: "Paused Queue", artist: "Tester" }).expect(403);
+      await request(app)
+        .post("/api/player/track")
+        .send({ action: "play-now", track: { title: "Paused Play", uri: "spotify:track:0000000000000000000009", kind: "track", source: "Spotify" } })
+        .expect(403);
+      await request(app)
+        .post("/api/player/tracks")
+        .send({ action: "add-queue", tracks: [{ title: "Paused Batch", uri: "spotify:track:0000000000000000000010", kind: "track", source: "Spotify" }] })
+        .expect(403);
+      const first = addQueueItem({ title: "Paused Existing A", artist: "Tester", path: "/music/test/paused-a.mp3", requestedBy: "guest" });
+      const second = addQueueItem({ title: "Paused Existing B", artist: "Tester", path: "/music/test/paused-b.mp3", requestedBy: "guest" });
+      await request(app).patch(`/api/queue/${first.id}`).send({ title: "Paused Edited" }).expect(403);
+      await request(app).post(`/api/queue/${second.id}/move`).send({ direction: "up" }).expect(403);
+      await request(app).delete(`/api/queue/${first.id}`).expect(403);
+      await request(app).delete("/api/queue").expect(403);
+      await request(app).post("/api/player/smart-shuffle").send({ source: "local", count: 1 }).expect(403);
+      await request(app)
+        .post("/api/library/upload?filename=paused.mp3")
+        .set("content-type", "application/octet-stream")
+        .send(Buffer.concat([Buffer.from("ID3"), Buffer.alloc(32)]))
+        .expect(403);
+      await request(app).post("/api/player/playback").send({ repeat: "all" }).expect(403);
+
+      expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Paused Existing A", "Paused Existing B"]);
+      expect(appState.playback.repeat).toBe("off");
+    } finally {
+      appState.admin = previousAdmin;
+      appState.schedule = previousSchedule;
+    }
+  });
+
+  it("rejects new public song requests during scheduled pause windows", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const previousAdmin = { ...appState.admin };
+    const previousSchedule = structuredClone(appState.schedule);
+    appState.admin = { ...appState.admin, publicRequests: true, scheduleEnabled: true };
+    appState.schedule = { ...appState.schedule, current: { ...appState.schedule.current, requestsPaused: true } };
+    try {
+      const app = createApp({ lms: mockLms });
+      const response = await request(app)
+        .post("/api/player/track")
+        .send({ action: "add-queue", track: { title: "Scheduled Pause", uri: "spotify:track:0000000000000000000011", kind: "track", source: "Spotify" } })
+        .expect(403);
+
+      expect(response.body.error).toContain("schedule");
+      expect(appState.queue).toHaveLength(0);
+    } finally {
+      appState.admin = previousAdmin;
+      appState.schedule = previousSchedule;
+    }
+  });
+
+  it("keeps queued tracks visible until next consumes them", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const played: Array<{ action: string; track: { title?: string } }> = [];
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string }, action: string) {
+        played.push({ action, track });
+        return "ok";
+      }
+    };
+    const app = createApp({ lms });
+
+    await request(app)
+      .post("/api/player/track")
+      .send({ action: "add-queue", track: { title: "Visible Queue Song", artist: "Tester", path: "/music/test/visible.mp3" } })
+      .expect(200);
+    expect(appState.queue.map((item) => item.title)).toContain("Visible Queue Song");
+
+    const next = await request(app).post("/api/player/next").expect(200);
+
+    expect(next.body.action).toBe("visible-queue-next");
+    expect(played).toEqual([{ action: "play-now", track: expect.objectContaining({ title: "Visible Queue Song" }) }]);
+    expect(appState.queue.some((item) => item.title === "Visible Queue Song")).toBe(false);
+  });
+
+  it("returns matching LMS artwork metadata after direct play now", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.nowPlaying = { id: "idle", title: "No track playing", artist: "Connect a player or request a song", album: "", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null };
+    const lms = {
+      ...mockLms,
+      async nowPlaying() {
+        return {
+          id: "/music/test/art-track.mp3",
+          title: "Art Track",
+          artist: "Tester",
+          album: "Artwork",
+          source: "Local library",
+          duration: 100,
+          elapsed: 0,
+          canSeek: true,
+          art: "api/artwork/test-cover",
+          path: "/music/test/art-track.mp3"
+        };
+      }
+    };
+
+    const response = await request(createApp({ lms }))
+      .post("/api/player/track")
+      .send({ action: "play-now", track: { title: "Art Track", artist: "Tester", path: "/music/test/art-track.mp3", source: "Local library" } })
+      .expect(200);
+
+    expect(response.body.nowPlaying).toMatchObject({ title: "Art Track", art: "api/artwork/test-cover", canSeek: true });
+  });
+
+  it("serializes concurrent play presses so queued rows are not reported twice", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
+    appState.nowPlaying = { id: "idle", title: "No track playing", artist: "Connect a player or request a song", album: "", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false };
+    addQueueItem({ title: "First Concurrent", artist: "Tester", path: "/music/test/first-concurrent.mp3", requestedBy: "guest" });
+    addQueueItem({ title: "Second Concurrent", artist: "Tester", path: "/music/test/second-concurrent.mp3", requestedBy: "guest" });
+    const played: string[] = [];
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string }) {
+        played.push(String(track.title || ""));
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return "ok";
+      },
+      async control() {
+        played.push("control:play");
+        return "ok";
+      }
+    };
+    const app = createApp({ lms });
+
+    const [first, second] = await Promise.all([
+      request(app).post("/api/player/play").expect(200),
+      request(app).post("/api/player/play").expect(200)
+    ]);
+
+    expect([first.body.action, second.body.action]).toEqual(["visible-queue-play", "play"]);
+    expect(played).toEqual(["First Concurrent", "control:play"]);
+    expect(appState.queue.map((item) => item.title)).toEqual(["Second Concurrent"]);
+  });
+
+  it("serializes concurrent next presses through visible queue order", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = { id: "current", title: "Current", artist: "Tester", album: "", source: "Local library", duration: 100, elapsed: 5, canSeek: true, art: null, path: "/music/test/current.mp3" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, previousTracks: [] };
+    addQueueItem({ title: "Next One", artist: "Tester", path: "/music/test/next-one.mp3", requestedBy: "guest" });
+    addQueueItem({ title: "Next Two", artist: "Tester", path: "/music/test/next-two.mp3", requestedBy: "guest" });
+    const played: string[] = [];
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string }) {
+        played.push(String(track.title || ""));
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return "ok";
+      }
+    };
+    const app = createApp({ lms });
+
+    const [first, second] = await Promise.all([
+      request(app).post("/api/player/next").expect(200),
+      request(app).post("/api/player/next").expect(200)
+    ]);
+
+    expect([first.body.nowPlaying.title, second.body.nowPlaying.title]).toEqual(["Next One", "Next Two"]);
+    expect(played).toEqual(["Next One", "Next Two"]);
+    expect(appState.queue).toEqual([]);
+  });
+
+  it("records the current song before native LMS next so previous can restore it", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = { id: "current", title: "Current Native", artist: "Tester", album: "", source: "Local library", duration: 100, elapsed: 5, canSeek: true, art: null, path: "/music/test/current-native.mp3" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, previousTracks: [], appManagedPlayback: false };
+    const controls: string[] = [];
+    const lms = {
+      ...mockLms,
+      async control(_playerId: string, action: string) {
+        controls.push(action);
+        return "ok";
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/next").expect(200);
+
+    expect(response.body.action).toBe("next");
+    expect(controls).toEqual(["next"]);
+    expect(appState.playback.previousTracks[0]).toMatchObject({ title: "Current Native", path: "/music/test/current-native.mp3" });
+  });
+
+  it("serializes stop behind an in-flight visible queue next", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = { id: "current", title: "Current", artist: "Tester", album: "", source: "Local library", duration: 100, elapsed: 5, canSeek: true, art: null, path: "/music/test/current.mp3" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, previousTracks: [] };
+    addQueueItem({ title: "Race Next", artist: "Tester", path: "/music/test/race-next.mp3", requestedBy: "guest" });
+    const events: string[] = [];
+    let releasePlay: () => void = () => {};
+    const playGate = new Promise<void>((resolve) => {
+      releasePlay = resolve;
+    });
+    let app: ReturnType<typeof createApp>;
+    let stopRequest: Promise<request.Response> | null = null;
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string }) {
+        events.push(`play:${track.title}`);
+        stopRequest = request(app).post("/api/player/stop").expect(200);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        await playGate;
+        return "ok";
+      },
+      async control(_playerId: string, action: string) {
+        events.push(`control:${action}`);
+        return "ok";
+      }
+    };
+    app = createApp({ lms });
+
+    const nextRequest = request(app).post("/api/player/next").expect(200);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    releasePlay();
+    const next = await nextRequest;
+    const stop = await stopRequest;
+
+    expect(next.body.action).toBe("visible-queue-next");
+    expect(stop.body.mode).toBe("stop");
+    expect(events).toEqual(["play:Race Next", "control:stop"]);
+    expect(appState.player.mode).toBe("stop");
+    expect(appState.nowPlaying).toMatchObject({ id: "idle", title: "No track playing" });
+  });
+
+  it("does not fall through to LMS next after an app-managed queue is exhausted", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = { id: "current", title: "Current", artist: "Tester", album: "", source: "Local library", duration: 100, elapsed: 5, canSeek: true, art: null, path: "/music/test/current.mp3" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, previousTracks: [], appManagedPlayback: false };
+    addQueueItem({ title: "Only Visible Next", artist: "Tester", path: "/music/test/only-visible-next.mp3", requestedBy: "guest" });
+    const played: string[] = [];
+    const controls: string[] = [];
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string }) {
+        played.push(String(track.title || ""));
+        return "ok";
+      },
+      async control(_playerId: string, action: string) {
+        controls.push(action);
+        return "ok";
+      }
+    };
+    const app = createApp({ lms });
+
+    const first = await request(app).post("/api/player/next").expect(200);
+    const second = await request(app).post("/api/player/next").expect(200);
+
+    expect(first.body.action).toBe("visible-queue-next");
+    expect(first.body.nowPlaying.title).toBe("Only Visible Next");
+    expect(second.body.action).toBe("stop-empty-queue");
+    expect(second.body.player.mode).toBe("stop");
+    expect(played).toEqual(["Only Visible Next"]);
+    expect(controls).not.toContain("next");
+    expect(controls).toContain("stop");
+    expect(appState.queue).toEqual([]);
+  });
+
+  it("stops instead of restarting LMS next when an app-managed queue was cleared", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = { id: "current", title: "Current App Track", artist: "Tester", album: "", source: "Spotify", duration: 100, elapsed: 20, canSeek: true, uri: "spotify:track:current" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, appManagedPlayback: true, previousTracks: [] };
+    const controls: string[] = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string) {
+          controls.push(action);
+          return "ok";
+        }
+      }
+    });
+
+    const response = await request(app).post("/api/player/next").expect(200);
+
+    expect(response.body.action).toBe("stop-empty-queue");
+    expect(response.body.player.mode).toBe("stop");
+    expect(response.body.nowPlaying.title).toBe("No track playing");
+    expect(response.body.playback.appManagedPlayback).toBe(false);
+    expect(controls).toEqual(["stop"]);
+  });
+
+  it("preserves uploaded queue metadata after LMS refresh during app-managed advance", async () => {
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = { id: "current", title: "Current", artist: "Tester", album: "", source: "Uploaded", duration: 100, elapsed: 98, canSeek: true, art: null, path: "/music/uploads/Current.mp3" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, previousTracks: [], appManagedPlayback: true };
+    addQueueItem({
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      album: "Haha - Single",
+      source: "Uploaded",
+      path: "/music/uploads/Sleep Paralysis-Jackson Ivy.mp3",
+      art: "https://covers.example/sleep.jpg",
+      requestedBy: "guest"
+    });
+    const lms = {
+      ...mockLms,
+      async playTrack() {
+        return "ok";
+      },
+      async nowPlaying() {
+        return {
+          id: `local:${Buffer.from("/music/uploads/Sleep Paralysis-Jackson Ivy.mp3").toString("base64url")}`,
+          title: "Sleep Paralysis Jackson Ivy",
+          artist: "Uploaded",
+          album: "uploads",
+          source: "Uploaded",
+          duration: 158,
+          elapsed: 12,
+          canSeek: true,
+          art: null
+        };
+      }
+    };
+    const app = createApp({ lms });
+
+    const next = await request(app).post("/api/player/next").expect(200);
+    await refreshLmsForTests(lms, { force: true });
+
+    expect(next.body.nowPlaying).toMatchObject({
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      album: "Haha - Single",
+      art: "https://covers.example/sleep.jpg"
+    });
+    expect(appState.nowPlaying).toMatchObject({
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      album: "Haha - Single",
+      art: "https://covers.example/sleep.jpg",
+      elapsed: 12
+    });
+  });
+
+  it("preserves local library queue metadata after LMS refresh during app-managed advance", async () => {
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = { id: "current", title: "Current", artist: "Tester", album: "", source: "Uploaded", duration: 100, elapsed: 98, canSeek: true, art: null, path: "/music/uploads/Current.mp3" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, previousTracks: [], appManagedPlayback: true };
+    addQueueItem({
+      title: "2MININHELL",
+      artist: "Juice WRLD",
+      album: "1 Soundcloud (JuiceTheKidd) ERA",
+      source: "Local library",
+      path: "/music/collections/Juice WRLD/2MININHELL.mp3",
+      art: "api/artwork/ab1a6eed",
+      requestedBy: "guest"
+    });
+    const lms = {
+      ...mockLms,
+      async playTrack() {
+        return "ok";
+      },
+      async nowPlaying() {
+        return {
+          id: "file:///music/collections/Juice%20WRLD/2MININHELL.mp3",
+          title: "2MININHELL",
+          artist: "Juice WRLD",
+          album: "",
+          source: "LMS",
+          duration: 222,
+          elapsed: 12,
+          canSeek: true,
+          art: null
+        };
+      }
+    };
+    const app = createApp({ lms });
+
+    const next = await request(app).post("/api/player/next").expect(200);
+    appState.nowPlaying = {
+      id: "file:///music/collections/Juice%20WRLD/2MININHELL.mp3",
+      title: "2MININHELL",
+      artist: "Juice WRLD",
+      album: "Cached LMS Album",
+      source: "LMS",
+      path: "/music/collections/Juice WRLD/2MININHELL.mp3",
+      duration: 222,
+      elapsed: 6,
+      canSeek: true,
+      art: "api/artwork/ab1a6eed"
+    };
+    await refreshLmsForTests(lms, { force: true });
+    appState.nowPlaying = next.body.nowPlaying;
+    await refreshLmsForTests(lms, { force: true });
+
+    expect(next.body.nowPlaying).toMatchObject({
+      title: "2MININHELL",
+      artist: "Juice WRLD",
+      album: "1 Soundcloud (JuiceTheKidd) ERA",
+      source: "Local library",
+      art: "api/artwork/ab1a6eed"
+    });
+    expect(appState.nowPlaying).toMatchObject({
+      title: "2MININHELL",
+      artist: "Juice WRLD",
+      album: "1 Soundcloud (JuiceTheKidd) ERA",
+      source: "Local library",
+      path: "/music/collections/Juice WRLD/2MININHELL.mp3",
+      duration: 222,
+      elapsed: 12,
+      art: "api/artwork/ab1a6eed"
+    });
+  });
+
+  it("preserves uploaded metadata when LMS reports only a local id after queue advance", async () => {
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = { id: "current", title: "Current", artist: "Tester", album: "", source: "Uploaded", duration: 100, elapsed: 98, canSeek: true, art: null, path: "/music/uploads/Current.mp3" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, previousTracks: [], appManagedPlayback: true };
+    addQueueItem({
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      album: "Haha - Single",
+      source: "Uploaded",
+      path: "/music/uploads/Sleep Paralysis-Jackson Ivy.mp3",
+      art: "https://covers.example/sleep.jpg",
+      requestedBy: "guest"
+    });
+    const lms = {
+      ...mockLms,
+      async playTrack() {
+        return "ok";
+      },
+      async nowPlaying() {
+        return {
+          id: `local:${Buffer.from("/music/uploads/Sleep Paralysis-Jackson Ivy.mp3").toString("base64url")}`,
+          title: "Sleep Paralysis Jackson Ivy",
+          artist: "Uploaded",
+          album: "uploads",
+          source: "Uploaded",
+          duration: 158,
+          elapsed: 12,
+          canSeek: true,
+          art: null
+        };
+      }
+    };
+    const app = createApp({ lms });
+
+    await request(app).post("/api/player/next").expect(200);
+    await refreshLmsForTests(lms, { force: true });
+
+    expect(appState.nowPlaying).toMatchObject({
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      album: "Haha - Single",
+      path: "/music/uploads/Sleep Paralysis-Jackson Ivy.mp3",
+      art: "https://covers.example/sleep.jpg",
+      elapsed: 12
+    });
+  });
+
+  it("restores rich uploaded metadata when previous requeues the forward track", async () => {
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = {
+      id: "current-upload",
+      title: "Shabang",
+      artist: "Drake",
+      album: "ICEMAN",
+      source: "Uploaded",
+      duration: 188,
+      elapsed: 15,
+      canSeek: true,
+      art: "https://covers.example/shabang.jpg",
+      path: "/music/uploads/Drake - Shabang.mp3"
+    };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, previousTracks: [], appManagedPlayback: true };
+    addQueueItem({
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      album: "Haha - Single",
+      source: "Uploaded",
+      path: "/music/uploads/Sleep Paralysis-Jackson Ivy.mp3",
+      art: "https://covers.example/sleep.jpg",
+      requestedBy: "guest"
+    });
+    const played: Array<{ action: string; title?: string; artist?: string; art?: string | null }> = [];
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string; artist?: string; art?: string | null }, action: string) {
+        played.push({ action, title: track.title, artist: track.artist, art: track.art });
+        return "ok";
+      }
+    };
+    const app = createApp({ lms });
+
+    const next = await request(app).post("/api/player/next").expect(200);
+    expect(next.body.nowPlaying).toMatchObject({
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      art: "https://covers.example/sleep.jpg"
+    });
+
+    appState.nowPlaying = {
+      id: `local:${Buffer.from("/music/uploads/Sleep Paralysis-Jackson Ivy.mp3").toString("base64url")}`,
+      title: "Sleep Paralysis Jackson Ivy",
+      artist: "Uploaded",
+      album: "uploads",
+      source: "Uploaded",
+      duration: 158,
+      elapsed: 12,
+      canSeek: true,
+      art: null
+    };
+
+    const previous = await request(app).post("/api/player/previous").expect(200);
+
+    expect(previous.body.queue[0]).toMatchObject({
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      album: "Haha - Single",
+      art: "https://covers.example/sleep.jpg"
+    });
+    expect(previous.body.playback.previousTracks).toEqual([]);
+
+    const forward = await request(app).post("/api/player/next").expect(200);
+
+    expect(forward.body.nowPlaying).toMatchObject({
+      title: "Sleep Paralysis",
+      artist: "Jackson Ivy",
+      album: "Haha - Single",
+      art: "https://covers.example/sleep.jpg"
+    });
+    expect(played.map((item) => item.title)).toEqual(["Sleep Paralysis", "Shabang", "Sleep Paralysis"]);
+  });
+
+  it("uses app history for previous after advancing through visible queued Spotify tracks", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
+    appState.nowPlaying = {
+      id: "idle",
+      title: "No track playing",
+      artist: "Connect a player or request a song",
+      album: "",
+      source: "LMS",
+      duration: 0,
+      elapsed: 0,
+      canSeek: false,
+      art: null
+    };
+    appState.playback = { ...appState.playback, previousTracks: [], shuffle: false, smartQueue: false };
+    addQueueItem({ title: "Playlist One", artist: "Tester", uri: "spotify:track:0000000000000000000001", source: "Spotify", requestedBy: "guest" });
+    addQueueItem({ title: "Playlist Two", artist: "Tester", uri: "spotify:track:0000000000000000000002", source: "Spotify", requestedBy: "guest" });
+    const played: Array<{ action: string; track: { title?: string; uri?: string } }> = [];
+    const controls: Array<{ action: string }> = [];
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string; uri?: string }, action: string) {
+        played.push({ action, track });
+        return "ok";
+      },
+      async nowPlaying() {
+        return appState.nowPlaying;
+      },
+      async control(_playerId: string, action: string) {
+        controls.push({ action });
+        return "ok";
+      }
+    };
+    const app = createApp({ lms });
+
+    const first = await request(app).post("/api/player/next").expect(200);
+    const second = await request(app).post("/api/player/next").expect(200);
+    const previous = await request(app).post("/api/player/previous").expect(200);
+
+    expect(first.body.nowPlaying).toMatchObject({ title: "Playlist One", uri: "spotify:track:0000000000000000000001" });
+    expect(second.body.nowPlaying).toMatchObject({ title: "Playlist Two", uri: "spotify:track:0000000000000000000002" });
+    expect(previous.body.action).toBe("app-previous");
+    expect(previous.body.nowPlaying).toMatchObject({ title: "Playlist One", uri: "spotify:track:0000000000000000000001" });
+    expect(played).toEqual([
+      { action: "play-now", track: expect.objectContaining({ title: "Playlist One", uri: "spotify:track:0000000000000000000001" }) },
+      { action: "play-now", track: expect.objectContaining({ title: "Playlist Two", uri: "spotify:track:0000000000000000000002" }) },
+      { action: "play-now", track: expect.objectContaining({ title: "Playlist One", uri: "spotify:track:0000000000000000000001" }) }
+    ]);
+    expect(controls).not.toContainEqual({ action: "previous" });
+  });
+
+  it("does not resume the last LMS track when next is pressed stopped with an empty queue", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
+    appState.nowPlaying = {
+      id: "idle",
+      title: "No track playing",
+      artist: "Connect a player or request a song",
+      album: "",
+      source: "LMS",
+      duration: 0,
+      elapsed: 0,
+      canSeek: false,
+      art: null
+    };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false };
+    const controls: string[] = [];
+    const lms = {
+      ...mockLms,
+      async control(_playerId: string, action: string) {
+        controls.push(action);
+        return "ok";
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/next").expect(200);
+
+    expect(response.body.action).toBe("noop");
+    expect(response.body.nowPlaying).toMatchObject({ id: "idle", title: "No track playing" });
+    expect(controls).toEqual([]);
+    expect(appState.player.mode).toBe("stop");
+  });
+
+  it("keeps queued tracks visible when next playback fails", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.nowPlaying = {
+      id: "current",
+      title: "Current Failure Track",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 12,
+      canSeek: true,
+      art: null,
+      path: "/music/test/current-failure.mp3"
+    };
+    appState.playback = { ...appState.playback, history: ["existing-history"], previousTracks: [] };
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true };
+    const lms = {
+      ...mockLms,
+      async playTrack() {
+        throw new Error("LMS refused playback");
+      }
+    };
+    const app = createApp({ lms });
+
+    await request(app)
+      .post("/api/player/track")
+      .send({ action: "add-queue", track: { title: "Retry Queue Song", artist: "Tester", path: "/music/test/retry-visible.mp3" } })
+      .expect(200);
+
+    const response = await request(app).post("/api/player/next").expect(502);
+
+    expect(response.body.error).toContain("LMS refused playback");
+    expect(appState.queue).toEqual([expect.objectContaining({ title: "Retry Queue Song" })]);
+    expect(appState.playback.history).toEqual(["existing-history"]);
+    expect(appState.playback.previousTracks).toEqual([]);
+  });
+
+  it("does not record previous history when LMS next fails", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.nowPlaying = {
+      id: "current",
+      title: "Current LMS Next Failure",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 12,
+      canSeek: true,
+      art: null,
+      path: "/music/test/current-lms-next-failure.mp3"
+    };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, appManagedPlayback: false, previousTracks: [] };
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    const lms = {
+      ...mockLms,
+      async control(_playerId: string, action: string) {
+        if (action === "next") throw new Error("LMS refused next");
+        return "ok";
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/next").expect(502);
+
+    expect(response.body.error).toContain("LMS refused next");
+    expect(appState.playback.previousTracks).toEqual([]);
+    expect(appState.nowPlaying).toMatchObject({ title: "Current LMS Next Failure" });
+  });
+
+  it("uses the hot player id for visible queue next without waiting on a fresh status call", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true };
+    addQueueItem({ title: "Hot Queue Song", artist: "Tester", path: "/music/test/hot-next.mp3" });
+    const played: Array<{ playerId: string; action: string; title?: string }> = [];
+    const lms = {
+      ...mockLms,
+      async status() {
+        throw new Error("status should not block next");
+      },
+      async playTrack(playerId: string, track: { title?: string }, action: string) {
+        played.push({ playerId, action, title: track.title });
+        return "ok";
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/next").expect(200);
+
+    expect(response.body.action).toBe("visible-queue-next");
+    expect(played).toEqual([{ playerId: "hot-player", action: "play-now", title: "Hot Queue Song" }]);
+  });
+
+  it("queues playlist batches in order without issuing one LMS command per track", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const played: Array<{ action: string; track: { title?: string } }> = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async playTrack(_playerId: string, track: { title?: string }, action: string) {
+          played.push({ action, track });
+          return "ok";
+        }
+      }
+    });
+
+    const response = await request(app)
+      .post("/api/player/tracks")
+      .send({
+        action: "play-next",
+        tracks: [
+          { title: "Playlist One", artist: "Tester", path: "/music/test/playlist-one.mp3", source: "Local library" },
+          { title: "Playlist Two", artist: "Tester", path: "/music/test/playlist-two.mp3", source: "Local library" },
+          { title: "Playlist Three", artist: "Tester", path: "/music/test/playlist-three.mp3", source: "Local library" }
+        ]
+      })
+      .expect(200);
+
+    expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Playlist One", "Playlist Two", "Playlist Three"]);
+    expect(played).toHaveLength(0);
+  });
+
+  it("partially accepts play-next batches without reversing playlist order", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.admin = { ...appState.admin, maxQueuePerUser: 3 };
+    addQueueItem({ title: "Existing Tail", artist: "Tester", path: "/music/test/existing-tail.mp3", requestedBy: "guest" });
+    const response = await request(createApp({ lms: mockLms }))
+      .post("/api/player/tracks")
+      .send({
+        action: "play-next",
+        tracks: [
+          { title: "Next One", artist: "Tester", path: "/music/test/next-one.mp3", source: "Local library" },
+          { title: "Next Two", artist: "Tester", path: "/music/test/next-two.mp3", source: "Local library" },
+          { title: "Next Three", artist: "Tester", path: "/music/test/next-three.mp3", source: "Local library" }
+        ]
+      })
+      .expect(200);
+
+    expect(response.body.accepted).toBe(2);
+    expect(response.body.rejected).toBe(1);
+    expect(response.body.queued.map((item: { title: string }) => item.title)).toEqual(["Next One", "Next Two"]);
+    expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Next One", "Next Two", "Existing Tail"]);
+  });
+
+  it("serializes concurrent batch queue requests to preserve duplicate and limit checks", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.admin = { ...appState.admin, maxQueuePerUser: 3 };
+    const app = createApp({ lms: mockLms });
+    const payload = {
+      action: "add-queue",
+      tracks: [
+        { title: "Concurrent Batch One", path: "/music/test/concurrent-batch-one.mp3", source: "Local library" },
+        { title: "Concurrent Batch Two", path: "/music/test/concurrent-batch-two.mp3", source: "Local library" },
+        { title: "Concurrent Batch Three", path: "/music/test/concurrent-batch-three.mp3", source: "Local library" }
+      ]
+    };
+
+    const responses = await Promise.all([
+      request(app).post("/api/player/tracks").send(payload),
+      request(app).post("/api/player/tracks").send(payload),
+      request(app).post("/api/player/tracks").send(payload)
+    ]);
+
+    const accepted = responses.filter((response) => response.status === 200);
+    const rejected = responses.filter((response) => response.status !== 200);
+    expect(accepted).toHaveLength(1);
+    expect(accepted[0].body.accepted).toBe(3);
+    expect(rejected.map((response) => response.status).sort()).toEqual([409, 409]);
+    expect(appState.queue.map((item: { title: string }) => item.title)).toEqual([
+      "Concurrent Batch One",
+      "Concurrent Batch Two",
+      "Concurrent Batch Three"
+    ]);
+  });
+
+  it("serializes mixed queue endpoints against batch requests", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.admin = { ...appState.admin, maxQueuePerUser: 3 };
+    const app = createApp({ lms: mockLms });
+    const tracks = [
+      { title: "Mixed Batch One", path: "/music/test/mixed-batch-one.mp3", source: "Local library" },
+      { title: "Mixed Batch Two", path: "/music/test/mixed-batch-two.mp3", source: "Local library" },
+      { title: "Mixed Batch Three", path: "/music/test/mixed-batch-three.mp3", source: "Local library" }
+    ];
+
+    const responses = await Promise.all([
+      request(app).post("/api/player/tracks").send({ action: "add-queue", tracks }),
+      request(app).post("/api/player/track").send({ action: "add-queue", track: tracks[0] }),
+      request(app).post("/api/queue").send(tracks[1])
+    ]);
+
+    const acceptedRows = responses.flatMap((response) => {
+      if (response.status === 201) return [response.body.title];
+      if (response.status === 200 && Array.isArray(response.body.queued)) return response.body.queued.map((item: { title: string }) => item.title);
+      if (response.status === 200 && response.body.queued?.title) return [response.body.queued.title];
+      return [];
+    });
+
+    expect(acceptedRows).toHaveLength(3);
+    expect(new Set(appState.queue.map((item: { path: string }) => item.path)).size).toBe(3);
+    expect(appState.queue).toHaveLength(3);
+  });
+
+  it("serializes queue clear and delete with concurrent queue additions", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.admin = { ...appState.admin, maxQueuePerUser: 3 };
+    const app = createApp({ lms: mockLms });
+    addQueueItem({ title: "Clear Existing", path: "/music/test/clear-existing.mp3", requestedBy: "guest" });
+    const tracks = [
+      { title: "Clear Race One", path: "/music/test/clear-race-one.mp3", source: "Local library" },
+      { title: "Clear Race Two", path: "/music/test/clear-race-two.mp3", source: "Local library" }
+    ];
+
+    const [clearResponse, batchResponse] = await Promise.all([
+      request(app).delete("/api/queue"),
+      request(app).post("/api/player/tracks").send({ action: "add-queue", tracks })
+    ]);
+
+    expect([clearResponse.status, batchResponse.status].sort()).toEqual([200, 200]);
+    const afterClearRace = appState.queue.map((item: { title: string }) => item.title);
+    expect([[], ["Clear Race One", "Clear Race Two"]]).toContainEqual(afterClearRace);
+    expect(afterClearRace).not.toContain("Clear Existing");
+
+    appState.queue.splice(0, appState.queue.length);
+    appState.admin = { ...appState.admin, maxQueuePerUser: 3 };
+    const removable = addQueueItem({ title: "Delete Race", path: "/music/test/delete-race.mp3", requestedBy: "guest" });
+    const [deleteResponse, addResponse] = await Promise.all([
+      request(app).delete(`/api/queue/${removable.id}`),
+      request(app).post("/api/player/track").send({ action: "add-queue", track: { title: "Delete Race", path: "/music/test/delete-race.mp3", source: "Local library" } })
+    ]);
+
+    expect(deleteResponse.status).toBe(200);
+    expect([200, 409]).toContain(addResponse.status);
+    expect(appState.queue.filter((item: { path: string }) => item.path === "/music/test/delete-race.mp3")).toHaveLength(addResponse.status === 200 ? 1 : 0);
+  });
+
+  it("keeps the queue empty when a clear races around a pending batch add", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.admin = { ...appState.admin, maxQueuePerUser: 3 };
+    addQueueItem({ title: "Clear Add Clear Existing", path: "/music/test/clear-add-clear-existing.mp3", requestedBy: "guest" });
+    const app = createApp({ lms: mockLms });
+    const tracks = [
+      { title: "Clear Add Clear One", path: "/music/test/clear-add-clear-one.mp3", source: "Local library" },
+      { title: "Clear Add Clear Two", path: "/music/test/clear-add-clear-two.mp3", source: "Local library" }
+    ];
+
+    const [firstClear, batch, finalClear] = await Promise.all([
+      request(app).delete("/api/queue"),
+      request(app).post("/api/player/tracks").send({ action: "add-queue", tracks }),
+      request(app).delete("/api/queue")
+    ]);
+
+    expect(firstClear.status).toBe(200);
+    expect([200, 409]).toContain(batch.status);
+    expect(finalClear.status).toBe(200);
+    expect(appState.queue).toEqual([]);
+  });
+
+  it("discards a pending batch add when a clear request arrives during validation", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.admin = { ...appState.admin, maxQueuePerUser: 3 };
+    appState.playback = { ...appState.playback, repeat: "one" };
+    let releaseRepeat: () => void = () => {};
+    let repeatStarted: () => void = () => {};
+    const repeatStartedPromise = new Promise<void>((resolve) => {
+      repeatStarted = resolve;
+    });
+    const repeatReleasePromise = new Promise<void>((resolve) => {
+      releaseRepeat = resolve;
+    });
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string) {
+          if (action === "repeat") {
+            repeatStarted();
+            await repeatReleasePromise;
+          }
+          return "ok";
+        }
+      }
+    });
+    const tracks = [
+      { title: "Pending Clear One", path: "/music/test/pending-clear-one.mp3", source: "Local library" },
+      { title: "Pending Clear Two", path: "/music/test/pending-clear-two.mp3", source: "Local library" }
+    ];
+
+    const batchPromise = request(app).post("/api/player/tracks").send({ action: "add-queue", tracks }).then((response) => response);
+    await repeatStartedPromise;
+    const clearPromise = request(app).delete("/api/queue").then((response) => response);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    releaseRepeat();
+    const [batch, clear] = await Promise.all([batchPromise, clearPromise]);
+
+    expect(batch.status).toBe(409);
+    expect(batch.body.accepted).toBe(0);
+    expect(clear.status).toBe(200);
+    expect(appState.queue).toEqual([]);
+  });
+
+  it("serializes generated playback activation with queue clear", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "spotify", history: [] };
+    addQueueItem({ title: "Manual Before Clear", path: "/music/test/manual-before-clear.mp3", requestedBy: "guest" });
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async spotifySearch() {
+          return [
+            { id: "spotify:generated-one", title: "Generated One", artist: "Tester", source: "Spotify", uri: "spotify:track:0000000000000000001001", kind: "track" },
+            { id: "spotify:generated-two", title: "Generated Two", artist: "Tester", source: "Spotify", uri: "spotify:track:0000000000000000001002", kind: "track" }
+          ];
+        }
+      }
+    });
+
+    const [clearResponse, smartResponse] = await Promise.all([
+      request(app).delete("/api/queue"),
+      request(app).post("/api/player/smart-shuffle").send({ source: "spotify", seed: "Tester", count: 2 })
+    ]);
+
+    expect([clearResponse.status, smartResponse.status].sort()).toEqual([200, 200]);
+    expect(appState.queue.some((item: { title: string }) => item.title === "Manual Before Clear")).toBe(false);
+    if (appState.queue.length > 0) {
+      expect(appState.playback.smartQueue).toBe(true);
+      expect(appState.queue.every((item: { requestedBy: string }) => item.requestedBy === "smart shuffle")).toBe(true);
+    } else {
+      expect(appState.playback.smartQueue).toBe(false);
+    }
+  });
+
+  it("uses Spotty browse-graph recommendations for generated smart shuffle", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "spotify", history: [] };
+    appState.services.spotify = { configured: true, reachable: true, detail: "Spotty detected" };
+    const seeds: string[][] = [];
+    const searchCalls: string[] = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async spotifyRecommendationCandidates(_playerId: string, seedArtists: string[]) {
+          seeds.push(seedArtists);
+          return [
+            { title: "Graph Pick One", artist: "Test Artist", album: "Graph Album", source: "Spotify", uri: "spotify:track:graph000000000000001", kind: "track" },
+            { title: "Graph Pick Two", artist: "Adjacent Artist", album: "Graph Album", source: "Spotify", uri: "spotify:track:graph000000000000002", kind: "track" },
+            { title: "Graph Pick Three", artist: "New Artist", album: "Graph Album", source: "Spotify", uri: "spotify:track:graph000000000000003", kind: "track" }
+          ];
+        },
+        async spotifySearch(_playerId: string, query: string) {
+          searchCalls.push(query);
+          return [];
+        }
+      },
+      taste: { getState: () => ({ version: 1, listeners: {}, events: [] }) }
+    });
+
+    const response = await request(app).post("/api/player/smart-shuffle").send({ source: "spotify", seed: "Manual Seed", count: 2 }).expect(200);
+
+    expect(seeds[0]).toEqual(["Test Artist", "Manual Seed"]);
+    expect(searchCalls).toEqual([]);
+    expect(response.body.queued.map((track: { title: string }) => track.title)).toEqual(["Graph Pick Two", "Graph Pick Three"]);
+    expect(appState.queue.every((item: { requestedBy: string }) => item.requestedBy === "smart shuffle")).toBe(true);
+  });
+
+  it("serializes transport queue consumption with concurrent batch additions", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, repeat: "off", history: [], previousTracks: [] };
+    appState.admin = { ...appState.admin, maxQueuePerUser: 3 };
+    addQueueItem({ title: "Transport First", path: "/music/test/transport-first.mp3", requestedBy: "guest" });
+    addQueueItem({ title: "Transport Second", path: "/music/test/transport-second.mp3", requestedBy: "guest" });
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async playTrack() {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          return "ok";
+        }
+      }
+    });
+
+    const playRequest = request(app).post("/api/player/play");
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    const batchRequest = request(app).post("/api/player/tracks").send({
+        action: "add-queue",
+        tracks: [
+          { title: "Transport Third", path: "/music/test/transport-third.mp3", source: "Local library" },
+          { title: "Transport Fourth", path: "/music/test/transport-fourth.mp3", source: "Local library" }
+        ]
+      });
+    const [playResponse, batchResponse] = await Promise.all([playRequest, batchRequest]);
+
+    expect(playResponse.status).toBe(200);
+    expect(batchResponse.status).toBe(200);
+    expect(playResponse.body.action).toBe("visible-queue-play");
+    expect(playResponse.body.nowPlaying.title).toBe("Transport First");
+    expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Transport Second", "Transport Third", "Transport Fourth"]);
+    expect(batchResponse.body.queue.map((item: { title: string }) => item.title)).toEqual(["Transport Second", "Transport Third", "Transport Fourth"]);
+    expect(batchResponse.body.queue.map((item: { title: string }) => item.title)).not.toContain("Transport First");
+  });
+
+  it("does not advance playback while refreshing public state", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: true, smartShuffleSource: "spotify", history: [] };
+    addQueueItem({ title: "Should Stay Queued", artist: "Tester", uri: "spotify:track:stay", source: "Spotify", requestedBy: "smart shuffle" });
+    const played: Array<{ action: string; track: { title?: string } }> = [];
+    const lms = {
+      ...mockLms,
+      async nowPlaying() {
+        return { ...(await mockLms.nowPlaying()), elapsed: 99.5, duration: 100 };
+      },
+      async playTrack(_playerId: string, track: { title?: string }, action: string) {
+        played.push({ action, track });
+        return "ok";
+      }
+    };
+
+    await request(createApp({ lms })).get("/api/state").expect(200);
+
+    expect(played).toHaveLength(0);
+    expect(appState.queue.some((item) => item.title === "Should Stay Queued")).toBe(true);
+  });
+
+  it("does not treat stopped manual queues as auto-advance-ready", () => {
+    appState.queue.splice(0, appState.queue.length);
+    const idleTrack = { id: "idle", title: "No track playing", artist: "Connect a player or request a song", source: "LMS", duration: 0, elapsed: 0 };
+
+    expect(shouldNudgePlayback({ mode: "stop" }, idleTrack, { repeat: "off", smartQueue: false, shuffle: false })).toBe(false);
+    expect(shouldNudgePlayback({ mode: "stopped" }, idleTrack, { repeat: "off", smartQueue: true, shuffle: false })).toBe(false);
+    expect(shouldNudgePlayback({ mode: "pause" }, { duration: 100, elapsed: 99 }, { repeat: "off", smartQueue: false, shuffle: false })).toBe(false);
+    expect(shouldNudgePlayback({ mode: "play" }, { duration: 100, elapsed: 99 }, { repeat: "off", smartQueue: false, shuffle: false })).toBe(true);
+    expect(shouldNudgePlayback({ mode: "play" }, { duration: 100, elapsed: 99 }, { repeat: "one", smartQueue: true, shuffle: false })).toBe(false);
+    addQueueItem({ title: "Queued Repeat", artist: "Tester", requestedBy: "guest", path: "/music/test/queued-repeat.mp3" });
+    expect(shouldNudgePlayback({ mode: "play" }, { duration: 100, elapsed: 99 }, { repeat: "one", smartQueue: false, shuffle: false })).toBe(true);
+  });
+
+  it("does not auto-play generated queue rows while stopped", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: true, smartShuffleSource: "spotify", history: [], appManagedPlayback: false };
+    const idleTrack = { id: "idle", title: "No track playing", artist: "Connect a player or request a song", source: "LMS", duration: 0, elapsed: 0 };
+    addQueueItem({ title: "Generated Keeper", artist: "Tester", requestedBy: "smart shuffle", uri: "spotify:track:keeper", kind: "track" });
+    const played: string[] = [];
+    const searched: string[] = [];
+
+    await maintainVisiblePlaybackQueueForTests(
+      {
+        ...mockLms,
+        async control() {
+          return "ok";
+        },
+        async playTrack(_playerId: string, track: { title?: string }) {
+          played.push(String(track.title || ""));
+          return "ok";
+        },
+        async spotifySearch(_playerId: string, term: string) {
+          searched.push(term);
+          return [{ id: "spotify:fresh", title: "Fresh Generated", artist: "Tester", source: "Spotify", uri: "spotify:track:fresh", kind: "track" }];
+        }
+      },
+      { id: "player-1", mode: "stop" },
+      idleTrack
+    );
+
+    expect(played).toEqual([]);
+    expect(appState.queue.some((item: { title: string }) => item.title === "Generated Keeper")).toBe(true);
+  });
+
+  it("auto-advances an app-managed visible queue after LMS has already stopped", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: true, smartQueue: false, smartShuffleSource: "mixed", history: [], appManagedPlayback: true };
+    addQueueItem({ title: "Queued After End", artist: "Tester", requestedBy: "guest", path: "/music/queued-after-end.mp3" });
+    const played: string[] = [];
+
+    await maintainVisiblePlaybackQueueForTests(
+      {
+        ...mockLms,
+        async control() {
+          return "ok";
+        },
+        async playTrack(_playerId: string, track: { title?: string }) {
+          played.push(String(track.title || ""));
+          return "ok";
+        }
+      },
+      { id: "player-1", mode: "stop" },
+      { id: "idle", title: "No track playing", artist: "Connect a player or request a song", source: "LMS", duration: 0, elapsed: 0 }
+    );
+
+    expect(played).toEqual(["Queued After End"]);
+    expect(appState.queue).toEqual([]);
+    expect(appState.playback.appManagedPlayback).toBe(true);
+  });
+
+  it("refresh auto-advances a visible queue before clearing idle app-managed state", async () => {
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, history: [], previousTracks: [], appManagedPlayback: true };
+    appState.nowPlaying = {
+      id: "current",
+      title: "Ending Track",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 99,
+      canSeek: true,
+      art: null,
+      path: "/music/ending-track.mp3"
+    };
+    addQueueItem({ title: "Queued After End", artist: "Tester", requestedBy: "guest", path: "/music/queued-after-end.mp3" });
+    const played: string[] = [];
+
+    await refreshLmsForTests(
+      {
+        ...mockLms,
+        async status() {
+          return { id: "player-1", name: "Test Speaker", connected: true, online: true, mode: "stop", volume: 44, detail: "stopped" };
+        },
+        async nowPlaying() {
+          return { id: "idle", title: "No track playing", artist: "Connect a player or request a song", album: "", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null };
+        },
+        async playTrack(_playerId: string, track: { title?: string }) {
+          played.push(String(track.title || ""));
+          return "ok";
+        }
+      },
+      { force: true, maintainPlayback: true }
+    );
+
+    expect(played).toEqual(["Queued After End"]);
+    expect(appState.nowPlaying.title).toBe("Queued After End");
+    expect(appState.playback.appManagedPlayback).toBe(true);
+    expect(appState.queue).toEqual([]);
+  });
+
+  it("state polling auto-advances a stopped app-managed visible queue", async () => {
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: true, smartQueue: false, history: [], previousTracks: [], appManagedPlayback: true };
+    appState.nowPlaying = {
+      id: "current",
+      title: "Ending Track",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 99,
+      canSeek: true,
+      art: null,
+      path: "/music/ending-track.mp3"
+    };
+    addQueueItem({ title: "Queued From State", artist: "Tester", requestedBy: "guest", path: "/music/queued-from-state.mp3" });
+    const played: string[] = [];
+
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async status() {
+          return { id: "player-1", name: "Test Speaker", connected: true, online: true, mode: "stop", volume: 44, detail: "stopped" };
+        },
+        async nowPlaying() {
+          return { id: "idle", title: "No track playing", artist: "Connect a player or request a song", album: "", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null };
+        },
+        async control() {
+          return "ok";
+        },
+        async playTrack(_playerId: string, track: { title?: string }) {
+          played.push(String(track.title || ""));
+          return "ok";
+        }
+      }
+    }))
+      .get("/api/state")
+      .expect(200);
+
+    expect(played).toEqual(["Queued From State"]);
+    expect(response.body.nowPlaying.title).toBe("Queued From State");
+    expect(response.body.queue).toEqual([]);
+    expect(response.body.playback.appManagedPlayback).toBe(true);
+  });
+
+  it("does not auto-advance a visible queue after a concurrent queue clear", async () => {
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, history: [], previousTracks: [], appManagedPlayback: true };
+    appState.nowPlaying = {
+      id: "current",
+      title: "Ending Track",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 99,
+      canSeek: true,
+      art: null,
+      path: "/music/ending-track.mp3"
+    };
+    addQueueItem({ title: "Cleared Before Advance", artist: "Tester", requestedBy: "guest", path: "/music/cleared-before-advance.mp3" });
+    const played: string[] = [];
+    let releaseNowPlaying: (() => void) | null = null;
+    let nowPlayingStarted: (() => void) | null = null;
+    const nowPlayingReached = new Promise<void>((resolve) => {
+      nowPlayingStarted = resolve;
+    });
+    const releaseNowPlayingPromise = new Promise<void>((resolve) => {
+      releaseNowPlaying = resolve;
+    });
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async status() {
+          return { id: "player-1", name: "Test Speaker", connected: true, online: true, mode: "stop", volume: 44, detail: "stopped" };
+        },
+        async nowPlaying() {
+          nowPlayingStarted?.();
+          await releaseNowPlayingPromise;
+          return { id: "idle", title: "No track playing", artist: "Connect a player or request a song", album: "", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null };
+        },
+        async control() {
+          return "ok";
+        },
+        async playTrack(_playerId: string, track: { title?: string }) {
+          played.push(String(track.title || ""));
+          return "ok";
+        }
+      }
+    });
+
+    const stateRequest = new Promise<any>((resolve, reject) => {
+      request(app).get("/api/state").end((error, response) => {
+        if (error) reject(error);
+        else resolve(response);
+      });
+    });
+    await nowPlayingReached;
+    await request(app).delete("/api/queue").expect(200);
+    releaseNowPlaying?.();
+    const response = await stateRequest;
+    expect(response.status).toBe(200);
+
+    expect(played).toEqual([]);
+    expect(response.body.nowPlaying.title).toBe("No track playing");
+    expect(response.body.queue).toEqual([]);
+    expect(response.body.playback).toMatchObject({ appManagedPlayback: false, history: [], previousTracks: [] });
+  });
+
+  it("keeps app-managed state during idle polling while a visible queue is waiting", async () => {
+    resetRefreshStateForTests();
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, history: [], previousTracks: [], appManagedPlayback: true };
+    appState.nowPlaying = {
+      id: "current",
+      title: "Ending Track",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 99,
+      canSeek: true,
+      art: null,
+      path: "/music/ending-track.mp3"
+    };
+    addQueueItem({ title: "Queued After End", artist: "Tester", requestedBy: "guest", path: "/music/queued-after-end.mp3" });
+
+    await refreshLmsForTests(
+      {
+        ...mockLms,
+        async status() {
+          return { id: "player-1", name: "Test Speaker", connected: true, online: true, mode: "stop", volume: 44, detail: "stopped" };
+        },
+        async nowPlaying() {
+          return { id: "idle", title: "No track playing", artist: "Connect a player or request a song", album: "", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null };
+        }
+      },
+      { force: true, maintainPlayback: false }
+    );
+
+    expect(appState.nowPlaying.id).toBe("idle");
+    expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Queued After End"]);
+    expect(appState.playback.appManagedPlayback).toBe(true);
+  });
+
+  it("does not record idle metadata in shuffle history", () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, history: [] };
+
+    syncVisibleQueueWithCurrentTrack({ id: "idle", title: "No track playing", artist: "Connect a player or request a song", source: "LMS", duration: 0, elapsed: 0 });
+
+    expect(appState.playback.history).toEqual([]);
+  });
+
+  it("does not consume a user-queued duplicate of the current track during stable shuffle refresh", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.nowPlaying = {
+      id: "current",
+      title: "Current Repeat",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 5,
+      canSeek: true,
+      art: null,
+      path: "/music/test/current-repeat.mp3"
+    };
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      manualShuffle: false,
+      smartQueue: false,
+      repeat: "off",
+      appManagedPlayback: true,
+      history: []
+    };
+    addQueueItem({ title: "Current Repeat", artist: "Tester", requestedBy: "guest", path: "/music/test/current-repeat.mp3" });
+    addQueueItem({ title: "Queued After", artist: "Tester", requestedBy: "guest", path: "/music/test/queued-after.mp3" });
+
+    await maintainVisiblePlaybackQueueForTests(
+      mockLms,
+      { id: "player-1", mode: "play" },
+      { title: "Current Repeat", artist: "Tester", duration: 100, elapsed: 6, path: "/music/test/current-repeat.mp3" }
+    );
+
+    expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Current Repeat", "Queued After"]);
+    appState.queue.splice(0, appState.queue.length);
+  });
+
+  it("treats LMS metadata for the same advancing song as continuing playback", () => {
+    expect(sameContinuingPlayback(
+      { title: "Current Repeat", artist: "Tester", elapsed: 12, path: "/music/test/current-repeat.mp3" },
+      { title: "Current Repeat", artist: "Tester", elapsed: 16, lmsTrackId: "123" }
+    )).toBe(true);
+    expect(sameContinuingPlayback(
+      { title: "Current Repeat", artist: "Tester", elapsed: 12, path: "/music/test/current-repeat.mp3" },
+      { title: "Current Repeat", artist: "Tester", elapsed: 0, lmsTrackId: "123" }
+    )).toBe(false);
+    expect(sameContinuingPlayback(
+      { title: "Current Repeat", artist: "Tester", elapsed: 12, path: "/music/test/current-repeat.mp3" },
+      { title: "Different Song", artist: "Tester", elapsed: 16, lmsTrackId: "456" }
+    )).toBe(false);
+  });
+
+  it("still removes a queued row when playback is observed moving to that row", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.nowPlaying = {
+      id: "current",
+      title: "Old Current",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 98,
+      canSeek: true,
+      art: null,
+      path: "/music/test/old-current.mp3"
+    };
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      manualShuffle: false,
+      smartQueue: false,
+      repeat: "off",
+      appManagedPlayback: true,
+      history: []
+    };
+    addQueueItem({ title: "Observed Next", artist: "Tester", requestedBy: "guest", path: "/music/test/observed-next.mp3" });
+    addQueueItem({ title: "Queued After", artist: "Tester", requestedBy: "guest", path: "/music/test/queued-after.mp3" });
+
+    await maintainVisiblePlaybackQueueForTests(
+      mockLms,
+      { id: "player-1", mode: "play" },
+      { title: "Observed Next", artist: "Tester", duration: 100, elapsed: 1, path: "/music/test/observed-next.mp3" },
+      { observedTrackChanged: true }
+    );
+
+    expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Queued After"]);
+    appState.queue.splice(0, appState.queue.length);
+  });
+
+  it("replaces stale now playing fields when LMS is idle", () => {
+    appState.nowPlaying = {
+      id: "previous",
+      title: "Previous Track",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 12,
+      canSeek: true,
+      art: null,
+      path: "/music/previous.mp3"
+    };
+
+    updateNowPlaying({ id: "idle", title: "No track playing", artist: "Connect a player or request a song", album: "", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null });
+
+    expect(appState.nowPlaying).toEqual({ id: "idle", title: "No track playing", artist: "Connect a player or request a song", album: "", source: "LMS", duration: 0, elapsed: 0, canSeek: false, art: null });
+  });
+
+  it("resumes playback immediately after seeking when already playing", async () => {
+    const controls: Array<{ action: string; value?: number }> = [];
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    updateNowPlaying({ id: "seek-current", title: "Seek Current", artist: "Tester", source: "LMS", duration: 100, elapsed: 5, canSeek: true });
+    const lms = {
+      ...mockLms,
+      async control(_playerId: string, action: string, value?: number) {
+        controls.push({ action, value });
+        return "ok";
+      }
+    };
+
+    await request(createApp({ lms })).post("/api/player/seek").send({ seconds: 42 }).expect(200);
+
+    expect(controls).toContainEqual({ action: "seek", value: 42 });
+    expect(controls).toContainEqual({ action: "play", value: undefined });
+  });
+
+  it("reports partial seek success when resume after seek fails", async () => {
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = {
+      id: "seek-current",
+      title: "Seek Current",
+      artist: "Tester",
+      album: "",
+      source: "Local library",
+      duration: 100,
+      elapsed: 5,
+      canSeek: true,
+      art: null,
+      path: "/music/test/seek-current.mp3"
+    };
+    const controls: Array<{ action: string; value?: number }> = [];
+    const lms = {
+      ...mockLms,
+      async control(_playerId: string, action: string, value?: number) {
+        controls.push({ action, value });
+        if (action === "play") throw new Error("resume failed");
+        return "ok";
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/seek").send({ seconds: 42 }).expect(502);
+
+    expect(response.body).toMatchObject({ error: "resume failed", seconds: 42, seekApplied: true });
+    expect(appState.nowPlaying.elapsed).toBe(42);
+    expect(appState.player.mode).toBe("play");
+    expect(controls).toEqual([{ action: "seek", value: 42 }, { action: "play", value: undefined }]);
+  });
+
+  it("returns Spotify search results from Spotty", async () => {
+    const response = await request(createApp({ lms: mockLms })).get("/api/spotify/search?q=drake").expect(200);
+    expect(response.body.results[0].uri).toBe("spotify:track:0000000000000000000101");
+  });
+
+  it("groups Spotify search results by tracks, artists, albums, and playlists", async () => {
+    const groupedLms = {
+      ...mockLms,
+      async spotifySearch() {
+        return [
+          { id: "spotify:track:t1", title: "Song", artist: "Drake", source: "Spotify", uri: "spotify:track:t1", kind: "track" },
+          { id: "spotify:artist:a1", title: "Drake", artist: "", source: "Spotify artist", uri: "spotify:artist:a1", kind: "artist", browseId: "1.0_a" },
+          { id: "spotify:album:al1", title: "Views", artist: "Drake", source: "Spotify album", uri: "spotify:album:al1", kind: "album", browseId: "1.0_b" },
+          { id: "spotify:playlist:p1", title: "Mix", artist: "Spotify", source: "Spotify playlist", uri: "spotify:playlist:p1", kind: "playlist", browseId: "1.0_c" }
+        ];
+      }
+    };
+    const response = await request(createApp({ lms: groupedLms })).get("/api/spotify/search?q=drake").expect(200);
+    expect(response.body.groups.tracks).toHaveLength(1);
+    expect(response.body.groups.artists[0].uri).toBe("spotify:artist:a1");
+    expect(response.body.groups.albums[0].title).toBe("Views");
+    expect(response.body.groups.playlists[0].kind).toBe("playlist");
+    expect(response.body.results).toHaveLength(4);
+  });
+
+  it("returns Spotify search categories from a dedicated endpoint", async () => {
+    const lms = {
+      ...mockLms,
+      async spotifySearchCategories() {
+        return {
+          artists: [{ id: "spotify:artist:a", title: "Drake", source: "Spotify artist", uri: "spotify:artist:a", kind: "artist" }],
+          albums: [{ id: "spotify:album:b", title: "Views", source: "Spotify album", uri: "spotify:album:b", kind: "album" }],
+          playlists: [{ id: "spotify:playlist:c", title: "Mix", source: "Spotify playlist", uri: "spotify:playlist:c", kind: "playlist" }]
+        };
+      }
+    };
+    const response = await request(createApp({ lms })).get("/api/spotify/search/categories?q=drake").expect(200);
+    expect(response.body.artists[0].uri).toBe("spotify:artist:a");
+    expect(response.body.albums[0].title).toBe("Views");
+    expect(response.body.playlists[0].kind).toBe("playlist");
+  });
+
+  it("manages app playlists with public create and admin-only mutations", async () => {
+    const file = path.join(os.tmpdir(), `cs-playlists-${Math.random().toString(36).slice(2)}.json`);
+    const playlists = createPlaylistStore(file);
+    const app = createApp({ lms: mockLms, playlists });
+    try {
+      const created = await request(app).post("/api/playlists").send({ name: "Road Trip" }).expect(201);
+      const id = created.body.playlist.id;
+      expect(created.body.playlist.name).toBe("Road Trip");
+
+      const added = await request(app)
+        .post(`/api/playlists/${id}/tracks`)
+        .send({ tracks: [
+          { id: "spotify:track:x", title: "Song A", uri: "spotify:track:x", kind: "track", source: "Spotify" },
+          { id: "spotify:album:y", title: "An Album", uri: "spotify:album:y", kind: "album", source: "Spotify album" }
+        ] })
+        .expect(200);
+      expect(added.body.added).toBe(1);
+      expect(added.body.playlist.tracks).toHaveLength(1);
+
+      const dup = await request(app)
+        .post(`/api/playlists/${id}/tracks`)
+        .send({ tracks: [{ id: "spotify:track:x", title: "Song A", uri: "spotify:track:x", kind: "track" }] })
+        .expect(200);
+      expect(dup.body.added).toBe(0);
+
+      const listed = await request(app).get("/api/playlists").expect(200);
+      expect(listed.body.playlists.find((item: { id: string }) => item.id === id).trackCount).toBe(1);
+
+      await request(app).patch(`/api/playlists/${id}`).send({ name: "Renamed" }).expect(401);
+      await request(app).delete(`/api/playlists/${id}`).expect(401);
+
+      const login = await request(app).post("/api/admin/login").send({ password: "admin" }).expect(200);
+      const auth = `Bearer ${login.body.token}`;
+      const renamed = await request(app).patch(`/api/playlists/${id}`).set("Authorization", auth).send({ name: "Renamed" }).expect(200);
+      expect(renamed.body.playlist.name).toBe("Renamed");
+
+      const removed = await request(app)
+        .delete(`/api/playlists/${id}/tracks/${encodeURIComponent("spotify:track:x")}`)
+        .set("Authorization", auth)
+        .expect(200);
+      expect(removed.body.playlist.tracks).toHaveLength(0);
+
+      await request(app).delete(`/api/playlists/${id}`).set("Authorization", auth).expect(200);
+      await request(app).get(`/api/playlists/${id}`).expect(404);
+    } finally {
+      await fs.rm(file, { force: true });
+    }
+  });
+
+  it("stores admin curation and filters hidden Spotify results", async () => {
+    const file = path.join(os.tmpdir(), `cs-curation-${Math.random().toString(36).slice(2)}.json`);
+    const curation = createCurationStore(file);
+    const app = createApp({ lms: mockLms, curation });
+    const track = { title: "Headlines", artist: "Drake", source: "Spotify", uri: "spotify:track:0000000000000000000101", kind: "track" };
+    try {
+      await request(app).post("/api/curation").send({ action: "favorite", track }).expect(401);
+      const login = await request(app).post("/api/admin/login").send({ password: "admin" }).expect(200);
+      const auth = `Bearer ${login.body.token}`;
+
+      const favorited = await request(app).post("/api/curation").set("Authorization", auth).send({ action: "favorite", track }).expect(200);
+      expect(favorited.body.curation.saved[0].track.title).toBe("Headlines");
+      const hidden = await request(app).post("/api/curation").set("Authorization", auth).send({ action: "hide", track }).expect(200);
+      expect(hidden.body.curation.hidden[0].key).toBe("uri:spotify:track:0000000000000000000101");
+
+      const search = await request(app).get("/api/spotify/search?q=drake").expect(200);
+      expect(search.body.results).toEqual([]);
+
+      const reloaded = createCurationStore(file);
+      const appAfterReload = createApp({ lms: mockLms, curation: reloaded });
+      const state = await request(appAfterReload).get("/api/state").expect(200);
+      expect(state.body.curation.hidden[0].track.title).toBe("Headlines");
+    } finally {
+      await fs.rm(file, { force: true });
+    }
+  });
+
+  it("reorders playlist tracks for admins and persists across reloads", async () => {
+    const file = path.join(os.tmpdir(), `cs-playlists-${Math.random().toString(36).slice(2)}.json`);
+    const playlists = createPlaylistStore(file);
+    const app = createApp({ lms: mockLms, playlists });
+    try {
+      const created = await request(app).post("/api/playlists").send({ name: "Order" }).expect(201);
+      const id = created.body.playlist.id;
+      await request(app)
+        .post(`/api/playlists/${id}/tracks`)
+        .send({ tracks: [
+          { title: "One", uri: "spotify:track:1", kind: "track" },
+          { title: "Two", uri: "spotify:track:2", kind: "track" }
+        ] })
+        .expect(200);
+      const login = await request(app).post("/api/admin/login").send({ password: "admin" }).expect(200);
+      const moved = await request(app)
+        .post(`/api/playlists/${id}/tracks/move`)
+        .set("Authorization", `Bearer ${login.body.token}`)
+        .send({ key: "spotify:track:2", direction: "up" })
+        .expect(200);
+      expect(moved.body.playlist.tracks[0].uri).toBe("spotify:track:2");
+
+      const reloaded = createPlaylistStore(file);
+      expect(reloaded.get(id).tracks[0].uri).toBe("spotify:track:2");
+    } finally {
+      await fs.rm(file, { force: true });
+    }
+  });
+
+  it("returns Spotify library sections from Spotty", async () => {
+    const response = await request(createApp({ lms: mockLms })).get("/api/spotify/library?type=playlists").expect(200);
+    expect(response.body.results[0].kind).toBe("playlist");
+  });
+
+  it("rejects invalid Spotify browse parameters before calling Spotty", async () => {
+    const calls: string[] = [];
+    const lms = {
+      ...mockLms,
+      async status() {
+        calls.push("status");
+        throw new Error("status should not run for invalid Spotify params");
+      },
+      async spotifySearch() {
+        calls.push("search");
+        return [];
+      },
+      async spotifyLibrary() {
+        calls.push("library");
+        return [];
+      },
+      async spotifyChildren() {
+        calls.push("children");
+        return [];
+      }
+    };
+    const app = createApp({ lms });
+
+    await request(app).get("/api/spotify/library?type=bad").expect(400);
+    await request(app).get("/api/spotify/search?q=drake&limit=0").expect(400);
+    await request(app).get("/api/spotify/search?q=drake&limit=51").expect(400);
+    await request(app).get("/api/spotify/library?type=playlists&limit=0").expect(400);
+    await request(app).get("/api/spotify/library?type=playlists&offset=-1").expect(400);
+    await request(app).get("/api/spotify/children?kind=bad&uri=spotify%3Aplaylist%3A1").expect(400);
+    await request(app).get("/api/spotify/children?kind=playlist").expect(400);
+    await request(app).get("/api/spotify/children?kind=track&uri=spotify%3Aplaylist%3A1").expect(400);
+    await request(app).get("/api/spotify/children?kind=playlist&uri=spotify%3Aalbum%3A1").expect(400);
+    await request(app).get("/api/spotify/children?kind=album&uri=spotify%3Aplaylist%3A1").expect(400);
+    await request(app).get("/api/spotify/children?kind=artist&uri=spotify%3Aplaylist%3A1").expect(400);
+    await request(app).get("/api/spotify/children?kind=playlist&uri=notspotify").expect(400);
+    await request(app).get("/api/spotify/children?kind=playlist&uri=spotify%3Aplaylist%3A1&limit=0").expect(400);
+    await request(app).get("/api/spotify/children?kind=playlist&uri=spotify%3Aplaylist%3A1&offset=-1").expect(400);
+
+    expect(calls).toEqual([]);
+  });
+
+  it("accepts spotify slash URI forms for matching child browse kinds", async () => {
+    const requests: Array<{ uri?: string; kind?: string }> = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async spotifyChildren(_playerId: string, input: { uri?: string; kind?: string }) {
+          requests.push(input);
+          return [];
+        }
+      }
+    });
+
+    await request(app).get("/api/spotify/children?kind=playlist&uri=spotify%3A%2F%2Fplaylist%3Aabc123").expect(200);
+    await request(app).get("/api/spotify/children?kind=album&uri=spotify%3A%2F%2Falbum%3Aabc123").expect(200);
+    await request(app).get("/api/spotify/children?kind=artist&uri=spotify%3A%2F%2Fartist%3Aabc123").expect(200);
+    await request(app).get("/api/spotify/children?kind=album&uri=spotify%3A%2F%2Fplaylist%3Aabc123").expect(400);
+
+    expect(requests.map((item) => `${item.kind}:${item.uri}`)).toEqual([
+      "playlist:spotify://playlist:abc123",
+      "album:spotify://album:abc123",
+      "artist:spotify://artist:abc123"
+    ]);
+  });
+
+  it("returns empty Spotify search results without touching LMS for blank queries", async () => {
+    const calls: string[] = [];
+    const lms = {
+      ...mockLms,
+      async status() {
+        calls.push("status");
+        throw new Error("status should not run for empty Spotify search");
+      },
+      async spotifySearch() {
+        calls.push("search");
+        return [];
+      }
+    };
+
+    const response = await request(createApp({ lms })).get("/api/spotify/search?q=%20%20&limit=20").expect(200);
+
+    expect(response.body.results).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
+  it("opens Spotify playlist children instead of queueing playlist containers", async () => {
+    const response = await request(createApp({ lms: mockLms }))
+      .get("/api/spotify/children?uri=spotify%3Aplaylist%3A1&kind=playlist")
+      .expect(200);
+    expect(response.body.results[0]).toMatchObject({ title: "Playlist Track", kind: "track" });
+  });
+
+  it("passes Spotify child titles through for artist fallback", async () => {
+    const calls: unknown[] = [];
+    const lms = {
+      ...mockLms,
+      async spotifyChildren(_playerId: string, target: unknown) {
+        calls.push(target);
+        return [];
+      }
+    };
+
+    await request(createApp({ lms }))
+      .get("/api/spotify/children?browseId=7.0&uri=spotify%3Aartist%3A1&kind=artist&title=Ado")
+      .expect(200);
+
+    expect(calls).toEqual([{ browseId: "7.0", uri: "spotify:artist:1", kind: "artist", title: "Ado" }]);
+  });
+
+  it("returns fast empty Spotify results when Spotty is configured but unreachable", async () => {
+    const previousSpotify = { ...appState.services.spotify };
+    const calls: string[] = [];
+    const lms = {
+      ...mockLms,
+      async spotifySearch() {
+        calls.push("search");
+        return [];
+      },
+      async spotifyLibrary() {
+        calls.push("library");
+        return [];
+      },
+      async spotifyChildren() {
+        calls.push("children");
+        return [];
+      },
+      async spotifyStatus() {
+        return { configured: true, reachable: false, detail: "Reauthorize Spotty in LMS" };
+      }
+    };
+    appState.services.spotify = { configured: true, reachable: false, detail: "Reauthorize Spotty in LMS" };
+    try {
+      const app = createApp({ lms });
+      const search = await request(app).get("/api/spotify/search?q=drake").expect(200);
+      const library = await request(app).get("/api/spotify/library?type=playlists").expect(200);
+      const children = await request(app).get("/api/spotify/children?uri=spotify%3Aplaylist%3A1&kind=playlist").expect(200);
+
+      expect(search.body.results).toEqual([]);
+      expect(library.body.results).toEqual([]);
+      expect(children.body.results).toEqual([]);
+      expect(calls).toEqual([]);
+    } finally {
+      appState.services.spotify = previousSpotify;
+    }
+  });
+
+  it("prewarms common Spotify searches when browsing is reachable", async () => {
+    const previousSpotify = { ...appState.services.spotify };
+    const calls: Array<{ query: string; limit: number }> = [];
+    const lms = {
+      ...mockLms,
+      async status() {
+        return { id: "player-1", name: "Test Speaker", connected: true, online: true, mode: "stop", volume: 44, detail: "test player connected" };
+      },
+      async spotifyStatus() {
+        return { configured: true, reachable: true, detail: "Spotty detected" };
+      },
+      async spotifySearch(_playerId: string, query: string, limit: number) {
+        calls.push({ query, limit });
+        return [];
+      }
+    };
+
+    try {
+      await prewarmSpotifySearchCaches(lms);
+
+      expect(calls).toEqual(expect.arrayContaining([
+        { query: "drake", limit: 50 },
+        { query: "juice wrld", limit: 50 },
+        { query: "the weeknd", limit: 50 },
+        { query: "travis scott", limit: 50 }
+      ]));
+    } finally {
+      appState.services.spotify = previousSpotify;
+    }
+  });
+
+  it("rejects Spotify-only generated queues when Spotify browsing is unreachable", async () => {
+    const previousSpotify = { ...appState.services.spotify };
+    const previousPlayback = { ...appState.playback };
+    appState.services.spotify = { configured: true, reachable: false, detail: "Reauthorize Spotty in LMS" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "mixed" };
+    try {
+      const app = createApp({ lms: mockLms });
+      const smartShuffle = await request(app)
+        .post("/api/player/smart-shuffle")
+        .send({ source: "spotify", count: 2, seed: "drake" })
+        .expect(503);
+      const playback = await request(app)
+        .post("/api/player/playback")
+        .send({ smartQueue: true, smartShuffleSource: "spotify" })
+        .expect(503);
+
+      expect(smartShuffle.body.error).toContain("Reauthorize Spotty");
+      expect(smartShuffle.body.queued).toEqual([]);
+      expect(playback.body.error).toContain("Reauthorize Spotty");
+      expect(appState.playback.smartQueue).toBe(false);
+    } finally {
+      appState.services.spotify = previousSpotify;
+      appState.playback = previousPlayback;
+    }
+  });
+
+  it("allows regular visible-queue shuffle when Spotify browsing is unreachable", async () => {
+    const previousSpotify = { ...appState.services.spotify };
+    const previousPlayback = { ...appState.playback };
+    appState.queue.splice(0, appState.queue.length);
+    appState.services.spotify = { configured: true, reachable: false, detail: "Reauthorize Spotty in LMS" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "spotify" };
+    addQueueItem({ title: "Visible Shuffle One", artist: "Tester", uri: "spotify:track:visible-one", source: "Spotify", requestedBy: "guest" });
+    addQueueItem({ title: "Visible Shuffle Two", artist: "Tester", uri: "spotify:track:visible-two", source: "Spotify", requestedBy: "guest" });
+    try {
+      const response = await request(createApp({ lms: mockLms }))
+        .post("/api/player/playback")
+        .send({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" })
+        .expect(200);
+
+      expect(response.body.playback).toMatchObject({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" });
+      expect(response.body.queue).toHaveLength(2);
+      expect(response.body.queued.map((item: { title: string }) => item.title)).toEqual(response.body.queue.map((item: { title: string }) => item.title));
+      expect(response.body.queue.every((item: { requestedBy: string }) => item.requestedBy === "guest")).toBe(true);
+    } finally {
+      appState.services.spotify = previousSpotify;
+      appState.playback = previousPlayback;
+    }
+  });
+
+  it("paginates local collection tracks without repeating the first page", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const previousUploadDir = config.uploadDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-collection-page-"));
+    config.musicSourceDir = root;
+    config.uploadDir = path.join(root, "uploads");
+    try {
+      const folder = path.join(root, "collections", "Probe Artist", "Probe Collection", "Probe Folder");
+      await fs.mkdir(folder, { recursive: true });
+      for (let index = 1; index <= 5; index += 1) {
+        await fs.writeFile(path.join(folder, `Track ${index}.mp3`), "ID3");
+      }
+
+      const app = createApp({ lms: mockLms });
+      const collections = await request(app).get("/api/library/collections?source=local").expect(200);
+      const collection = collections.body.collections[0];
+      const params = `source=local&collection=${encodeURIComponent(collection.collection)}&folder=${encodeURIComponent(collection.folder)}`;
+      const first = await request(app).get(`/api/library/collection?${params}&limit=2&offset=0`).expect(200);
+      const second = await request(app).get(`/api/library/collection?${params}&limit=2&offset=2`).expect(200);
+      const invalidOffset = await request(app).get(`/api/library/collection?${params}&offset=-1`).expect(400);
+
+      expect(first.body.results.map((track: { title: string }) => track.title)).toEqual(["Track 1", "Track 2"]);
+      expect(second.body.results.map((track: { title: string }) => track.title)).toEqual(["Track 3", "Track 4"]);
+      expect(invalidOffset.body.error).toContain("offset");
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      config.uploadDir = previousUploadDir;
+      clearLibraryCaches();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("paginates local collection lists without repeating the first page", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const previousUploadDir = config.uploadDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-collections-page-"));
+    config.musicSourceDir = root;
+    config.uploadDir = path.join(root, "uploads");
+    try {
+      for (let index = 1; index <= 5; index += 1) {
+        const folder = path.join(root, "collections", "Probe Artist", `Probe Collection ${index}`, "Tracks");
+        await fs.mkdir(folder, { recursive: true });
+        await fs.writeFile(path.join(folder, `Track ${index}.mp3`), "ID3");
+      }
+
+      const app = createApp({ lms: mockLms });
+      const first = await request(app).get("/api/library/collections?source=local&limit=2&offset=0").expect(200);
+      const second = await request(app).get("/api/library/collections?source=local&limit=2&offset=2").expect(200);
+      const invalidLimit = await request(app).get("/api/library/collections?source=local&limit=0").expect(400);
+      const invalidOffset = await request(app).get("/api/library/collections?source=local&offset=-1").expect(400);
+
+      const firstKeys = first.body.collections.map((collection: { collection: string; folder: string }) => `${collection.collection}/${collection.folder}`);
+      const secondKeys = second.body.collections.map((collection: { collection: string; folder: string }) => `${collection.collection}/${collection.folder}`);
+      expect(firstKeys).toHaveLength(2);
+      expect(secondKeys).toHaveLength(2);
+      expect(secondKeys.some((key: string) => firstKeys.includes(key))).toBe(false);
+      expect(invalidLimit.body.error).toContain("limit");
+      expect(invalidOffset.body.error).toContain("offset");
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      config.uploadDir = previousUploadDir;
+      clearLibraryCaches();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("adds representative artwork to local collection rows", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const previousUploadDir = config.uploadDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-collection-art-"));
+    config.musicSourceDir = root;
+    config.uploadDir = path.join(root, "uploads");
+    try {
+      const folder = path.join(root, "collections", "Probe Artist", "Probe Collection", "Tracks");
+      await fs.mkdir(folder, { recursive: true });
+      await fs.writeFile(path.join(folder, "Cover Track.mp3"), "ID3");
+      const lms = {
+        ...mockLms,
+        async enrichLocalArtwork(tracks: Array<{ title: string }>) {
+          return tracks.map((track) => ({ ...track, art: "api/artwork/collection-cover" }));
+        }
+      };
+
+      const response = await request(createApp({ lms }))
+        .get("/api/library/collections?source=local")
+        .expect(200);
+
+      expect(response.body.collections[0]).toMatchObject({
+        collection: "Probe Artist / Probe Collection",
+        folder: "Tracks",
+        art: "api/artwork/collection-cover"
+      });
+      expect(response.body.collections[0].coverTrack).toBeUndefined();
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      config.uploadDir = previousUploadDir;
+      clearLibraryCaches();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("coalesces concurrent local collection cover enrichment", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const previousUploadDir = config.uploadDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-collection-cache-"));
+    config.musicSourceDir = root;
+    config.uploadDir = path.join(root, "uploads");
+    let enrichCalls = 0;
+    try {
+      const folder = path.join(root, "collections", "Probe Artist", "Probe Collection", "Tracks");
+      await fs.mkdir(folder, { recursive: true });
+      await fs.writeFile(path.join(folder, "Cover Track.mp3"), "ID3");
+      const lms = {
+        ...mockLms,
+        async enrichLocalArtwork(tracks: Array<{ title: string }>) {
+          enrichCalls += 1;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          return tracks.map((track) => ({ ...track, art: "api/artwork/coalesced-cover" }));
+        }
+      };
+      const app = createApp({ lms });
+
+      const [first, second] = await Promise.all([
+        request(app).get("/api/library/collections?source=local").expect(200),
+        request(app).get("/api/library/collections?source=local").expect(200)
+      ]);
+
+      expect(first.body.collections[0].art).toBe("api/artwork/coalesced-cover");
+      expect(second.body.collections[0].art).toBe("api/artwork/coalesced-cover");
+      expect(enrichCalls).toBe(1);
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      config.uploadDir = previousUploadDir;
+      clearLibraryCaches();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts only validated audio uploads", async () => {
+    const previousUploadDir = config.uploadDir;
+    const previousMusicDir = config.musicSourceDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-upload-"));
+    config.musicSourceDir = root;
+    config.uploadDir = path.join(root, "uploads");
+    const app = createApp({ lms: mockLms });
+    try {
+      await request(app)
+        .post("/api/library/upload?filename=bad.exe")
+        .set("content-type", "application/octet-stream")
+        .send(Buffer.from("MZ fake executable"))
+        .expect(400);
+      const wrongType = await request(app)
+        .post("/api/library/upload?filename=test.mp3")
+        .set("content-type", "text/plain")
+        .send(Buffer.from("ID3"))
+        .expect(415);
+      expect(wrongType.body.error).toContain("application/octet-stream");
+
+      const invalidMp3 = await request(app)
+        .post("/api/library/upload?filename=probe-invalid-upload.mp3")
+        .set("content-type", "application/octet-stream")
+        .send(Buffer.from("ID3tiny-invalid"))
+        .expect(400);
+      expect(invalidMp3.body.error).toContain("Upload audio validation failed");
+      await expect(fs.access(path.join(config.uploadDir, "probe-invalid-upload.mp3"))).rejects.toThrow();
+
+      const uploaded = await request(app)
+        .post("/api/library/upload?filename=test.mp3")
+        .set("content-type", "application/octet-stream")
+        .send(tinyMp3)
+        .expect(201);
+
+      expect(uploaded.body.track.source).toBe("Uploaded");
+      expect(uploaded.body.track.uploaded).toBe(true);
+      expect(uploaded.body.lmsRescan).toBe(true);
+      const uploadedSearch = await request(app).get("/api/library/search?source=uploaded").expect(200);
+      expect(uploadedSearch.body.results).toHaveLength(1);
+      expect(uploadedSearch.body.results[0].source).toBe("Uploaded");
+      const unrelatedUploadedSearch = await request(app).get("/api/library/search?q=probe-invalid-upload&source=uploaded").expect(200);
+      expect(unrelatedUploadedSearch.body.results).toHaveLength(0);
+      const stateAfterUploadedSearch = await request(app).get("/api/state").expect(200);
+      expect(stateAfterUploadedSearch.body.services.localLibrary.root).toBe(root);
+      expect(stateAfterUploadedSearch.body.services.localLibrary.trackCount).toBe(1);
+      await request(app).get("/api/library/search?source=bad").expect(400);
+      await request(app).get("/api/library/collections?source=bad").expect(400);
+      await request(app).get("/api/library/collection?source=bad").expect(400);
+      const blankCollection = await request(app).get("/api/library/collection?source=all").expect(400);
+      expect(blankCollection.body.error).toContain("Collection or folder");
+      await request(app).get("/api/library/search?source=local&limit=0").expect(400);
+      await request(app).get("/api/library/search?source=local&limit=-1").expect(400);
+      await request(app).get("/api/library/collection?source=local&collection=uploads&limit=0").expect(400);
+
+      const encodedPath = Buffer.from(uploaded.body.track.path).toString("base64url");
+      const stream = await request(app).get(`/api/stream/${encodedPath}`).expect(200);
+      expect(stream.headers["content-type"]).toContain("audio/mpeg");
+      expect(stream.body.length).toBeGreaterThan(0);
+
+      const malformedRange = await request(app).get(`/api/stream/${encodedPath}`).set("range", "bad-range").expect(416);
+      expect(malformedRange.headers["content-range"]).toContain("bytes */");
+      const suffixRange = await request(app).get(`/api/stream/${encodedPath}`).set("range", "bytes=-4").expect(206);
+      expect(suffixRange.headers["content-range"]).toMatch(/bytes \d+-\d+\/\d+/);
+      expect(suffixRange.body.length).toBe(4);
+    } finally {
+      config.uploadDir = previousUploadDir;
+      config.musicSourceDir = previousMusicDir;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns JSON 404s for unknown API routes", async () => {
+    const app = createApp({ lms: mockLms });
+
+    const response = await request(app).get("/api/artwork/").expect(404);
+
+    expect(response.body).toEqual({ error: "API route not found" });
+    expect(response.headers["content-type"]).toContain("application/json");
+  });
+
+  it("does not follow library symlinks outside allowed roots", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    const previousStrict = process.env.STRICT_PUBLIC_TRACK_VALIDATION;
+    const previousUploadDir = config.uploadDir;
+    const previousMusicDir = config.musicSourceDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-safe-root-"));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-outside-root-"));
+    config.musicSourceDir = path.join(root, "music");
+    config.uploadDir = path.join(root, "uploads");
+    process.env.STRICT_PUBLIC_TRACK_VALIDATION = "1";
+    const outsideTrack = path.join(outside, "outside.mp3");
+    const linkTrack = path.join(config.musicSourceDir, "linked-outside.mp3");
+    const app = createApp({ lms: mockLms });
+    try {
+      await fs.mkdir(config.musicSourceDir, { recursive: true });
+      await fs.mkdir(config.uploadDir, { recursive: true });
+      await fs.writeFile(outsideTrack, Buffer.from("ID3 outside"));
+      await fs.symlink(outsideTrack, linkTrack);
+
+      await request(app)
+        .post("/api/player/track")
+        .send({ action: "add-queue", track: { title: "Linked Outside", artist: "Tester", path: linkTrack } })
+        .expect(400);
+
+      const encoded = Buffer.from(linkTrack).toString("base64url");
+      await request(app).get(`/api/stream/${encoded}`).expect(404);
+      expect(appState.queue).toHaveLength(0);
+    } catch (error) {
+      if (!["EPERM", "EACCES"].includes((error as NodeJS.ErrnoException).code || "")) throw error;
+    } finally {
+      if (previousStrict === undefined) delete process.env.STRICT_PUBLIC_TRACK_VALIDATION;
+      else process.env.STRICT_PUBLIC_TRACK_VALIDATION = previousStrict;
+      config.uploadDir = previousUploadDir;
+      config.musicSourceDir = previousMusicDir;
+      await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("deduplicates concurrent library rescans", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const previousUploadDir = config.uploadDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-rescan-"));
+    config.musicSourceDir = root;
+    config.uploadDir = path.join(root, "uploads");
+    const app = createApp({ lms: mockLms });
+    try {
+      await fs.writeFile(path.join(root, "Artist - One.mp3"), "ID3");
+      await request(app).post("/api/library/rescan").expect(401);
+      const login = await request(app).post("/api/admin/login").send({ password: "admin" }).expect(200);
+      const [first, second] = await Promise.all([
+        request(app).post("/api/library/rescan").set("Authorization", `Bearer ${login.body.token}`).expect(200),
+        request(app).post("/api/library/rescan").set("Authorization", `Bearer ${login.body.token}`).expect(200)
+      ]);
+
+      expect(first.body.trackCount).toBe(second.body.trackCount);
+      expect(first.body.sample.map((track: { title: string }) => track.title)).toEqual(second.body.sample.map((track: { title: string }) => track.title));
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      config.uploadDir = previousUploadDir;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("updates shuffle and repeat playback settings", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-empty-library-"));
+    config.musicSourceDir = root;
+    const controls: Array<{ action: string; value?: string }> = [];
+    try {
+      const response = await request(createApp({
+        lms: {
+          ...mockLms,
+          async control(_playerId: string, action: string, value?: string) {
+            controls.push({ action, value });
+            return "ok";
+          }
+        }
+      }))
+        .post("/api/player/playback")
+        .send({ shuffle: true, repeat: "all", smartShuffleSource: "mixed" })
+        .expect(200);
+      expect(response.body.playback).toMatchObject({ shuffle: true, repeat: "off", smartShuffleSource: "mixed" });
+      expect(controls).toContainEqual({ action: "repeat", value: "off" });
+      expect(controls).not.toContainEqual({ action: "repeat", value: "all" });
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+    }
+  });
+
+  it("turns repeat off when enabling visible-queue shuffle", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, repeat: "one", smartShuffleSource: "mixed" };
+    addQueueItem({ title: "Manual A", artist: "Tester", requestedBy: "guest", path: "/music/manual-a.mp3" });
+    addQueueItem({ title: "Manual B", artist: "Tester", requestedBy: "guest", path: "/music/manual-b.mp3" });
+    const controls: Array<{ action: string; value?: string }> = [];
+
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string, value?: string) {
+          controls.push({ action, value });
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/playback")
+      .send({ shuffle: true, smartQueue: false })
+      .expect(200);
+
+    expect(response.body.playback).toMatchObject({ shuffle: true, smartQueue: false, repeat: "off" });
+    expect(response.body.queue.map((item: { requestedBy: string }) => item.requestedBy)).toEqual(["guest", "guest"]);
+    expect(controls).toContainEqual({ action: "repeat", value: "off" });
+  });
+
+  it("keeps a stale-mode visible queue app-managed so shuffled rows auto-advance", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
+    appState.nowPlaying = {
+      id: "current",
+      title: "Current Visible",
+      artist: "Tester",
+      album: "",
+      source: "Spotify",
+      duration: 100,
+      elapsed: 40,
+      canSeek: true,
+      art: null,
+      uri: "spotify:track:current-visible"
+    };
+    appState.playback = { ...appState.playback, shuffle: false, manualShuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "spotify", appManagedPlayback: false, history: [] };
+    const searches: string[] = [];
+    const played: string[] = [];
+
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async control() {
+          return "ok";
+        },
+        async spotifySearch(_playerId: string, term: string) {
+          searches.push(term);
+          return [{ title: "Unrelated Generated", artist: "Tester", uri: "spotify:track:unrelated", kind: "track", source: "Spotify" }];
+        },
+        async playTrack(_playerId: string, track: { title?: string }) {
+          played.push(String(track.title || ""));
+          return "ok";
+        }
+      }
+    });
+
+    await request(app)
+      .post("/api/player/track")
+      .send({ action: "add-queue", track: { title: "Queued One", artist: "Tester", path: "/music/test/queued-one.mp3", source: "Local library", kind: "track" } })
+      .expect(200);
+    await request(app)
+      .post("/api/player/track")
+      .send({ action: "add-queue", track: { title: "Queued Two", artist: "Tester", path: "/music/test/queued-two.mp3", source: "Local library", kind: "track" } })
+      .expect(200);
+
+    const shuffled = await request(app)
+      .post("/api/player/playback")
+      .send({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" })
+      .expect(200);
+
+    expect(shuffled.body.playback).toMatchObject({ shuffle: true, manualShuffle: true, smartQueue: false, appManagedPlayback: true });
+    expect(shuffled.body.queued).toHaveLength(2);
+    expect(shuffled.body.queued.map((item: { title: string }) => item.title)).toEqual(shuffled.body.queue.map((item: { title: string }) => item.title));
+    expect(shuffled.body.queue).toHaveLength(2);
+    expect(searches).toEqual([]);
+
+    await maintainVisiblePlaybackQueueForTests(
+      {
+        ...mockLms,
+        async control() {
+          return "ok";
+        },
+        async spotifySearch(_playerId: string, term: string) {
+          searches.push(term);
+          return [{ title: "Unrelated Generated", artist: "Tester", uri: "spotify:track:unrelated", kind: "track", source: "Spotify" }];
+        },
+        async playTrack(_playerId: string, track: { title?: string }) {
+          played.push(String(track.title || ""));
+          return "ok";
+        }
+      },
+      { id: "player-1", mode: "stop" },
+      { id: "idle", title: "No track playing", artist: "Connect a player or request a song", source: "LMS", duration: 0, elapsed: 0 }
+    );
+
+    expect(played).toHaveLength(1);
+    expect(["Queued One", "Queued Two"]).toContain(played[0]);
+    expect(searches).toEqual([]);
+    expect(appState.queue).toHaveLength(1);
+    expect(appState.playback).toMatchObject({ shuffle: true, manualShuffle: true, smartQueue: false, appManagedPlayback: true });
+  });
+
+  it("turns repeat off before adding visible queue rows", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = { id: "current", title: "Current", artist: "Tester", album: "", source: "Spotify", duration: 100, elapsed: 12, canSeek: true, art: null, uri: "spotify:track:current" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, repeat: "one", appManagedPlayback: true };
+    const controls: Array<{ action: string; value?: string }> = [];
+
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string, value?: string) {
+          controls.push({ action, value });
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/track")
+      .send({ action: "add-queue", track: { title: "Manual Next", artist: "Tester", path: "/music/test/manual-next.mp3" } })
+      .expect(200);
+
+    expect(response.body.playback.repeat).toBe("off");
+    expect(response.body.queue).toEqual([expect.objectContaining({ title: "Manual Next" })]);
+    expect(controls).toContainEqual({ action: "repeat", value: "off" });
+  });
+
+  it("turns repeat off before direct queue posts", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = { id: "current", title: "Current", artist: "Tester", album: "", source: "Spotify", duration: 100, elapsed: 12, canSeek: true, art: null, uri: "spotify:track:current" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, repeat: "one", appManagedPlayback: true };
+    const controls: Array<{ action: string; value?: string }> = [];
+
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string, value?: string) {
+          controls.push({ action, value });
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/queue")
+      .send({ title: "Direct Queue", artist: "Tester", path: "/music/test/direct-queue.mp3" })
+      .expect(201);
+
+    expect(response.body.title).toBe("Direct Queue");
+    expect(appState.playback.repeat).toBe("off");
+    expect(controls).toContainEqual({ action: "repeat", value: "off" });
+  });
+
+  it("allows repeat changes while visible playlist queue rows exist", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "mixed" };
+    addQueueItem({ title: "Manual A", artist: "Tester", requestedBy: "guest", path: "/music/manual-a.mp3" });
+    const controls: Array<{ action: string; value?: string }> = [];
+
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string, value?: string) {
+          controls.push({ action, value });
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/playback")
+      .send({ repeat: "one" })
+      .expect(200);
+
+    expect(response.body.playback.repeat).toBe("one");
+    expect(controls).toContainEqual({ action: "repeat", value: "one" });
+    expect(controls).not.toContainEqual({ action: "repeat", value: "off" });
+  });
+
+  it("does not mutate repeat when LMS repeat control fails", async () => {
+    appState.playback = { ...appState.playback, repeat: "off", shuffle: false, smartQueue: false };
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string) {
+          if (action === "repeat") throw new Error("LMS refused repeat");
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/playback")
+      .send({ repeat: "all" })
+      .expect(502);
+
+    expect(response.body.error).toContain("LMS refused repeat");
+    expect(response.body.playback.repeat).toBe("off");
+    expect(appState.playback.repeat).toBe("off");
+  });
+
+  it("does not mutate queue mode or generated rows when LMS shuffle disable fails", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = {
+      ...appState.playback,
+      shuffle: false,
+      smartQueue: false,
+      repeat: "off",
+      lastShuffleRefillAt: 12345,
+      lastShuffleSeed: "stable-seed",
+      lastSmartQueueBase: "stable-base"
+    };
+    addQueueItem({ title: "Generated Existing", artist: "Tester", requestedBy: "shuffle", uri: "spotify:track:generated-existing" });
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string) {
+          if (action === "shuffle") throw new Error("LMS refused shuffle");
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/playback")
+      .send({ shuffle: true, smartQueue: false })
+      .expect(502);
+
+    expect(response.body.error).toContain("LMS refused shuffle");
+    expect(response.body.playback).toMatchObject({
+      shuffle: false,
+      smartQueue: false,
+      repeat: "off",
+      lastShuffleRefillAt: 12345,
+      lastShuffleSeed: "stable-seed",
+      lastSmartQueueBase: "stable-base"
+    });
+    expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Generated Existing"]);
+  });
+
+  it("rejects stale playback shuffle when the queue is cleared while settings are pending", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, manualShuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "spotify", history: [] };
+    addQueueItem({ title: "Manual A", artist: "Tester", requestedBy: "guest", uri: "spotify:track:manual-a", source: "Spotify", kind: "track" });
+    let releaseShuffleControl: () => void = () => {};
+    let markShuffleControlStarted: () => void = () => {};
+    const shuffleGate = new Promise<void>((resolve) => {
+      releaseShuffleControl = resolve;
+    });
+    const shuffleControlStarted = new Promise<void>((resolve) => {
+      markShuffleControlStarted = resolve;
+    });
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string) {
+          if (action === "shuffle") {
+            markShuffleControlStarted();
+            await shuffleGate;
+          }
+          return "ok";
+        },
+        async spotifySearch() {
+          return [{ title: "Generated Leak", artist: "Tester", uri: "spotify:track:generated-leak", source: "Spotify", kind: "track" }];
+        }
+      }
+    });
+
+    const playbackRequest = request(app)
+      .post("/api/player/playback")
+      .send({ shuffle: true, smartQueue: false })
+      .expect(409);
+    const playbackPromise = playbackRequest.then((response) => response);
+    await shuffleControlStarted;
+    const clearRequest = request(app).delete("/api/queue").expect(200);
+    const clearPromise = clearRequest.then((response) => response);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    releaseShuffleControl();
+    const clear = await clearPromise;
+    const playback = await playbackPromise;
+
+    expect(clear.body.queue).toEqual([]);
+    expect(playback.body.error).toContain("Queue was cleared");
+    expect(playback.body.queued).toEqual([]);
+    expect(playback.body.queue).not.toEqual(expect.arrayContaining([expect.objectContaining({ title: "Generated Leak" })]));
+    expect(appState.queue).toEqual([]);
+    expect(appState.playback).toMatchObject({ shuffle: false, manualShuffle: false, smartQueue: false });
+    expect(appState.queue).not.toEqual(expect.arrayContaining([expect.objectContaining({ title: "Generated Leak" })]));
+  });
+
+  it("rejects malformed playback settings instead of silently ignoring them", async () => {
+    const response = await request(createApp({ lms: mockLms }))
+      .post("/api/player/playback")
+      .send({ repeat: "bad", shuffle: "yes", smartQueue: "no", smartShuffleSource: "bad" })
+      .expect(400);
+
+    expect(response.body.error).toBe("Invalid playback settings");
+  });
+
+  it("rejects ambiguous playback queue modes", async () => {
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false };
+    const response = await request(createApp({ lms: mockLms }))
+      .post("/api/player/playback")
+      .send({ shuffle: true, smartQueue: true })
+      .expect(400);
+
+    expect(response.body.error).toBe("Invalid playback settings");
+    expect(appState.playback).toMatchObject({ shuffle: false, smartQueue: false });
+  });
+
+  it("rejects empty playback updates instead of returning a no-op success", async () => {
+    await request(createApp({ lms: mockLms }))
+      .post("/api/player/playback")
+      .send({})
+      .expect(400);
+    await request(createApp({ lms: mockLms }))
+      .post("/api/player/playback")
+      .set("content-type", "text/plain")
+      .send("shuffle=true")
+      .expect(400);
+  });
+
+  it("regular shuffle randomizes only the visible queue", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, manualShuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "spotify", history: [] };
+    addQueueItem({ title: "Queued A", artist: "Tester", uri: "spotify:track:a", source: "Spotify", requestedBy: "guest" });
+    addQueueItem({ title: "Queued B", artist: "Tester", uri: "spotify:track:b", source: "Spotify", requestedBy: "guest" });
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async spotifySearch() {
+          return [
+            { id: "spotify:current", title: "Headlines", artist: "Drake", source: "Spotify", uri: "spotify:track:0000000000000000000103", kind: "track" },
+            { id: "spotify:other", title: "Nonstop", artist: "Drake", source: "Spotify", uri: "spotify:track:other", kind: "track" }
+          ];
+        }
+      }
+    }))
+      .post("/api/player/playback")
+      .send({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" })
+      .expect(200);
+
+    expect(response.body.playback).toMatchObject({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" });
+    expect(response.body.queue.map((item: { requestedBy: string }) => item.requestedBy)).toEqual(["guest", "guest"]);
+    expect(response.body.queued.map((item: { title: string }) => item.title)).toEqual(response.body.queue.map((item: { title: string }) => item.title));
+    expect(response.body.playback.repeat).toBe("off");
+  });
+
+  it("regular shuffle generates a visible queue when no manual songs are queued", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    updateSpotifyStatus({ configured: true, reachable: true, detail: "Spotty detected" });
+    appState.playback = { ...appState.playback, shuffle: false, manualShuffle: false, smartQueue: false, repeat: "off", smartShuffleSource: "spotify", history: [] };
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async spotifySearch() {
+          return [
+            { id: "spotify:shuffle-one", title: "Shuffle One", artist: "Tester", source: "Spotify", uri: "spotify:track:0000000000000000000101", kind: "track" },
+            { id: "spotify:shuffle-one-alt", title: "Shuffle One", artist: "Tester", source: "Spotify", uri: "spotify:track:0000000000000000000103", kind: "track" },
+            { id: "spotify:shuffle-two", title: "Shuffle Two", artist: "Tester", source: "Spotify", uri: "spotify:track:0000000000000000000102", kind: "track" }
+          ];
+        }
+      }
+    }))
+      .post("/api/player/playback")
+      .send({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" })
+      .expect(200);
+
+    expect(response.body.playback).toMatchObject({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" });
+    expect(response.body.queued).toHaveLength(2);
+    expect(response.body.queued.map((item: { title: string }) => item.title).sort()).toEqual(["Shuffle One", "Shuffle Two"]);
+    expect(response.body.queue.map((item: { requestedBy: string }) => item.requestedBy)).toEqual(["shuffle", "shuffle"]);
+  });
+
+  it("rejects smart-shuffle cycling while manual playlist rows are queued", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      manualShuffle: false,
+      smartQueue: false,
+      repeat: "off",
+      smartShuffleSource: "spotify",
+      lastShuffleRefillAt: 12345,
+      lastShuffleSeed: "playlist",
+      lastSmartQueueBase: "playlist-base",
+      history: []
+    };
+    addQueueItem({ title: "Playlist A", artist: "Tester", uri: "spotify:track:playlist-a", source: "Spotify", requestedBy: "guest" });
+    addQueueItem({ title: "Playlist B", artist: "Tester", uri: "spotify:track:playlist-b", source: "Spotify", requestedBy: "guest" });
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async spotifySearch() {
+          return [{ id: "spotify:random", title: "Unrelated Random", artist: "Tester", source: "Spotify", uri: "spotify:track:random", kind: "track" }];
+        }
+      }
+    }))
+      .post("/api/player/playback")
+      .send({ smartQueue: true, smartShuffleSource: "spotify" })
+      .expect(409);
+
+    expect(response.body.error).toContain("Clear the queue");
+    expect(response.body.playback).toMatchObject({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" });
+    expect(response.body.playback.lastShuffleRefillAt).toBe(12345);
+    expect(response.body.playback.lastShuffleSeed).toBe("playlist");
+    expect(response.body.playback.lastSmartQueueBase).toBe("playlist-base");
+    expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Playlist A", "Playlist B"]);
+    expect(response.body.queue).not.toEqual(expect.arrayContaining([expect.objectContaining({ requestedBy: "smart shuffle" })]));
+    expect(appState.playback).toMatchObject({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" });
+  });
+
+  it("does not reshuffle a manual queue when only the smart-shuffle source changes", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      manualShuffle: true,
+      smartQueue: false,
+      repeat: "off",
+      smartShuffleSource: "spotify",
+      lastShuffleRefillAt: 12345,
+      lastShuffleSeed: "playlist",
+      lastSmartQueueBase: "playlist-base",
+      history: ["old"]
+    };
+    addQueueItem({ title: "Playlist A", artist: "Tester", uri: "spotify:track:playlist-a", source: "Spotify", requestedBy: "guest" });
+    addQueueItem({ title: "Playlist B", artist: "Tester", uri: "spotify:track:playlist-b", source: "Spotify", requestedBy: "guest" });
+    const controls: string[] = [];
+    const searches: string[] = [];
+
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string) {
+          controls.push(action);
+          return "ok";
+        },
+        async spotifySearch(_playerId: string, term: string) {
+          searches.push(term);
+          return [{ title: "Generated", artist: "Tester", source: "Spotify", uri: "spotify:track:generated", kind: "track" }];
+        }
+      }
+    }))
+      .post("/api/player/playback")
+      .send({ smartShuffleSource: "local" })
+      .expect(200);
+
+    expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Playlist A", "Playlist B"]);
+    expect(response.body.queued).toEqual([]);
+    expect(response.body.playback).toMatchObject({
+      shuffle: true,
+      manualShuffle: true,
+      smartQueue: false,
+      smartShuffleSource: "local",
+      lastShuffleRefillAt: 12345,
+      lastShuffleSeed: "playlist",
+      lastSmartQueueBase: "playlist-base",
+      history: ["old"]
+    });
+    expect(controls).toEqual([]);
+    expect(searches).toEqual([]);
+  });
+
+  it("requires admin access for recent queue and playback debug events", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "spotify", history: [] };
+    updateSpotifyStatus({ configured: true, reachable: true, detail: "Spotty detected" });
+    const app = createApp({ lms: mockLms });
+
+    await request(app).get("/api/debug/logs?limit=10").expect(401);
+    const login = await request(app).post("/api/admin/login").send({ password: "admin" }).expect(200);
+
+    await request(app)
+      .post("/api/player/playback")
+      .send({ shuffle: true, smartQueue: false, smartShuffleSource: "spotify" })
+      .expect(200);
+    await request(app)
+      .get("/api/debug/logs?limit=abc")
+      .set("Authorization", `Bearer ${login.body.token}`)
+      .expect(400);
+    await request(app)
+      .get("/api/debug/logs?limit=0")
+      .set("Authorization", `Bearer ${login.body.token}`)
+      .expect(400);
+    await request(app)
+      .get("/api/debug/logs?limit=-1")
+      .set("Authorization", `Bearer ${login.body.token}`)
+      .expect(400);
+    await request(app)
+      .get("/api/debug/logs?limit=1.5")
+      .set("Authorization", `Bearer ${login.body.token}`)
+      .expect(400);
+    await request(app)
+      .get("/api/debug/logs?limit=501")
+      .set("Authorization", `Bearer ${login.body.token}`)
+      .expect(400);
+    const logs = await request(app)
+      .get("/api/debug/logs?limit=10")
+      .set("Authorization", `Bearer ${login.body.token}`)
+      .expect(200);
+
+    expect(logs.body.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "playback.request" }),
+        expect.objectContaining({ type: "playback.result" })
+      ])
+    );
+  });
+
+  it("repeat changes do not regenerate or remove generated queue rows while smart queue keeps repeat off", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: true, smartShuffleSource: "spotify", history: [] };
+    addQueueItem({ title: "Smart Existing", artist: "Tester", requestedBy: "smart shuffle", uri: "spotify:track:existing" });
+    addQueueItem({ title: "Manual Existing", artist: "Tester", requestedBy: "guest", path: "/music/manual.mp3" });
+    const controls: Array<{ action: string; value: string }> = [];
+
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string, value: string) {
+          controls.push({ action, value });
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/playback")
+      .send({ repeat: "one" })
+      .expect(200);
+
+    expect(response.body.playback.repeat).toBe("off");
+    expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Smart Existing", "Manual Existing"]);
+    expect(controls).toContainEqual({ action: "repeat", value: "off" });
+    expect(controls).not.toContainEqual({ action: "repeat", value: "one" });
+  });
+
+  it("manual queueing takes over while generated shuffle is active", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: true, smartQueue: false, smartShuffleSource: "spotify", repeat: "off", history: [] };
+    addQueueItem({ title: "Generated A", artist: "Tester", requestedBy: "shuffle", uri: "spotify:track:generated-a" });
+    addQueueItem({ title: "Generated B", artist: "Tester", requestedBy: "shuffle", uri: "spotify:track:generated-b" });
+    const played: Array<{ action: string; track: { title?: string } }> = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async playTrack(_playerId: string, track: { title?: string }, action: string) {
+          played.push({ action, track });
+          return "ok";
+        }
+      }
+    });
+
+    const response = await request(app)
+      .post("/api/player/track")
+      .send({ action: "play-next", track: { title: "Manual Heavy", artist: "Tester", path: "/music/manual-heavy.mp3" } })
+      .expect(200);
+
+    expect(response.body.playback).toMatchObject({ shuffle: false, smartQueue: false });
+    expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Manual Heavy"]);
+    expect(response.body.queue.every((item: { requestedBy: string }) => item.requestedBy === "guest")).toBe(true);
+    expect(played).toHaveLength(0);
+  });
+
+  it("manual queueing takes over while smart shuffle is active", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: true, smartShuffleSource: "spotify", repeat: "off", history: [] };
+    addQueueItem({ title: "Smart Generated A", artist: "Tester", requestedBy: "smart shuffle", uri: "spotify:track:smart-generated-a" });
+    addQueueItem({ title: "Smart Generated B", artist: "Tester", requestedBy: "smart shuffle", uri: "spotify:track:smart-generated-b" });
+
+    const response = await request(createApp({ lms: mockLms }))
+      .post("/api/player/track")
+      .send({ action: "add-queue", track: { title: "Manual After Smart", artist: "Tester", path: "/music/manual-after-smart.mp3" } })
+      .expect(200);
+
+    expect(response.body.playback).toMatchObject({ shuffle: false, smartQueue: false });
+    expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Manual After Smart"]);
+    expect(response.body.queue.every((item: { requestedBy: string }) => item.requestedBy === "guest")).toBe(true);
+  });
+
+  it("manual next disables repeat one before visible queue advance", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: true, smartQueue: false, smartShuffleSource: "spotify", repeat: "one", history: [] };
+    addQueueItem({ title: "Generated A", artist: "Tester", requestedBy: "shuffle", uri: "spotify:track:generated-a" });
+    const controls: Array<{ action: string; value: string }> = [];
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string, value: string) {
+          controls.push({ action, value });
+          return "ok";
+        }
+      }
+    });
+
+    await request(app).post("/api/player/next").expect(200);
+
+    expect(appState.playback.repeat).toBe("off");
+    expect(controls).toContainEqual({ action: "repeat", value: "off" });
+  });
+
+  it("does not advance generated next when LMS shuffle disable fails", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: true, smartQueue: false, smartShuffleSource: "spotify", repeat: "off", history: [] };
+    addQueueItem({ title: "Generated A", artist: "Tester", requestedBy: "shuffle", uri: "spotify:track:generated-a" });
+    const played: Array<{ action: string; track: { title?: string } }> = [];
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string) {
+          if (action === "shuffle") throw new Error("LMS refused shuffle");
+          return "ok";
+        },
+        async playTrack(_playerId: string, track: { title?: string }, action: string) {
+          played.push({ action, track });
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/next")
+      .expect(502);
+
+    expect(response.body.error).toContain("LMS refused shuffle");
+    expect(played).toHaveLength(0);
+    expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Generated A"]);
+  });
+
+  it("manual play now stops generated shuffle instead of queueing unrelated tracks", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: true, smartQueue: false, smartShuffleSource: "spotify", repeat: "off", history: [] };
+    addQueueItem({ title: "Generated A", artist: "Tester", requestedBy: "shuffle", uri: "spotify:track:generated-a" });
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async spotifySearch() {
+          return [{ id: "spotify:new-seed", title: "New Seed Pick", artist: "New Artist", source: "Spotify", uri: "spotify:track:new-seed", kind: "track" }];
+        }
+      }
+    });
+
+    const response = await request(app)
+      .post("/api/player/track")
+      .send({ action: "play-now", track: { title: "Manual Play", artist: "New Artist", path: "/music/manual-play.mp3", source: "Local library" } })
+      .expect(200);
+
+    expect(response.body.playback).toMatchObject({ shuffle: false, smartQueue: false });
+    expect(response.body.queue).not.toEqual(expect.arrayContaining([expect.objectContaining({ title: "New Seed Pick", requestedBy: "shuffle" })]));
+    expect(response.body.queue).not.toEqual(expect.arrayContaining([expect.objectContaining({ title: "Generated A" })]));
+  });
+
+  it("queues smart shuffle picks from Spotify and local sources", async () => {
+    const played: Array<{ action: string; track: { uri?: string } }> = [];
+    const uniqueShuffleLms = {
+      ...mockLms,
+      async spotifySearch() {
+        return [{ id: "spotify:unique-smart", title: "Fresh Shuffle", artist: "Tester", source: "Spotify", uri: "spotify:track:unique-smart" }];
+      },
+      async playTrack(_playerId: string, track: { uri?: string }, action: string) {
+        played.push({ action, track });
+        return "ok";
+      }
+    };
+    const response = await request(createApp({ lms: uniqueShuffleLms }))
+      .post("/api/player/smart-shuffle")
+      .send({ source: "spotify", count: 1 })
+      .expect(200);
+    expect(response.body.queued[0].source).toBe("Spotify");
+    expect(response.body.queue[0].source).toBe("Spotify");
+    expect(response.body.playback.smartQueue).toBe(true);
+    expect(response.body.playback.smartShuffleSource).toBe("spotify");
+    expect(played).toHaveLength(0);
+  });
+
+  it("enriches generated local smart shuffle rows with artwork", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-generated-art-"));
+    config.musicSourceDir = root;
+    try {
+      await fs.writeFile(path.join(root, "Artist - Generated Art.mp3"), "ID3");
+      const response = await request(createApp({
+        lms: {
+          ...mockLms,
+          async enrichLocalArtwork(tracks: Array<{ title: string; path?: string }>) {
+            return tracks.map((track) => ({ ...track, art: "api/artwork/generated-cover" }));
+          }
+        }
+      }))
+        .post("/api/player/smart-shuffle")
+        .send({ source: "local", seed: "Generated", count: 1 })
+        .expect(200);
+
+      expect(response.body.queued).toEqual([
+        expect.objectContaining({ title: "Generated Art", requestedBy: "smart shuffle", art: "api/artwork/generated-cover" })
+      ]);
+      expect(response.body.queue).toEqual([
+        expect.objectContaining({ title: "Generated Art", requestedBy: "smart shuffle", art: "api/artwork/generated-cover" })
+      ]);
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects explicit smart shuffle while requested songs are queued", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "spotify", history: [] };
+    addQueueItem({ title: "Manual Playlist One", artist: "Tester", uri: "spotify:track:manual-one", source: "Spotify", requestedBy: "guest" });
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async status() {
+          throw new Error("status should not run for rejected smart shuffle");
+        },
+        async spotifySearch() {
+          return [{ id: "spotify:random", title: "Unrelated Random", artist: "Tester", source: "Spotify", uri: "spotify:track:random", kind: "track" }];
+        }
+      }
+    }))
+      .post("/api/player/smart-shuffle")
+      .send({ source: "spotify", count: 3 })
+      .expect(409);
+
+    expect(response.body.error).toContain("Clear the queue");
+    expect(response.body.queued).toEqual([]);
+    expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Manual Playlist One"]);
+    expect(response.body.playback).toMatchObject({ shuffle: false, smartQueue: false, smartShuffleSource: "spotify" });
+    expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Manual Playlist One"]);
+    expect(appState.playback).toMatchObject({ shuffle: false, smartQueue: false, smartShuffleSource: "spotify" });
+  });
+
+  it("rejects malformed smart shuffle requests before queue generation", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "mixed" };
+    const app = createApp({ lms: mockLms });
+
+    const malformed = await request(app).post("/api/player/smart-shuffle").send({ source: "bad", count: 1 }).expect(400);
+    expect(malformed.body).toMatchObject({ error: "Invalid smart shuffle request", queued: [], queue: [], playback: expect.objectContaining({ smartQueue: false }) });
+    await request(app).post("/api/player/smart-shuffle").send({ source: "local", count: [] }).expect(400);
+    await request(app).post("/api/player/smart-shuffle").send({ source: "local", count: "1" }).expect(400);
+    await request(app).post("/api/player/smart-shuffle").send({ source: "local", count: 9 }).expect(400);
+    await request(app).post("/api/player/smart-shuffle").send({ source: "local", extra: true }).expect(400);
+
+    expect(appState.queue).toHaveLength(0);
+    expect(appState.playback.smartQueue).toBe(false);
+  });
+
+  it("does not add broad unrelated local rows to mixed smart shuffle when the seed only matches Spotify", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-mixed-smart-"));
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "mixed", history: [] };
+    config.musicSourceDir = root;
+    try {
+      await fs.writeFile(path.join(root, "Juice WRLD - Random Local.mp3"), "ID3");
+      const response = await request(createApp({
+        lms: {
+          ...mockLms,
+          async spotifySearch(_playerId: string, term: string) {
+            return [{ id: `spotify:${term}`, title: `${term} Track`, artist: term, source: "Spotify", uri: `spotify:track:${term}`, kind: "track" }];
+          }
+        }
+      }))
+        .post("/api/player/smart-shuffle")
+        .send({ source: "mixed", count: 3, seed: "Aimer" })
+        .expect(200);
+
+      expect(response.body.queued).toEqual(expect.arrayContaining([expect.objectContaining({ artist: "Aimer", source: "Spotify" })]));
+      expect(response.body.queued.every((item: { source: string }) => item.source === "Spotify")).toBe(true);
+      expect(response.body.queue).not.toEqual(expect.arrayContaining([expect.objectContaining({ title: "Random Local" })]));
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not add broad unrelated local rows when local smart shuffle has a focused seed", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-local-smart-"));
+    appState.queue.splice(0, appState.queue.length);
+    appState.nowPlaying = {
+      id: "idle",
+      title: "No track playing",
+      artist: "Connect a player or request a song",
+      album: "",
+      source: "LMS",
+      duration: 0,
+      elapsed: 0,
+      canSeek: false,
+      art: null
+    };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "local", history: [] };
+    config.musicSourceDir = root;
+    try {
+      await fs.writeFile(path.join(root, "Juice WRLD - Random Local.mp3"), "ID3");
+      const response = await request(createApp({ lms: mockLms }))
+        .post("/api/player/smart-shuffle")
+        .send({ source: "local", count: 3, seed: "Radiohead" })
+        .expect(200);
+
+      expect(response.body.queued).toEqual([]);
+      expect(response.body.queue).toEqual([]);
+      expect(response.body.playback).toMatchObject({ smartQueue: true, smartShuffleSource: "local", lastShuffleSeed: "Radiohead" });
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("clears generated history when smart-shuffle source or seed changes", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = {
+      ...appState.playback,
+      shuffle: false,
+      smartQueue: true,
+      smartShuffleSource: "spotify",
+      lastShuffleSeed: "Aimer",
+      history: ["spotify:track:aimer-one", "spotify:track:aimer-two"]
+    };
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async spotifySearch(_playerId: string, term: string) {
+          return [
+            { id: "spotify:one", title: `${term} One`, artist: term, source: "Spotify", uri: "spotify:track:aimer-one", kind: "track" },
+            { id: "spotify:two", title: `${term} Two`, artist: term, source: "Spotify", uri: "spotify:track:aimer-two", kind: "track" }
+          ];
+        }
+      }
+    }))
+      .post("/api/player/smart-shuffle")
+      .send({ source: "mixed", count: 2, seed: "Aimer" })
+      .expect(200);
+
+    expect(response.body.queued.map((item: { uri: string }) => item.uri).sort()).toEqual(["spotify:track:aimer-one", "spotify:track:aimer-two"]);
+    expect([...response.body.playback.history].sort()).toEqual(["spotify:track:aimer-one", "spotify:track:aimer-two"]);
+  });
+
+  it("clears regular generated shuffle history when source changes through playback settings", async () => {
+    const previousMusicDir = config.musicSourceDir;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-source-history-"));
+    appState.queue.splice(0, appState.queue.length);
+    appState.nowPlaying = {
+      id: "idle",
+      title: "No track playing",
+      artist: "Connect a player or request a song",
+      album: "",
+      source: "LMS",
+      duration: 0,
+      elapsed: 0,
+      canSeek: false,
+      art: null
+    };
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      manualShuffle: false,
+      smartQueue: false,
+      smartShuffleSource: "spotify",
+      lastShuffleSeed: "Drake",
+      history: ["spotify:track:stale-one", "spotify:track:stale-two"]
+    };
+    addQueueItem({ title: "Old Spotify Generated", artist: "Drake", requestedBy: "shuffle", uri: "spotify:track:old", source: "Spotify" });
+    config.musicSourceDir = root;
+    try {
+      await fs.writeFile(path.join(root, "Drake - Local Fresh.mp3"), "ID3");
+      const response = await request(createApp({ lms: mockLms }))
+        .post("/api/player/playback")
+        .send({ smartShuffleSource: "local" })
+        .expect(200);
+
+      expect(response.body.queue).toEqual([expect.objectContaining({ title: "Local Fresh", requestedBy: "shuffle" })]);
+      expect(response.body.queue).not.toEqual(expect.arrayContaining([expect.objectContaining({ title: "Old Spotify Generated" })]));
+      expect(response.body.playback.history).toEqual([
+        expect.stringContaining("/drake - local fresh.mp3")
+      ]);
+      expect(response.body.playback.history).not.toEqual(expect.arrayContaining(["spotify:track:stale-one", "spotify:track:stale-two"]));
+    } finally {
+      config.musicSourceDir = previousMusicDir;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not use idle placeholder text as smart-shuffle search terms", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.nowPlaying = {
+      id: "idle",
+      title: "No track playing",
+      artist: "Connect a player or request a song",
+      album: "",
+      source: "LMS",
+      duration: 0,
+      elapsed: 0,
+      canSeek: false,
+      art: null
+    };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "spotify", lastShuffleSeed: "", history: [] };
+    const searched: string[] = [];
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async nowPlaying() {
+          return {
+            id: "idle",
+            title: "No track playing",
+            artist: "Connect a player or request a song",
+            album: "",
+            source: "LMS",
+            duration: 0,
+            elapsed: 0,
+            canSeek: false,
+            art: null
+          };
+        },
+        async spotifySearch(_playerId: string, term: string) {
+          searched.push(term);
+          return [{ id: `spotify:${term}`, title: `${term} Track`, artist: term, source: "Spotify", uri: `spotify:track:${term}`, kind: "track" }];
+        }
+      }
+    }))
+      .post("/api/player/smart-shuffle")
+      .send({ source: "spotify", count: 2, seed: "Aimer" })
+      .expect(200);
+
+    expect(searched).toEqual(["Aimer"]);
+    expect(response.body.queued.map((item: { artist: string }) => item.artist)).toEqual(["Aimer"]);
+  });
+
+  it("does not use idle placeholder text when source switching activates smart queue", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.nowPlaying = {
+      id: "idle",
+      title: "No track playing",
+      artist: "Connect a player or request a song",
+      album: "",
+      source: "LMS",
+      duration: 0,
+      elapsed: 0,
+      canSeek: false,
+      art: null
+    };
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "stop" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, smartShuffleSource: "spotify", lastShuffleSeed: "Aimer", history: [] };
+    const searched: string[] = [];
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async spotifySearch(_playerId: string, term: string) {
+          searched.push(term);
+          return [{ id: `spotify:${term}`, title: `${term} Track`, artist: term, source: "Spotify", uri: `spotify:track:${term}`, kind: "track" }];
+        }
+      }
+    }))
+      .post("/api/player/playback")
+      .send({ smartQueue: true, smartShuffleSource: "spotify" })
+      .expect(200);
+
+    expect(searched).toEqual(["Aimer"]);
+    expect(response.body.playback.lastShuffleSeed).toBe("Aimer");
+    expect(response.body.queued.map((item: { artist: string }) => item.artist)).toEqual(["Aimer"]);
+  });
+
+  it("uses the previous smart-shuffle seed for idle background top-off", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.nowPlaying = {
+      id: "idle",
+      title: "No track playing",
+      artist: "Connect a player or request a song",
+      album: "",
+      source: "LMS",
+      duration: 0,
+      elapsed: 0,
+      canSeek: false,
+      art: null
+    };
+    appState.playback = {
+      ...appState.playback,
+      shuffle: false,
+      smartQueue: true,
+      smartShuffleSource: "spotify",
+      lastShuffleSeed: "Aimer",
+      lastShuffleRefillAt: 0,
+      history: []
+    };
+    const searched: string[] = [];
+    await maintainVisiblePlaybackQueueForTests(
+      {
+        ...mockLms,
+        async spotifySearch(_playerId: string, term: string) {
+          searched.push(term);
+          return [{ id: `spotify:${term}`, title: `${term} Track`, artist: term, source: "Spotify", uri: `spotify:track:${term}`, kind: "track" }];
+        }
+      },
+      { id: "player-1", mode: "stop" },
+      appState.nowPlaying
+    );
+
+    expect(searched.length).toBeGreaterThan(0);
+    expect(searched.every((term) => term === "Aimer")).toBe(true);
+    expect(appState.queue.every((item: { artist: string }) => item.artist === "Aimer")).toBe(true);
+    expect(appState.playback.lastShuffleSeed).toBe("Aimer");
+  });
+
+  it("does not mutate smart-shuffle state when LMS repeat-off control fails", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, repeat: "one", smartShuffleSource: "mixed" };
+    addQueueItem({ title: "Generated Existing", artist: "Tester", requestedBy: "smart shuffle", uri: "spotify:track:generated-existing" });
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string, value: string) {
+          if (action === "repeat" && value === "off") throw new Error("LMS refused repeat off");
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/smart-shuffle")
+      .send({ source: "local", count: 1 })
+      .expect(502);
+
+    expect(response.body.error).toContain("LMS refused repeat off");
+    expect(appState.playback).toMatchObject({ shuffle: false, smartQueue: false, repeat: "one", smartShuffleSource: "mixed" });
+    expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Generated Existing"]);
+  });
+
+  it("does not enable smart queue through playback when repeat-off control fails", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false, repeat: "one", smartShuffleSource: "local" };
+    const response = await request(createApp({
+      lms: {
+        ...mockLms,
+        async control(_playerId: string, action: string, value: string) {
+          if (action === "repeat" && value === "off") throw new Error("LMS refused repeat off");
+          return "ok";
+        }
+      }
+    }))
+      .post("/api/player/playback")
+      .send({ smartQueue: true, smartShuffleSource: "local" })
+      .expect(502);
+
+    expect(response.body.error).toContain("LMS refused repeat off");
+    expect(appState.playback).toMatchObject({ shuffle: false, smartQueue: false, repeat: "one", smartShuffleSource: "local" });
+    expect(appState.queue).toHaveLength(0);
+  });
+
+  it("regenerates smart queue from the selected source and preserves user queue rows", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: true, smartShuffleSource: "mixed", history: [] };
+    addQueueItem({ title: "Guest Pick", artist: "Tester", requestedBy: "guest", path: "/music/guest.mp3" });
+    addQueueItem({ title: "Old Local Smart", artist: "Tester", requestedBy: "smart shuffle", path: "/music/local.mp3" });
+
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async spotifySearch() {
+          return [{ id: "spotify:fresh", title: "Fresh Spotify", artist: "Tester", source: "Spotify", uri: "spotify:track:fresh", kind: "track" }];
+        }
+      }
+    });
+    const response = await request(app)
+      .post("/api/player/playback")
+      .send({ smartQueue: true, smartShuffleSource: "spotify" })
+      .expect(200);
+
+    expect(response.body.queue).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ title: "Guest Pick", requestedBy: "guest" }),
+        expect.objectContaining({ title: "Fresh Spotify", requestedBy: "smart shuffle", uri: "spotify:track:fresh" })
+      ])
+    );
+    expect(response.body.queue).not.toEqual(expect.arrayContaining([expect.objectContaining({ title: "Old Local Smart" })]));
+    expect(response.body.queue.filter((item: { requestedBy: string; uri?: string }) => item.requestedBy === "smart shuffle").every((item: { uri?: string }) => item.uri?.startsWith("spotify:track:"))).toBe(true);
+  });
+
+  it("keeps the current smart queue when source switching finds no replacement rows", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.nowPlaying = { id: "current", title: "Current", artist: "Aimer", album: "", source: "Spotify", duration: 100, elapsed: 10, canSeek: true, art: null, uri: "spotify:track:current" };
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: true, smartShuffleSource: "local", lastShuffleSeed: "Aimer", lastSmartQueueBase: "spotify:track:current", history: ["old"] };
+    addQueueItem({ title: "Existing Smart One", artist: "Tester", requestedBy: "smart shuffle", uri: "spotify:track:existing-one", source: "Spotify" });
+    addQueueItem({ title: "Existing Smart Two", artist: "Tester", requestedBy: "smart shuffle", uri: "spotify:track:existing-two", source: "Spotify" });
+    const app = createApp({
+      lms: {
+        ...mockLms,
+        async control() {
+          return "ok";
+        },
+        async spotifySearch() {
+          return [];
+        }
+      }
+    });
+
+    const response = await request(app)
+      .post("/api/player/playback")
+      .send({ smartQueue: true, smartShuffleSource: "spotify" })
+      .expect(409);
+
+    expect(response.body.error).toContain("No spotify smart shuffle tracks were found");
+    expect(response.body.playback).toMatchObject({ smartQueue: true, smartShuffleSource: "local", lastShuffleSeed: "Aimer" });
+    expect(response.body.queue.map((item: { title: string }) => item.title)).toEqual(["Existing Smart One", "Existing Smart Two"]);
+    expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Existing Smart One", "Existing Smart Two"]);
+    expect(appState.playback).toMatchObject({ smartQueue: true, smartShuffleSource: "local", history: ["old"] });
+  });
+
+  it("turns off smart queue without removing user requested songs", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = {
+      ...appState.playback,
+      shuffle: false,
+      smartQueue: true,
+      smartShuffleSource: "mixed",
+      lastShuffleRefillAt: 12345,
+      lastShuffleSeed: "stale seed",
+      lastSmartQueueBase: "stale base",
+      history: ["spotify:track:stale-generated"]
+    };
+    addQueueItem({ title: "Manual Next", artist: "Tester", requestedBy: "guest", path: "/music/manual.mp3" });
+    addQueueItem({ title: "Generated Next", artist: "Tester", requestedBy: "smart shuffle", uri: "spotify:track:generated" });
+
+    const response = await request(createApp({ lms: mockLms }))
+      .post("/api/player/playback")
+      .send({ smartQueue: false, shuffle: false })
+      .expect(200);
+
+    expect(response.body.playback.smartQueue).toBe(false);
+    expect(response.body.playback.lastShuffleRefillAt).toBe(0);
+    expect(response.body.playback.lastShuffleSeed).toBe("");
+    expect(response.body.playback.lastSmartQueueBase).toBe("");
+    expect(response.body.playback.history).toEqual([]);
+    expect(response.body.queue).toEqual([expect.objectContaining({ title: "Manual Next", requestedBy: "guest" })]);
+  });
+
+  it("keeps background smart-queue auto-advance off manual rows", () => {
+    const manual = { title: "Manual Keeper", requestedBy: "guest", uri: "spotify:track:manual" };
+    const generated = { title: "Generated Pick", requestedBy: "smart shuffle", uri: "spotify:track:generated" };
+
+    expect(nextQueueItemForPlayback([manual, generated])).toBe(manual);
+    expect(nextQueueItemForPlayback([manual, generated], { generatedOnly: true })).toBe(generated);
+    expect(nextQueueItemForPlayback([manual], { generatedOnly: true })).toBeNull();
+  });
+
+  it("skips background generated top-off when LMS shuffle disable fails", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = {
+      ...appState.playback,
+      shuffle: false,
+      smartQueue: true,
+      smartShuffleSource: "spotify",
+      lastShuffleRefillAt: 12345,
+      lastShuffleSeed: "stable seed",
+      history: []
+    };
+    addQueueItem({ title: "Manual Keeper", artist: "Tester", requestedBy: "guest", path: "/music/manual.mp3" });
+    const searched: string[] = [];
+    await maintainVisiblePlaybackQueueForTests(
+      {
+        ...mockLms,
+        async control(_playerId: string, action: string) {
+          if (action === "shuffle") throw new Error("LMS refused shuffle");
+          return "ok";
+        },
+        async spotifySearch(_playerId: string, term: string) {
+          searched.push(term);
+          return [{ id: "spotify:fresh", title: "Fresh Generated", artist: "Tester", source: "Spotify", uri: "spotify:track:fresh", kind: "track" }];
+        }
+      },
+      { id: "player-1", mode: "play" },
+      { title: "Current", artist: "Tester", duration: 100, elapsed: 20, uri: "spotify:track:current" }
+    );
+
+    expect(searched).toHaveLength(0);
+    expect(appState.playback).toMatchObject({ smartQueue: true, lastShuffleRefillAt: 12345, lastShuffleSeed: "stable seed" });
+    expect(appState.queue.map((item: { title: string }) => item.title)).toEqual(["Manual Keeper"]);
+  });
+
+  it("auto-advances normal shuffle within the visible queue without generated refill", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      manualShuffle: true,
+      smartQueue: false,
+      smartShuffleSource: "spotify",
+      lastShuffleRefillAt: 0,
+      lastShuffleSeed: "",
+      history: []
+    };
+    addQueueItem({ title: "Playlist Next", artist: "Tester", requestedBy: "guest", uri: "spotify:track:playlist-next", kind: "track" });
+    const played: string[] = [];
+    const searched: string[] = [];
+
+    await maintainVisiblePlaybackQueueForTests(
+      {
+        ...mockLms,
+        async control() {
+          return "ok";
+        },
+        async playTrack(_playerId: string, track: { title?: string }) {
+          played.push(String(track.title || ""));
+          return "ok";
+        },
+        async spotifySearch(_playerId: string, term: string) {
+          searched.push(term);
+          return [{ title: "Unrelated Generated", artist: "Spotify", uri: "spotify:track:random", kind: "track" }];
+        }
+      },
+      { id: "player-1", mode: "play" },
+      { title: "Current", artist: "Tester", duration: 100, elapsed: 99, uri: "spotify:track:current" }
+    );
+
+    expect(played).toEqual(["Playlist Next"]);
+    expect(searched).toEqual([]);
+    expect(appState.queue).toEqual([]);
+    expect(appState.playback).toMatchObject({ shuffle: false, manualShuffle: false, smartQueue: false });
+  });
+
+  it("does not generate random rows after a manually shuffled playlist queue is exhausted", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      manualShuffle: true,
+      smartQueue: false,
+      smartShuffleSource: "spotify",
+      appManagedPlayback: true,
+      lastShuffleRefillAt: 0,
+      lastShuffleSeed: "",
+      history: []
+    };
+    const searched: string[] = [];
+    const played: string[] = [];
+
+    await maintainVisiblePlaybackQueueForTests(
+      {
+        ...mockLms,
+        async control() {
+          return "ok";
+        },
+        async playTrack(_playerId: string, track: { title?: string }) {
+          played.push(String(track.title || ""));
+          return "ok";
+        },
+        async spotifySearch(_playerId: string, term: string) {
+          searched.push(term);
+          return [{ title: "Random Leak", artist: "Spotify", uri: "spotify:track:random-leak", kind: "track", source: "Spotify" }];
+        }
+      },
+      { id: "player-1", mode: "stopped" },
+      { title: "Playlist Final", artist: "Tester", duration: 100, elapsed: 100, uri: "spotify:track:playlist-final" }
+    );
+
+    expect(searched).toEqual([]);
+    expect(played).toEqual([]);
+    expect(appState.queue).toEqual([]);
+    expect(appState.playback).toMatchObject({ shuffle: false, manualShuffle: false, smartQueue: false });
+  });
+
+  it("does not add generated shuffle rows after shuffle is disabled mid-refill", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      manualShuffle: false,
+      smartQueue: false,
+      smartShuffleSource: "spotify",
+      lastShuffleRefillAt: 0,
+      lastShuffleSeed: "Tester",
+      history: []
+    };
+    const resolveSearches: Array<(tracks: Array<{ title: string; artist: string; uri: string; kind: string; source: string }>) => void> = [];
+    const refill = maintainVisiblePlaybackQueueForTests(
+      {
+        ...mockLms,
+        async control() {
+          return "ok";
+        },
+        async spotifySearch() {
+          return new Promise<Array<{ title: string; artist: string; uri: string; kind: string; source: string }>>((resolve) => {
+            resolveSearches.push(resolve);
+          });
+        }
+      },
+      { id: "player-1", mode: "play" },
+      { title: "Current", artist: "Tester", duration: 100, elapsed: 20, uri: "spotify:track:current" }
+    );
+
+    await Promise.resolve();
+    appState.playback = { ...appState.playback, shuffle: false, smartQueue: false };
+    appState.queue.splice(0, appState.queue.length);
+    expect(resolveSearches.length).toBeGreaterThan(0);
+    for (const resolveSearch of resolveSearches) {
+      resolveSearch([{ title: "Late Generated", artist: "Tester", uri: "spotify:track:late-generated", kind: "track", source: "Spotify" }]);
+    }
+    await refill;
+
+    expect(appState.playback.shuffle).toBe(false);
+    expect(appState.queue).toEqual([]);
+  });
+
+  it("plays an existing generated queue row before slow shuffle top-off", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = { id: "current", title: "Current", artist: "Tester", album: "", source: "Spotify", duration: 100, elapsed: 5, canSeek: true, art: null, uri: "spotify:track:current" };
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      manualShuffle: false,
+      smartQueue: false,
+      smartShuffleSource: "spotify",
+      lastShuffleRefillAt: 0,
+      lastShuffleSeed: "Tester",
+      history: []
+    };
+    addQueueItem({ title: "Visible Generated", artist: "Tester", requestedBy: "shuffle", uri: "spotify:track:visible-generated", kind: "track" });
+    const played: string[] = [];
+    const lms = {
+      ...mockLms,
+      async control() {
+        return "ok";
+      },
+      async playTrack(_playerId: string, track: { title?: string }) {
+        played.push(String(track.title || ""));
+        return "ok";
+      },
+      async spotifySearch() {
+        return new Promise(() => {});
+      }
+    };
+
+    const started = Date.now();
+    const response = await request(createApp({ lms })).post("/api/player/next").expect(200);
+
+    expect(Date.now() - started).toBeLessThan(800);
+    expect(response.body.action).toBe("visible-queue-next");
+    expect(response.body.nowPlaying.title).toBe("Visible Generated");
+    expect(played).toEqual(["Visible Generated"]);
+  });
+
+  it("does not block visible queue next on slow post-play metadata refresh", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.nowPlaying = { id: "current", title: "Current", artist: "Tester", album: "", source: "Spotify", duration: 100, elapsed: 5, canSeek: true, art: null, uri: "spotify:track:current" };
+    appState.playback = {
+      ...appState.playback,
+      shuffle: false,
+      manualShuffle: false,
+      smartQueue: false,
+      appManagedPlayback: true,
+      history: []
+    };
+    addQueueItem({ title: "Fast Visible", artist: "Tester", requestedBy: "guest", uri: "spotify:track:fast-visible", kind: "track" });
+    const played: string[] = [];
+    const lms = {
+      ...mockLms,
+      async playTrack(_playerId: string, track: { title?: string }) {
+        played.push(String(track.title || ""));
+        return "ok";
+      },
+      async nowPlaying() {
+        return new Promise(() => {});
+      }
+    };
+
+    const started = Date.now();
+    const response = await request(createApp({ lms })).post("/api/player/next").expect(200);
+
+    expect(Date.now() - started).toBeLessThan(800);
+    expect(response.body.action).toBe("visible-queue-next");
+    expect(response.body.nowPlaying.title).toBe("Fast Visible");
+    expect(played).toEqual(["Fast Visible"]);
+  });
+
+  it("refills normal shuffle instead of falling through to LMS next when the visible queue is empty", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.player = { ...appState.player, id: "hot-player", connected: true, online: true, mode: "play" };
+    appState.playback = {
+      ...appState.playback,
+      shuffle: true,
+      smartQueue: false,
+      smartShuffleSource: "spotify",
+      lastShuffleRefillAt: 0,
+      lastShuffleSeed: "",
+      history: []
+    };
+    const controls: string[] = [];
+    const played: Array<{ title?: string; uri?: string }> = [];
+    const lms = {
+      ...mockLms,
+      async control(_playerId: string, action: string) {
+        controls.push(action);
+        return "ok";
+      },
+      async spotifySearch(_playerId: string, term: string) {
+        return [{ title: "Unrelated Generated", artist: "Spotify", uri: "spotify:track:random", kind: "track" }];
+      },
+      async playTrack(_playerId: string, track: { title?: string; uri?: string }) {
+        played.push(track);
+        return "ok";
+      }
+    };
+
+    const response = await request(createApp({ lms })).post("/api/player/next").expect(200);
+
+    expect(response.body.action).toBe("visible-queue-next");
+    expect(controls).toContain("shuffle");
+    expect(controls).not.toContain("next");
+    expect(played).toEqual([expect.objectContaining({ title: "Unrelated Generated" })]);
+    expect(appState.queue).toEqual([]);
+  });
+
+  it("plays the next smart shuffle item from the visible queue", async () => {
+    appState.queue.splice(0, appState.queue.length);
+    appState.playback = { ...appState.playback, shuffle: false, smartShuffleSource: "mixed", history: [] };
+    const played: Array<{ action: string; track: { uri?: string; title?: string } }> = [];
+    const lms = {
+      ...mockLms,
+      async spotifySearch() {
+        return [{ id: "spotify:visible-next", title: "Visible Next", artist: "Tester", source: "Spotify", uri: "spotify:track:visible-next" }];
+      },
+      async playTrack(_playerId: string, track: { uri?: string; title?: string }, action: string) {
+        played.push({ action, track });
+        return "ok";
+      }
+    };
+    const app = createApp({ lms });
+
+    await request(app).post("/api/player/smart-shuffle").send({ source: "spotify", count: 1 }).expect(200);
+    const next = await request(app).post("/api/player/next").expect(200);
+
+    expect(next.body.action).toBe("visible-queue-next");
+    expect(played).toEqual([{ action: "play-now", track: expect.objectContaining({ uri: "spotify:track:visible-next" }) }]);
+  });
+
+  it("only uses playable Spotify tracks for smart shuffle", async () => {
+    const spotifyOnlyLms = {
+      ...mockLms,
+      async spotifySearch() {
+        return [
+          { id: "spotify:artist:1", title: "Artist Result", artist: "Spotify", source: "Spotify artist", uri: "spotify:artist:1", kind: "artist" },
+          { id: "spotify:album:1", title: "Album Result", artist: "Spotify", source: "Spotify album", uri: "spotify:album:1", kind: "album" },
+          { id: "spotify:track:1", title: "Track Result", artist: "Spotify", source: "Spotify", uri: "spotify:track:1", kind: "track" }
+        ];
+      }
+    };
+
+    const response = await request(createApp({ lms: spotifyOnlyLms }))
+      .post("/api/player/smart-shuffle")
+      .send({ source: "spotify", count: 3 })
+      .expect(200);
+
+    expect(response.body.queued).toHaveLength(1);
+    expect(response.body.queued[0].uri).toBe("spotify:track:1");
+  });
+
+  it("requires admin login for settings changes", async () => {
+    const app = createApp({ lms: mockLms });
+    await request(app).post("/api/admin/settings").send({ publicRequests: false }).expect(401);
+    await request(app)
+      .post("/api/admin/settings")
+      .set("Authorization", "Token wrong")
+      .send({ publicRequests: false })
+      .expect(401);
+    await request(app)
+      .post("/api/admin/settings")
+      .set("Authorization", "Bearer wrong")
+      .send({ publicRequests: false })
+      .expect(403);
+    const login = await request(app).post("/api/admin/login").send({ password: "admin" }).expect(200);
+    await request(app)
+      .post("/api/admin/settings")
+      .set("Authorization", `Bearer ${login.body.token}`)
+      .send({ publicRequests: false })
+      .expect(200);
+  });
+
+  it("validates and sanitizes admin settings", async () => {
+    const previousAdmin = { ...appState.admin };
+    const app = createApp({ lms: mockLms });
+    const login = await request(app).post("/api/admin/login").send({ password: "admin" }).expect(200);
+    try {
+      await request(app)
+        .post("/api/admin/settings")
+        .set("Authorization", `Bearer ${login.body.token}`)
+        .send({ publicRequests: "false", maxQueuePerUser: "zero", scheduleEnabled: "yes", extra: true })
+        .expect(400);
+      await request(app)
+        .post("/api/admin/settings")
+        .set("Authorization", `Bearer ${login.body.token}`)
+        .send({ maxQueuePerUser: "7" })
+        .expect(400);
+
+      appState.admin = { ...appState.admin, extra: { bad: true }, maxQueuePerUser: 99 } as typeof appState.admin & { extra: { bad: boolean } };
+
+      const response = await request(app)
+        .post("/api/admin/settings")
+        .set("Authorization", `Bearer ${login.body.token}`)
+        .send({ publicRequests: true, maxQueuePerUser: 25, moderation: "strict", scheduleEnabled: false })
+        .expect(200);
+
+      expect(response.body).toEqual({ publicRequests: true, maxQueuePerUser: 25, moderation: "strict", scheduleEnabled: false });
+      expect(response.body.extra).toBeUndefined();
+      expect(appState.admin).toEqual(response.body);
+    } finally {
+      appState.admin = previousAdmin;
+    }
+  });
+});
+
+describe("Tap admin binding API", () => {
+  function tapApp() {
+    const file = path.join(os.tmpdir(), `tap-api-${crypto.randomBytes(6).toString("hex")}.json`);
+    const tapStore = createTapStore({ file });
+    const playlists = createPlaylistStore(path.join(os.tmpdir(), `tap-pl-${crypto.randomBytes(6).toString("hex")}.json`));
+    return { app: createApp({ lms: mockLms, tapStore, playlists }), file, playlists };
+  }
+
+  async function adminAuth(app: ReturnType<typeof createApp>) {
+    const login = await request(app).post("/api/admin/login").send({ password: "admin" }).expect(200);
+    return `Bearer ${login.body.token}`;
+  }
+
+  const albumTopBody = {
+    intent: "album-from-top",
+    source: "spotify",
+    albumUri: "spotify:album:xyz789",
+    display: { title: "Punisher", artist: "Phoebe Bridgers", kind: "album" },
+    label: "Punisher sleeve"
+  };
+
+  it("requires admin auth to create a binding", async () => {
+    const { app } = tapApp();
+    // x-forwarded-for makes the request look like it arrived via the public nginx,
+    // so the on-box local-direct bypass is skipped and the hl-auth gate runs.
+    await request(app).post("/api/tap").set("x-forwarded-for", "203.0.113.7").send(albumTopBody).expect(401);
+  });
+
+  it("creates a binding and returns a tap URL with the signed token in the fragment", async () => {
+    const { app } = tapApp();
+    const auth = await adminAuth(app);
+    const res = await request(app).post("/api/tap").set("Authorization", auth).send(albumTopBody).expect(200);
+
+    expect(res.body.tag.tagId).toMatch(/^[A-Za-z0-9_-]{6,}$/);
+    expect(res.body.tag.playSpec).toEqual({ kind: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" });
+    expect(res.body.tag.display).toEqual(albumTopBody.display);
+    // Token rides in the URL FRAGMENT (#k=) so it never hits server/nginx logs on GET.
+    expect(res.body.tapUrl).toMatch(new RegExp(`/tap/t/${res.body.tag.tagId}#k=`));
+    expect(verifyTag(res.body.tag.tagId, res.body.token)).toBe(true);
+  });
+
+  it("rejects an invalid PlaySpec with 400", async () => {
+    const { app } = tapApp();
+    const auth = await adminAuth(app);
+    await request(app)
+      .post("/api/tap")
+      .set("Authorization", auth)
+      .send({ intent: "album-from-top", source: "spotify" }) // no albumUri
+      .expect(400);
+  });
+
+  it("builds album-from-track with the in-album start index", async () => {
+    const { app } = tapApp();
+    const auth = await adminAuth(app);
+    const res = await request(app)
+      .post("/api/tap")
+      .set("Authorization", auth)
+      .send({ intent: "album-from-track", source: "spotify", albumUri: "spotify:album:xyz789", startIndex: 4, display: { title: "Kyoto" } })
+      .expect(200);
+    expect(res.body.tag.playSpec).toEqual({ kind: "album-from-track", source: "spotify", albumUri: "spotify:album:xyz789", startIndex: 4 });
+  });
+
+  it("lists, fetches, re-points (without changing id) and disables a tag", async () => {
+    const { app } = tapApp();
+    const auth = await adminAuth(app);
+    const created = (await request(app).post("/api/tap").set("Authorization", auth).send(albumTopBody).expect(200)).body.tag;
+
+    const list = await request(app).get("/api/tap").set("Authorization", auth).expect(200);
+    expect(list.body.tags.some((t: { tagId: string }) => t.tagId === created.tagId)).toBe(true);
+
+    const one = await request(app).get(`/api/tap/${created.tagId}`).set("Authorization", auth).expect(200);
+    expect(one.body.tag.tagId).toBe(created.tagId);
+
+    // Re-point to a single track — same id, new playSpec.
+    const repointed = await request(app)
+      .put(`/api/tap/${created.tagId}`)
+      .set("Authorization", auth)
+      .send({ intent: "track", track: { uri: "spotify:track:0123456789abcdefghijAB" }, display: { title: "Kyoto", kind: "track" } })
+      .expect(200);
+    expect(repointed.body.tag.tagId).toBe(created.tagId);
+    expect(repointed.body.tag.playSpec).toEqual({ kind: "track", track: { uri: "spotify:track:0123456789abcdefghijAB" } });
+
+    // Disable without deleting.
+    const disabled = await request(app).put(`/api/tap/${created.tagId}`).set("Authorization", auth).send({ enabled: false }).expect(200);
+    expect(disabled.body.tag.enabled).toBe(false);
+  });
+
+  it("deletes a tag", async () => {
+    const { app } = tapApp();
+    const auth = await adminAuth(app);
+    const created = (await request(app).post("/api/tap").set("Authorization", auth).send(albumTopBody).expect(200)).body.tag;
+    await request(app).delete(`/api/tap/${created.tagId}`).set("Authorization", auth).expect(200);
+    await request(app).get(`/api/tap/${created.tagId}`).set("Authorization", auth).expect(404);
+  });
+
+  it("returns 404 fetching an unknown tag", async () => {
+    const { app } = tapApp();
+    const auth = await adminAuth(app);
+    await request(app).get("/api/tap/does-not-exist").set("Authorization", auth).expect(404);
+  });
+});
+
+describe("Tap resolver golden cases", () => {
+  function recordingLms(overrides: Record<string, unknown> = {}) {
+    const calls: { m: string; args: unknown[] }[] = [];
+    return {
+      calls,
+      ...mockLms,
+      async loadAlbum(...args: unknown[]) { calls.push({ m: "loadAlbum", args }); return "ok"; },
+      async loadPlaylist(...args: unknown[]) { calls.push({ m: "loadPlaylist", args }); return "ok"; },
+      async playTrack(...args: unknown[]) { calls.push({ m: "playTrack", args }); return "ok"; },
+      async control(...args: unknown[]) { calls.push({ m: "control", args }); return "ok"; },
+      async playlistPosition() { return { index: 7, seconds: 33 }; },
+      ...overrides
+    };
+  }
+
+  function setup(lms: ReturnType<typeof recordingLms>) {
+    const file = path.join(os.tmpdir(), `tap-play-${crypto.randomBytes(6).toString("hex")}.json`);
+    const tapStore = createTapStore({ file });
+    const playlists = createPlaylistStore(path.join(os.tmpdir(), `tap-play-pl-${crypto.randomBytes(6).toString("hex")}.json`));
+    const app = createApp({ lms, tapStore, playlists });
+    return { app, tapStore, playlists };
+  }
+
+  const unknownSpotifyTrack = { uri: "spotify:track:0123456789abcdefghijAB", title: "Kyoto", artist: "Phoebe Bridgers", source: "Spotify" };
+
+  it("plays album-from-top on a valid token", async () => {
+    const lms = recordingLms();
+    const { app, tapStore } = setup(lms);
+    const tag = tapStore.create({ playSpec: { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" }, display: {} });
+    const token = tapStore.tokenFor(tag.tagId);
+
+    const res = await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token }).expect(200);
+    expect(res.body.ok).toBe(true);
+    expect(lms.calls.filter((c) => c.m === "loadAlbum")).toHaveLength(1);
+    // A tap normalizes volume first (lms.control("volume", ...)), so the album load is
+    // no longer guaranteed to be calls[0] — find it by method instead of by position.
+    const loadAlbumCall = lms.calls.find((c) => c.m === "loadAlbum");
+    expect(loadAlbumCall?.args[1]).toMatchObject({ source: "spotify", albumUri: "spotify:album:xyz789" });
+    expect(tapStore.get(tag.tagId)?.tapCount).toBe(1);
+  });
+
+  it("plays a bound UNKNOWN Spotify track (trusted) where a guest request is rejected", async () => {
+    const lms = recordingLms();
+    const { app, tapStore } = setup(lms);
+    const tag = tapStore.create({ playSpec: { kind: "track", track: unknownSpotifyTrack }, display: {} });
+    const token = tapStore.tokenFor(tag.tagId);
+
+    // Tap: plays it (trusted replay, no known-gate).
+    await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token }).expect(200);
+    expect(lms.calls.filter((c) => c.m === "playTrack")).toHaveLength(1);
+
+    // Guest path: the SAME unknown Spotify track is rejected by spotifyTracksAreKnown.
+    // Ensure public requests are open so the rejection is the KNOWN-gate (400), not a
+    // closed-requests 403 left over from another test's shared appState.
+    appState.admin = { ...appState.admin, publicRequests: true };
+    await request(app).post("/api/player/track").send({ action: "play-now", track: unknownSpotifyTrack }).expect(400);
+  });
+
+  it("rejects an invalid token without playing", async () => {
+    const lms = recordingLms();
+    const { app, tapStore } = setup(lms);
+    const tag = tapStore.create({ playSpec: { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" }, display: {} });
+
+    const res = await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token: "wrong" }).expect(401);
+    expect(res.body.reason).toBe("bad-token");
+    expect(lms.calls).toHaveLength(0);
+  });
+
+  it("returns a clean 'unbound' payload for an unknown tag", async () => {
+    const lms = recordingLms();
+    const { app } = setup(lms);
+    const res = await request(app).post("/api/tap/nope/play").send({ token: "x" }).expect(404);
+    expect(res.body.reason).toBe("unbound");
+    expect(lms.calls).toHaveLength(0);
+  });
+
+  it("returns a clean 'disabled' payload for a disabled tag", async () => {
+    const lms = recordingLms();
+    const { app, tapStore } = setup(lms);
+    const tag = tapStore.create({ playSpec: { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" }, display: {} });
+    tapStore.update(tag.tagId, { enabled: false });
+    const token = tapStore.tokenFor(tag.tagId);
+
+    const res = await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token }).expect(409);
+    expect(res.body.reason).toBe("disabled");
+    expect(lms.calls).toHaveLength(0);
+  });
+
+  it("returns a clean 'speaker_offline' payload (not a 500) when no player is connected", async () => {
+    const lms = recordingLms({ status: async () => ({ connected: false, online: true, detail: "no player" }) });
+    const { app, tapStore } = setup(lms);
+    const tag = tapStore.create({ playSpec: { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" }, display: {} });
+    const token = tapStore.tokenFor(tag.tagId);
+    // Force the player state stale so hotPlayerId re-checks via our offline mock.
+    appState.player = { ...appState.player, connected: false, id: "" };
+
+    const res = await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token }).expect(503);
+    expect(res.body.reason).toBe("speaker_offline");
+  });
+
+  it("debounces a rapid double-tap instead of restarting the album", async () => {
+    const lms = recordingLms();
+    const { app, tapStore } = setup(lms);
+    const tag = tapStore.create({ playSpec: { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" }, display: {} });
+    const token = tapStore.tokenFor(tag.tagId);
+
+    await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token }).expect(200);
+    const second = await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token }).expect(200);
+    expect(second.body.debounced).toBe(true);
+    // The album was loaded only ONCE — the second tap did not restart it.
+    expect(lms.calls.filter((c) => c.m === "loadAlbum")).toHaveLength(1);
+  });
+
+  it("plays a playlist tag via loadPlaylist", async () => {
+    const lms = recordingLms();
+    const { app, tapStore } = setup(lms);
+    const tag = tapStore.create({ playSpec: { kind: "playlist", source: "spotify", playlistUri: "spotify:playlist:abc123" }, display: {} });
+    const token = tapStore.tokenFor(tag.tagId);
+
+    await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token }).expect(200);
+    const calls = lms.calls.filter((c) => c.m === "loadPlaylist");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].args[1]).toMatchObject({ playlistUri: "spotify:playlist:abc123", queue: false });
+  });
+
+  it("party queue (global) makes a tap APPEND instead of replacing", async () => {
+    const lms = recordingLms();
+    const { app, tapStore } = setup(lms);
+    tapStore.setSettings({ partyQueue: true });
+    const trackTag = tapStore.create({ playSpec: { kind: "track", track: unknownSpotifyTrack }, display: {} });
+
+    await request(app).post(`/api/tap/${trackTag.tagId}/play`).send({ token: tapStore.tokenFor(trackTag.tagId) }).expect(200);
+    const play = lms.calls.find((c) => c.m === "playTrack");
+    expect(play?.args[2]).toBe("add-queue");
+
+    const albumTag = tapStore.create({ playSpec: { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" }, display: {} });
+    await request(app).post(`/api/tap/${albumTag.tagId}/play`).send({ token: tapStore.tokenFor(albumTag.tagId) }).expect(200);
+    const load = lms.calls.find((c) => c.m === "loadAlbum");
+    expect(load?.args[1]).toMatchObject({ queue: true });
+  });
+
+  it("smart resume: restores a resume-enabled album to its saved bookmark, then seeks", async () => {
+    const lms = recordingLms();
+    const { app, tapStore } = setup(lms);
+    const tag = tapStore.create({ playSpec: { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:xyz789" }, display: {}, policy: { resume: true } });
+    tapStore.setResume(tag.tagId, { index: 5, seconds: 88 });
+
+    await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token: tapStore.tokenFor(tag.tagId) }).expect(200);
+    const load = lms.calls.find((c) => c.m === "loadAlbum");
+    expect(load?.args[1]).toMatchObject({ startIndex: 5 });
+    expect(lms.calls.some((c) => c.m === "control" && c.args[1] === "seek" && c.args[2] === 88)).toBe(true);
+  });
+
+  it("smart resume: bookmarks the previous resume tag's position when you switch away", async () => {
+    const lms = recordingLms();
+    const { app, tapStore } = setup(lms);
+    const a = tapStore.create({ playSpec: { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:aaaaaa1" }, display: {}, policy: { resume: true } });
+    const b = tapStore.create({ playSpec: { kind: "album-from-top", source: "spotify", albumUri: "spotify:album:bbbbbb2" }, display: {} });
+
+    await request(app).post(`/api/tap/${a.tagId}/play`).send({ token: tapStore.tokenFor(a.tagId) }).expect(200);
+    await request(app).post(`/api/tap/${b.tagId}/play`).send({ token: tapStore.tokenFor(b.tagId) }).expect(200);
+
+    // Switching to B bookmarked A at the player's live position (mock: index 7, 33s).
+    expect(tapStore.get(a.tagId)?.resumeState).toMatchObject({ index: 7, seconds: 33 });
+  });
+
+  it("binds a discovery tag and auto-creates its dedicated save playlist", async () => {
+    const { app, playlists } = setup(recordingLms());
+    const auth = await request(app).post("/api/admin/login").send({ password: "admin" }).then((r) => `Bearer ${r.body.token}`);
+    const res = await request(app)
+      .post("/api/tap")
+      .set("Authorization", auth)
+      .send({ intent: "discover", source: "spotify", display: { title: "Surprise me", kind: "discover" } })
+      .expect(200);
+    expect(res.body.tag.playSpec).toEqual({ kind: "discover", source: "spotify" });
+    // A linked, dedicated playlist now exists for auto-saving its surprises.
+    expect(res.body.tag.savePlaylistId).toBeTruthy();
+    expect(playlists.get(res.body.tag.savePlaylistId)?.name).toMatch(/Surprise me/);
+  });
+
+  it("plays a library tag by forcing the saved playlist's tracks onto the speaker", async () => {
+    const lms = recordingLms();
+    const { app, tapStore, playlists } = setup(lms);
+    const pl = playlists.create({ name: "Faves" });
+    playlists.addTracks(pl.id, [
+      { uri: "spotify:track:0000000000000000000aaa", title: "A", kind: "track" },
+      { uri: "spotify:track:0000000000000000000bbb", title: "B", kind: "track" }
+    ]);
+    const tag = tapStore.create({ playSpec: { kind: "library", playlistId: pl.id }, display: {} });
+
+    await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token: tapStore.tokenFor(tag.tagId) }).expect(200);
+    const plays = lms.calls.filter((c) => c.m === "playTrack");
+    expect(plays).toHaveLength(2);
+    expect(plays[0].args[2]).toBe("play-now"); // first forces playback
+    expect(plays[1].args[2]).toBe("add-queue"); // rest append
+  });
+
+  it("returns a clean error when a library tag points at a missing playlist", async () => {
+    const lms = recordingLms();
+    const { app, tapStore } = setup(lms);
+    const tag = tapStore.create({ playSpec: { kind: "library", playlistId: "pl-gone" }, display: {} });
+    const res = await request(app).post(`/api/tap/${tag.tagId}/play`).send({ token: tapStore.tokenFor(tag.tagId) }).expect(502);
+    expect(res.body.reason).toBe("lms_error");
+    expect(lms.calls.some((c) => c.m === "playTrack")).toBe(false);
+  });
+});
+
+describe("Tap library playlists API", () => {
+  function libApp() {
+    const tapStore = createTapStore({ file: path.join(os.tmpdir(), `tap-lib-${crypto.randomBytes(6).toString("hex")}.json`) });
+    const playlists = createPlaylistStore(path.join(os.tmpdir(), `tap-lib-pl-${crypto.randomBytes(6).toString("hex")}.json`));
+    return { app: createApp({ lms: mockLms, tapStore, playlists }), playlists };
+  }
+
+  it("creates, lists, adds tracks to, and deletes a playlist", async () => {
+    const { app } = libApp();
+    const created = await request(app).post("/api/tap/playlists").send({ name: "Road trip" }).expect(200);
+    const id = created.body.playlist.id;
+    expect(created.body.playlist.name).toBe("Road trip");
+
+    await request(app).post(`/api/tap/playlists/${id}/tracks`)
+      .send({ track: { uri: "spotify:track:0000000000000000000ccc", title: "Song", kind: "track" } }).expect(200);
+
+    const list = await request(app).get("/api/tap/playlists").expect(200);
+    expect(list.body.playlists.find((p: { id: string }) => p.id === id)?.trackCount).toBe(1);
+
+    const one = await request(app).get(`/api/tap/playlists/${id}`).expect(200);
+    expect(one.body.playlist.tracks).toHaveLength(1);
+
+    await request(app).delete(`/api/tap/playlists/${id}`).expect(200);
+    await request(app).get(`/api/tap/playlists/${id}`).expect(404);
+  });
+
+  it("seeds a playlist with tracks at creation (save-what's-playing)", async () => {
+    const { app } = libApp();
+    const res = await request(app).post("/api/tap/playlists")
+      .send({ name: "Now", tracks: [{ uri: "spotify:track:0000000000000000000ddd", title: "X", kind: "track" }] }).expect(200);
+    expect(res.body.playlist.tracks).toHaveLength(1);
+  });
+
+  it("rejects creating a playlist with no name", async () => {
+    const { app } = libApp();
+    await request(app).post("/api/tap/playlists").send({ name: "" }).expect(400);
+  });
+});

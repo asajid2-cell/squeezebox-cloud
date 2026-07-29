@@ -1,0 +1,12 @@
+node_modules/
+*.log
+.env
+.env.*
+!.env.example
+dist/
+__pycache__/
+*.pyc
+work/
+*.ogg
+*.mp3
+*.bin
