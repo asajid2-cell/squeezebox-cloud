@@ -7,6 +7,16 @@ export const config = {
   lanLmsHost: process.env.LAN_LMS_HOST || "192.168.1.142",
   publicLmsHost: process.env.PUBLIC_LMS_HOST || "23.17.17.81",
   publicLmsHttpUrl: process.env.PUBLIC_LMS_HTTP_URL || "http://23.17.17.81:9000",
+  // LMS web UI is no longer reachable on the LAN (ufw closed 9000); it lives behind
+  // the hl-auth-gated subdomain. Override so the "Connect Spotty" link opens something
+  // that actually loads.
+  lmsSettingsUrl: process.env.LMS_SETTINGS_URL || "",
+  // Archive/tap-cache dir AS LMS SEES IT. LMS bind-mounts the SAME host dir
+  // (lms-vps/data/archive -> /archive), so it can play these as LOCAL FILES instead of
+  // pulling them back over HTTP from us. That HTTP path is blocked by the uid-499 loopback
+  // cage (LMS must not reach sibling services), which silently killed archived-FLAC and NFC
+  // tap instant-play on the Boom. Set to "" to fall back to the old HTTP URL.
+  lmsArchiveDir: process.env.LMS_ARCHIVE_DIR || "/archive",
   musicSourceDir: expandPath(process.env.MUSIC_SOURCE_DIR || "%USERPROFILE%\\Downloads"),
   uploadDir: expandPath(process.env.UPLOAD_DIR || "/music/uploads"),
   publicQueueMaxPerUser: Number(process.env.PUBLIC_QUEUE_MAX_PER_USER || 25)

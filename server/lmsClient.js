@@ -455,9 +455,12 @@ export class LmsClient {
     if (archiveId.startsWith("archive:")) {
       const filename = archiveId.slice("archive:".length);
       const titleParts = [track.artist, track.title].filter(Boolean).join(" - ");
+      // Prefer the local path LMS already has mounted: the uid-499 cage blocks LMS from
+      // reaching :4177, and a local read is strictly less privilege than an HTTP round-trip.
+      const archiveLocal = config.lmsArchiveDir ? fileUrl(`${config.lmsArchiveDir}/${filename}`) : "";
       return {
         type: "uri",
-        value: `http://${config.lanLmsHost}:${config.port}/api/archive/file/${encodeURIComponent(filename)}`,
+        value: archiveLocal || `http://${config.lanLmsHost}:${config.port}/api/archive/file/${encodeURIComponent(filename)}`,
         title: titleParts || filename.replace(/\.flac$/i, "")
       };
     }
@@ -467,9 +470,11 @@ export class LmsClient {
     if (archiveId.startsWith("tapcache:")) {
       const filename = archiveId.slice("tapcache:".length);
       const titleParts = [track.artist, track.title].filter(Boolean).join(" - ");
+      // Same reasoning as archive: above -- local read, no sibling-service HTTP call.
+      const tapLocal = config.lmsArchiveDir ? fileUrl(`${config.lmsArchiveDir}/tap-cache/${filename}`) : "";
       return {
         type: "uri",
-        value: `http://${config.lanLmsHost}:${config.port}/api/tap-cache/file/${encodeURIComponent(filename)}`,
+        value: tapLocal || `http://${config.lanLmsHost}:${config.port}/api/tap-cache/file/${encodeURIComponent(filename)}`,
         title: titleParts || filename.replace(/\.flac$/i, "")
       };
     }

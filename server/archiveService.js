@@ -30,10 +30,17 @@ const CONFIG_DIR = process.env.LMS_CONFIG_DIR || "/config";
 const TAP_CACHE_DIR = process.env.TAP_CACHE_DIR || path.join(ARCHIVE_DIR, "tap-cache");
 const TAP_CACHE_MAX = Number(process.env.TAP_CACHE_MAX) || 40;
 
+function envFlag(name, defaultValue = false) {
+  const raw = process.env[name];
+  if (raw == null || raw === "") return defaultValue;
+  return /^(1|true|yes|on)$/i.test(String(raw).trim());
+}
+
 // Rate limits — conservative by design. Override via env if ever needed.
 const COOLDOWN_MS = Number(process.env.ARCHIVE_COOLDOWN_MS) || 45000; // gap between downloads
 const DAILY_CAP = Number(process.env.ARCHIVE_DAILY_CAP) || 50;        // max tracks/day
 const RETRY_PAUSE_MS = 60 * 60 * 1000;                                // re-check hourly when capped
+const QUEUE_DISABLED = envFlag("ARCHIVE_QUEUE_DISABLED");
 
 let queue = [];
 let dailyCount = { date: "", count: 0 };
@@ -64,6 +71,11 @@ export async function startArchiveService() {
   }
   if (changed) await saveQueue();
 
+  if (QUEUE_DISABLED) {
+    console.log(`[archive] queue service disabled by ARCHIVE_QUEUE_DISABLED (${queue.filter(j => j.status === "queued").length} queued retained).`);
+    return;
+  }
+
   const credsOk = await prepareCredentials();
   if (!credsOk) {
     console.warn("[archive] Spotty credentials not found — downloads will fail until Spotty is authed.");
@@ -80,6 +92,7 @@ export async function startArchiveService() {
 export function enqueueTrack({ uri, artist, title, album, art, emailTo } = {}) {
   const normalized = normalizeUri(uri);
   if (!normalized) throw new Error("No archivable Spotify track was provided.");
+  if (QUEUE_DISABLED) return { queued: false, reason: "archive queue disabled" };
 
   // Already downloaded? Already queued/downloading? Skip.
   if (isAlreadyArchived(artist, title)) return { queued: false, reason: "already archived" };
@@ -773,6 +786,9 @@ const DEFAULT_SPOTIFY_WEB_TIMEOUT_MS = 8000;
 const DEFAULT_SPOTIFY_WEB_MAX_RETRIES = 0;
 const DEFAULT_SPOTIFY_WEB_429_BACKOFF_MS = 15 * 60 * 1000;
 
+const WATCH_DISABLED = envFlag("ARCHIVE_WATCH_DISABLED");
+const WATCH_WEB_API = envFlag("ARCHIVE_WATCH_WEB_API");
+
 function isWatchedTitle(title) {
   const t = String(title || "").trim().toLowerCase();
   return WATCH_PREFIXES.some((p) => t.startsWith(p));
@@ -815,7 +831,9 @@ export function getWatchStatus() {
     watching: watchedPlaylists.map((p) => ({ name: p.name, trackCount: p.trackCount, updatedAt: p.updatedAt, email: Boolean(p.email) })),
     lastScanAt,
     scanning,
-    intervalMs: SCAN_INTERVAL_MS
+    intervalMs: SCAN_INTERVAL_MS,
+    disabled: WATCH_DISABLED,
+    webApiEnabled: WATCH_WEB_API
   };
 }
 
@@ -940,6 +958,10 @@ let spotifyWebBackoffReason = "";
 
 export function spotifyWebConfigured() {
   return Boolean(process.env.SPOTIFY_REFRESH_TOKEN && process.env.SPOTIFY_CLIENT_ID && process.env.SPOTIFY_CLIENT_SECRET);
+}
+
+export function spotifyArchiveWatchWebConfigured() {
+  return WATCH_WEB_API && spotifyWebConfigured();
 }
 
 export function spotifyWebBackoffActive() {
@@ -1154,7 +1176,11 @@ export async function scanWatchedPlaylistsWebApi(lms) {
 // watcher (accurate + cheap) and falls back to the Spotty scanner.
 export function startArchiveWatcher(lms) {
   loadWatchSnapshot();
-  const web = spotifyWebConfigured();
+  if (WATCH_DISABLED) {
+    console.log("[archive] watcher disabled by ARCHIVE_WATCH_DISABLED.");
+    return { stop: () => {} };
+  }
+  const web = spotifyArchiveWatchWebConfigured();
   const kick = async () => {
     if (!web || spotifyWebBackoffActive()) {
       await scanWatchedPlaylists(lms);

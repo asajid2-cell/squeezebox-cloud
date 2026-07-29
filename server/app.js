@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { LmsClient } from "./lmsClient.js";
-import { enqueueNowPlaying, enqueueTrack, getQueueStatus, removeJob, ensureStreamFile, scanWatchedPlaylists, scanWatchedPlaylistsWebApi, spotifyWebConfigured, spotifyWebBackoffActive, groupArchiveFiles, getWatchStatus, hasArchiveCover, archiveCoverFile, backfillArchiveCovers, tapCachePlan, tapCacheFilePath, cacheTapTag, dropTapCache } from "./archiveService.js";
+import { enqueueNowPlaying, enqueueTrack, getQueueStatus, removeJob, ensureStreamFile, scanWatchedPlaylists, scanWatchedPlaylistsWebApi, spotifyArchiveWatchWebConfigured, spotifyWebBackoffActive, groupArchiveFiles, getWatchStatus, hasArchiveCover, archiveCoverFile, backfillArchiveCovers, tapCachePlan, tapCacheFilePath, cacheTapTag, dropTapCache } from "./archiveService.js";
 import {
   addQueueItem,
   addQueueItemNext,
@@ -459,6 +459,24 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
   const adminAuth = getAdminAuthConfig();
   appState.curation = curation.getState();
   app.disable("x-powered-by");
+  // Proof-of-edge-traversal: nginx injects X-Edge-Key on this app's location, so a request that
+  // arrives WITHOUT it did not come through the gate -- it came from a process already on the box or
+  // on the docker bridge, which is exactly the residual this closes. Default-deny; the exemptions are
+  // the two callers verified to reach :4177 legitimately without nginx:
+  //   - x-hl-service-key: backend-to-backend (harmonizer and alarmonizer both already send it)
+  //   - GET /api/canon-stream/<session>: LMS pulls the live cast audio straight off the port, and it
+  //     is already capability-scoped (an unguessable session id that must have a live cast).
+  app.use((req, res, next) => {
+    const edgeKey = process.env.EDGE_KEY || "";
+    if (!edgeKey) return next(); // unset = not deployed with a key; never lock the app out of itself
+    if (req.path === "/healthz") return next();
+    if (req.get("x-edge-key") === edgeKey) return next();
+    const svc = process.env.AUTH_SERVICE_KEY || "";
+    if (svc && req.get("x-hl-service-key") === svc) return next();
+    if (req.method === "GET" && req.path.startsWith("/api/canon-stream/")) return next();
+    return res.status(403).json({ error: "direct_access_denied" });
+  });
+
   app.use(applySecurityHeaders);
   app.use(forceHttpsRedirect);
   app.use(cors({
@@ -1336,7 +1354,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
   });
 
   app.get("/api/spotify/connect", (_req, res) => {
-    const lanUrl = `http://${config.lanLmsHost}:9000/settings/index.html`;
+    const lanUrl = config.lmsSettingsUrl || `http://${config.lanLmsHost}:9000/settings/index.html`;
     res.json({
       setupUrl: lanUrl,
       fallbackUrl: config.publicLmsHttpUrl,
@@ -1963,7 +1981,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
   app.post("/api/archive/scan", async (_req, res) => {
     try {
       let result;
-      if (spotifyWebConfigured() && !spotifyWebBackoffActive()) {
+      if (spotifyArchiveWatchWebConfigured() && !spotifyWebBackoffActive()) {
         try {
           result = await scanWatchedPlaylistsWebApi(lms);
         } catch (error) {

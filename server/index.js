@@ -27,6 +27,18 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (req.method === "POST" && pathname === "/api/player/canon") {
+    // Raw-level routes bypass Express, so the app-level edge check never sees them. This one is a
+    // control route (it triggers playback) and only ever arrives from the browser via nginx, so it
+    // carries the edge key. Enforce it here too, or the cage has a hole the audit cannot see.
+    const edgeKey = process.env.EDGE_KEY || "";
+    const svc = process.env.AUTH_SERVICE_KEY || "";
+    const okEdge = !edgeKey || req.headers["x-edge-key"] === edgeKey
+      || (svc && req.headers["x-hl-service-key"] === svc);
+    if (!okEdge) {
+      res.writeHead(403, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "direct_access_denied" }));
+      return;
+    }
     handleCanonPlay(req, res, lms);
     return;
   }
@@ -41,6 +53,15 @@ server.on("upgrade", (req, socket, head) => {
   let pathname;
   try { pathname = new URL(req.url, "http://x").pathname; } catch { socket.destroy(); return; }
   if (pathname.startsWith("/api/cast-ingest/")) {
+    // Same proof-of-edge check as the rest of the app. The upgrade handler runs on the raw server, so
+    // the Express middleware never sees it -- and unauthenticated it would let any on-box or
+    // docker-bridge caller spawn an ffmpeg child per connection and register a session name that LMS
+    // may then pull. nginx injects X-Edge-Key on proxied upgrades, so the browser path is unaffected.
+    const edgeKey = process.env.EDGE_KEY || "";
+    const svc = process.env.AUTH_SERVICE_KEY || "";
+    const ok = !edgeKey || req.headers["x-edge-key"] === edgeKey
+      || (svc && req.headers["x-hl-service-key"] === svc);
+    if (!ok) { socket.destroy(); return; }
     handleCastUpgrade(req, socket, head);
   } else {
     socket.destroy();

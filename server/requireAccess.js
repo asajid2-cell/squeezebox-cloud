@@ -111,7 +111,7 @@ export async function checkAccess(req, page) {
   // Trusted backend-to-backend caller (e.g. another VPS app) presenting the shared
   // service key. Authorized for any page, but NOT admin.
   const svc = req.headers["x-hl-service-key"];
-  if (cfg().serviceKey && svc && svc === cfg().serviceKey) {
+  if (cfg().serviceKey && !req.headers["x-forwarded-for"] && !req.headers[cfg().publicMarker] && svc && svc === cfg().serviceKey) {
     return { ok: true, service: true, user: { username: "service", service: true }, reason: "service_key" };
   }
   // May be null — public pages are still allowed (verify decides by page mode).
