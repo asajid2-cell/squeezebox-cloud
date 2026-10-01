@@ -12,6 +12,10 @@ export default defineConfig({
     {
       command: "npm run dev:server",
       url: "http://127.0.0.1:4177/api/health",
+      // The connect-speaker guide renders config.lanLmsHost, whose default is the machine's own
+      // default-route IP. Pin it here (Playwright merges this over process.env) so the e2e
+      // assertion checks the rendered value against a known host, not the runner's network.
+      env: { LAN_LMS_HOST: "192.168.1.142" },
       reuseExistingServer: !process.env.CI,
       timeout: 20_000
     },

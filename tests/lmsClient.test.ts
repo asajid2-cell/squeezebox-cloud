@@ -4,6 +4,22 @@ import path from "node:path";
 import { LmsClient, isCommandPayload, lastToken, spotifyDurationKey } from "../server/lmsClient.js";
 import { config } from "../server/state.js";
 
+// streamUrl() builds its host from config.lanLmsHost, which by default is this machine's own
+// default-route IP (see state.js primaryLanIp) - correct in production, but not something a unit
+// test should inherit, or the assertion would only hold on the box. Tests that assert a stream URL
+// pin the host for the call that builds it, so the expectation is a fixed value on any machine.
+const TEST_LAN_HOST = "192.168.1.142";
+
+async function withLanHost<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = config.lanLmsHost;
+  config.lanLmsHost = TEST_LAN_HOST;
+  try {
+    return await fn();
+  } finally {
+    config.lanLmsHost = previous;
+  }
+}
+
 describe("LMS client parsing", () => {
   it("extracts the final CLI token", () => {
     expect(lastToken("player count 1")).toBe("1");
@@ -385,7 +401,7 @@ describe("LMS client parsing", () => {
   it("maps app stream URLs back to uploaded track metadata", async () => {
     const previousUploadDir = config.uploadDir;
     config.uploadDir = "/music/uploads";
-    const streamUrl = `http://192.168.1.142:4177/api/stream/${Buffer.from("/music/uploads/uploaded-song.mp3").toString("base64url")}/uploaded-song.mp3`;
+    const streamUrl = `http://${TEST_LAN_HOST}:4177/api/stream/${Buffer.from("/music/uploads/uploaded-song.mp3").toString("base64url")}/uploaded-song.mp3`;
     const client = new LmsClient();
     client.command = async (command: string) => {
       if (command.endsWith("title ?")) return `p title ${encodeURIComponent(streamUrl)}`;
@@ -594,10 +610,10 @@ describe("LMS client parsing", () => {
       return { result: {} };
     };
 
-    await client.playTrack("player-1", { title: "Upload", source: "Uploaded", uploaded: true, path: "/music/uploads/upload.mp3" }, "play-now");
+    await withLanHost(() => client.playTrack("player-1", { title: "Upload", source: "Uploaded", uploaded: true, path: "/music/uploads/upload.mp3" }, "play-now"));
 
     const encodedPath = Buffer.from("/music/uploads/upload.mp3").toString("base64url");
-    expect(commands).toContain(`player-1 playlist play http://192.168.1.142:4177/api/stream/${encodedPath}/upload.mp3`);
+    expect(commands).toContain(`player-1 playlist play http://${TEST_LAN_HOST}:4177/api/stream/${encodedPath}/upload.mp3`);
   });
 
   it("does not resolve a local track to a fuzzy basename match", async () => {
@@ -625,11 +641,11 @@ describe("LMS client parsing", () => {
       return { result: {} };
     };
 
-    await client.playTrack("player-1", { title: "Upload", source: "Uploaded", uploaded: true, path: "/music/uploads/upload.mp3" }, "play-now");
+    await withLanHost(() => client.playTrack("player-1", { title: "Upload", source: "Uploaded", uploaded: true, path: "/music/uploads/upload.mp3" }, "play-now"));
 
     const encodedPath = Buffer.from("/music/uploads/upload.mp3").toString("base64url");
     expect(requests).not.toContainEqual(["player-1", ["playlistcontrol", "cmd:load", "track_id:999"]]);
-    expect(commands).toContain(`player-1 playlist play http://192.168.1.142:4177/api/stream/${encodedPath}/upload.mp3`);
+    expect(commands).toContain(`player-1 playlist play http://${TEST_LAN_HOST}:4177/api/stream/${encodedPath}/upload.mp3`);
   });
 
   it("does not resolve a local track to another file with the same basename", async () => {
@@ -657,11 +673,11 @@ describe("LMS client parsing", () => {
       return { result: {} };
     };
 
-    await client.playTrack("player-1", { title: "Shared Name", path: "/music/right-folder/shared-name.mp3" }, "play-now");
+    await withLanHost(() => client.playTrack("player-1", { title: "Shared Name", path: "/music/right-folder/shared-name.mp3" }, "play-now"));
 
     const encodedPath = Buffer.from("/music/right-folder/shared-name.mp3").toString("base64url");
     expect(requests).not.toContainEqual(["player-1", ["playlistcontrol", "cmd:load", "track_id:999"]]);
-    expect(commands).toContain(`player-1 playlist play http://192.168.1.142:4177/api/stream/${encodedPath}/shared-name.mp3`);
+    expect(commands).toContain(`player-1 playlist play http://${TEST_LAN_HOST}:4177/api/stream/${encodedPath}/shared-name.mp3`);
   });
 
   it("inserts Spotify URI tracks as the next LMS item", async () => {
