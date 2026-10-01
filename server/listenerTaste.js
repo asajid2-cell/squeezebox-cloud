@@ -60,10 +60,14 @@ export function createListenerTasteStore(file = defaultListenerTasteFile()) {
     return structuredClone(load());
   }
 
-  function observePlayback({ track, status = {}, context = {} } = {}) {
+  // onFinalize, when given, is called with every session this store closes
+  // (complete OR skip). The return value can only carry the live session — the
+  // session is gone by the time a finalize happens — so a caller that must react
+  // to a finalized event gets it through here instead.
+  function observePlayback({ track, status = {}, context = {}, onFinalize } = {}) {
     if (!isPlayableTrack(track) || isStopped(status)) {
-      if (active && shouldFinalizeInactive(active)) finalizeActive("complete", { reason: "poll-inactive", context });
-      else active = null;
+      if (active && shouldFinalizeInactive(active)) return finalizeActive("complete", { reason: "poll-inactive", context, onFinalize });
+      active = null;
       return null;
     }
 
@@ -75,7 +79,7 @@ export function createListenerTasteStore(file = defaultListenerTasteFile()) {
     const nextContext = compactContext(track, context);
 
     if (!active || active.trackKey !== key) {
-      if (active) finalizeActive(classifyActive(active), { reason: "observed-transition", context: nextContext });
+      if (active) finalizeActive(classifyActive(active), { reason: "observed-transition", context: nextContext, onFinalize });
       if (!active && shouldSuppressClosedSession(key, elapsed)) return null;
       if (closed?.trackKey !== key || elapsed < Math.max(5, closed.elapsed - 5)) closed = null;
       active = createActiveSession(track, listenerId, nextContext, now);
@@ -89,7 +93,7 @@ export function createListenerTasteStore(file = defaultListenerTasteFile()) {
         context: nextContext
       });
       if (isCompleteProgress(active)) {
-        finalizeActive("complete", { reason: "near-track-end", context: nextContext });
+        finalizeActive("complete", { reason: "near-track-end", context: nextContext, onFinalize });
       }
       return active;
     }
@@ -99,7 +103,7 @@ export function createListenerTasteStore(file = defaultListenerTasteFile()) {
     active.duration = duration || active.duration;
     active.context = { ...active.context, ...nextContext };
     if (!active.completedAt && isCompleteProgress(active)) {
-      finalizeActive("complete", { reason: "near-track-end", context: active.context });
+      finalizeActive("complete", { reason: "near-track-end", context: active.context, onFinalize });
     }
     return active;
   }
@@ -153,7 +157,7 @@ export function createListenerTasteStore(file = defaultListenerTasteFile()) {
     active = null;
   }
 
-  function finalizeActive(type, { reason, context = {} } = {}) {
+  function finalizeActive(type, { reason, context = {}, onFinalize } = {}) {
     if (!active || active.finalized) return null;
     const track = active.track;
     const elapsed = Math.max(active.maxElapsed, boundedNumber(track.elapsed));
@@ -171,6 +175,7 @@ export function createListenerTasteStore(file = defaultListenerTasteFile()) {
     });
     closed = { trackKey: active.trackKey, type, elapsed, at: event.at };
     active = null;
+    notifyFinalize(onFinalize, event);
     return event;
   }
 
@@ -480,6 +485,17 @@ function boundedNumber(value) {
   const number = Number(value);
   if (!Number.isFinite(number) || number < 0) return 0;
   return number;
+}
+
+// An onFinalize observer is caller code: a throw inside it must never break
+// capture, and must never touch playback.
+function notifyFinalize(onFinalize, event) {
+  if (typeof onFinalize !== "function") return;
+  try {
+    onFinalize(event);
+  } catch (error) {
+    console.warn(`[listenerTaste] onFinalize handler failed: ${error?.message || error}`);
+  }
 }
 
 let warnedPersistError = false;

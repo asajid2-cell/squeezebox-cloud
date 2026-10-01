@@ -37,6 +37,7 @@ import { playTapTarget } from "./tapPlayback.js";
 import { verifySun } from "./tapSun.js";
 import { playVideo as playScreenVideo, stopVideo as stopScreenVideo, pauseVideo as pauseScreenVideo, resumeVideo as resumeScreenVideo } from "./screenClient.js";
 import { startRoomCast, stopRoomCast } from "./roomCast.js";
+import { reportStreamListen, streamIngestConfigured, spotifyTrackUri } from "./archiveStream.js";
 import { checkAccess } from "./requireAccess.js";
 
 // Squeezebox Tap is its OWN app (a sister of the jukebox), so it gates on its OWN
@@ -2619,11 +2620,31 @@ function observeListeningPlayback(taste, status, track, reason) {
     taste?.observePlayback?.({
       status,
       track,
-      context: listeningCaptureContext(track, reason)
+      context: listeningCaptureContext(track, reason),
+      // The store closes a session itself, so the finalized event comes back
+      // through here rather than as a return value. A qualifying listen-complete
+      // is the one moment the archive wants to hear about: a song the listener
+      // actually heard through, so it can key it if it isn't keyed yet.
+      onFinalize: (event) => {
+        if (event?.type === "complete" && event.id) reportStreamListenForTrack(event.track, event.id, reason);
+      }
     });
   } catch (error) {
     logEvent("listening.capture-error", { reason, error: error.message, track: trackSummary(track) });
   }
+}
+
+// Tell the archive a track was listened through, so it can key it. Fire-and-
+// forget OFF the poll path: reporting must never affect playback, and the archive
+// dedups by track id, so a repeat is a no-op. Only Spotify tracks are keyable.
+function reportStreamListenForTrack(track, eventId, reason) {
+  if (!streamIngestConfigured() || !spotifyTrackUri(track)) return;
+  reportStreamListen(track)
+    .then((result) => {
+      if (result?.ok) return;
+      logEvent("archive.stream-listen", { reason, eventId, track: trackSummary(track), status: result?.status, error: result?.error });
+    })
+    .catch(() => {});
 }
 
 function recordListeningSkip(taste, track, reason) {
