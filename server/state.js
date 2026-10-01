@@ -1,10 +1,35 @@
+import os from "node:os";
+import fs from "node:fs";
+function primaryLanIp() {
+  // The interface that owns the default route is the one with the real LAN address.
+  // docker bridges (172.17-31.x.1) are also present and must never be picked.
+  try {
+    const routes = fs.readFileSync("/proc/net/route", "utf8").split("\n");
+    for (const line of routes.slice(1)) {
+      const [iface, dest] = line.split(/\s+/);
+      if (dest === "00000000") {
+        for (const ni of os.networkInterfaces()[iface] || []) {
+          if (ni.family === "IPv4" && !ni.internal) return ni.address;
+        }
+      }
+    }
+  } catch (e) {}
+  // Fallback: first non-internal, non-docker-bridge IPv4.
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const ni of list || []) {
+      if (ni.family === "IPv4" && !ni.internal && !ni.address.startsWith("172.")) return ni.address;
+    }
+  }
+  return "127.0.0.1";
+}
+
 export const config = {
   port: Number(process.env.PORT || 4177),
   lmsHost: process.env.LMS_HOST || "127.0.0.1",
   lmsCliPort: Number(process.env.LMS_CLI_PORT || 9090),
   lmsHttpUrl: process.env.LMS_HTTP_URL || "http://127.0.0.1:9000",
   lmsConfigDir: expandPath(process.env.LMS_CONFIG_DIR || "/config"),
-  lanLmsHost: process.env.LAN_LMS_HOST || "192.168.1.142",
+      lanLmsHost: process.env.LAN_LMS_HOST || primaryLanIp(),
   publicLmsHost: process.env.PUBLIC_LMS_HOST || "23.17.17.81",
   publicLmsHttpUrl: process.env.PUBLIC_LMS_HTTP_URL || "http://23.17.17.81:9000",
   // LMS web UI is no longer reachable on the LAN (ufw closed 9000); it lives behind

@@ -473,7 +473,13 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     if (req.get("x-edge-key") === edgeKey) return next();
     const svc = process.env.AUTH_SERVICE_KEY || "";
     if (svc && req.get("x-hl-service-key") === svc) return next();
-    if (req.method === "GET" && req.path.startsWith("/api/canon-stream/")) return next();
+      if (req.method === "GET" && (
+        req.path.startsWith("/api/canon-stream/") ||
+        req.path.startsWith("/api/stream/") ||
+        req.path.startsWith("/api/local-stream/") ||
+        req.path.startsWith("/api/archive/file/") ||
+        req.path.startsWith("/api/tap-cache/file/")
+      )) return next();
     return res.status(403).json({ error: "direct_access_denied" });
   });
 
@@ -3336,6 +3342,37 @@ async function refreshLms(lms, { maintainPlayback = false, minAgeMs = 0, force =
         refreshState.servicesAt = Date.now();
       }
       updateStablePlayerStatus(status);
+      // --- stalled-playback detection -------------------------------------------
+      // mode=play but the track time never advances: a transient Spotify session
+      // rejection (account momentarily taken by a worker) leaves the player in
+      // mode=play with time frozen near 0 while the UI claims "playing". Detect,
+      // retry bounded, surface an honest "retrying" state.
+      const stall = refreshState.stall || (refreshState.stall = { frozenSince: 0, lastTime: -1, retries: 0, lastRetryAt: 0 });
+      const stallT = Number(status.time) || 0;
+      if (status.mode === "play" && status.connected && stallT < 5) {
+        const frozen = stall.lastTime >= 0 && Math.abs(stallT - stall.lastTime) < 0.05;
+        if (frozen) {
+          if (!stall.frozenSince) stall.frozenSince = Date.now();
+          const frozenMs = Date.now() - stall.frozenSince;
+          if (frozenMs > 12000 && stall.retries < 3 && Date.now() - (stall.lastRetryAt || 0) > 12000) {
+            stall.retries += 1;
+            stall.lastRetryAt = Date.now();
+            // stop+play makes LMS tear down the stuck spotty and start fresh.
+            lms.control(status.id, "stop").catch(() => {});
+            setTimeout(() => lms.control(status.id, "play").catch(() => {}), 1500);
+            logEvent("playback.stall.retry", { player: status.id, retry: stall.retries, frozenMs });
+            updatePlayerStatus({ ...appState.player, stalled: true, detail: "Playback stalled - retrying" });
+          }
+        } else {
+          stall.frozenSince = 0;
+        }
+        stall.lastTime = stallT;
+      } else {
+        stall.frozenSince = 0;
+        stall.lastTime = -1;
+        if (appState.player.stalled) updatePlayerStatus({ ...appState.player, stalled: false });
+      }
+
       if (status.connected) {
         const track = estimateContinuousElapsed(applyPendingSeek(await lms.nowPlaying(status.id)), status);
         observeListeningPlayback(taste, status, track, "poll");
