@@ -861,8 +861,15 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       }
       res.json({ ok: true, action, queued, queue: appState.queue, player: appState.player, nowPlaying: appState.nowPlaying, playback: appState.playback });
     } catch (error) {
+      if (isServerLoadFailure(error)) {
+        sendPlaybackLoadFailure(res, error, { stage: "handler", action, track });
+        return;
+      }
+      logEvent("track.request-error", { action, track: trackSummary(track), error: error.message });
       res.status(502).json({ error: error.message });
     }
+    }, { acquireTimeoutMs: playbackLockAcquireTimeoutMs }).catch((error) => {
+      sendPlaybackLoadFailure(res, error, { stage: "lock" });
     });
   });
 
@@ -2532,17 +2539,85 @@ async function withTransportLock(res, handler) {
   }
 }
 
-async function withQueueMutationLock(handler) {
+// A locked LMS mutation (play-now and friends) that never got a turn, or whose
+// LMS round-trip blew the client budget, is a *server load* failure - not a
+// request error and not a success. Fail fast and label it, instead of hanging for
+// minutes or emitting a bare timeout 502 the user can't act on. We never report
+// success for a play we did not confirm.
+class ServerLoadError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ServerLoadError";
+    this.isServerLoad = true;
+  }
+}
+
+const serverLoadMessage =
+  "Request failed under server load. The player is busy right now - please try again in a moment.";
+// How long a playback request will wait for the mutation lock before giving up.
+// Healthy mutations hold the lock for well under a second; under host/LMS
+// contention a queued request would otherwise wait 40-250s+. Past this budget we
+// fail fast and say so.
+const playbackLockAcquireTimeoutMs = Math.max(
+  0,
+  Number(process.env.CLOUD_SQUEEZE_PLAYBACK_LOCK_TIMEOUT_MS || 2000)
+);
+
+function isServerLoadFailure(error) {
+  if (!error) return false;
+  if (error.isServerLoad) return true;
+  if (error.name === "TimeoutError" || error.name === "AbortError") return true;
+  const message = String(error.message || "");
+  return /aborted due to timeout|LMS CLI timeout|No LMS player connected/i.test(message);
+}
+
+function sendPlaybackLoadFailure(res, error, extra = {}) {
+  logEvent("track.load-failure", {
+    error: error && error.message ? error.message : String(error),
+    stage: extra.stage || "handler",
+    action: extra.action,
+    track: extra.track ? trackSummary(extra.track) : undefined
+  });
+  if (res.headersSent) return;
+  res.status(503).json({
+    error: serverLoadMessage,
+    code: "server_load",
+    queue: appState.queue,
+    playback: appState.playback
+  });
+}
+
+async function withQueueMutationLock(handler, options = {}) {
+  const acquireTimeoutMs = Math.max(0, Number(options && options.acquireTimeoutMs) || 0);
   const previous = queueMutationLockState.tail.catch(() => null);
   let release;
   queueMutationLockState.tail = new Promise((resolve) => {
     release = resolve;
   });
+  let acquired = acquireTimeoutMs <= 0;
   try {
-    await previous;
+    if (acquireTimeoutMs > 0) {
+      acquired = await Promise.race([
+        previous.then(() => true),
+        new Promise((resolve) => {
+          const timer = setTimeout(() => resolve(false), acquireTimeoutMs);
+          if (typeof timer.unref === "function") timer.unref();
+        })
+      ]);
+      if (!acquired) throw new ServerLoadError(serverLoadMessage);
+    } else {
+      await previous;
+    }
     return await handler();
   } finally {
-    release();
+    if (acquired) {
+      release();
+    } else {
+      // We gave up our turn, but our slot is still in the chain. Resolve it only
+      // once the predecessor we queued behind has settled, so the next request
+      // still serializes behind the current holder instead of running beside it.
+      previous.then(release, release);
+    }
   }
 }
 
