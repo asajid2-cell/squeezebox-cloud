@@ -2141,6 +2141,21 @@ describe("Cloud Squeeze API", () => {
     expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining("evil.example"), expect.anything());
   });
 
+  it("rejects an image proxy redirect that leaves the allowed hosts", async () => {
+    const fetchMock = vi.fn(async () => {
+      // A real fetch sets response.url to the FINAL url after redirects; emulate an
+      // allowed host bouncing us to an internal address.
+      const response = new Response(Buffer.from("fake-image"), { status: 200, headers: { "content-type": "image/jpeg" } });
+      Object.defineProperty(response, "url", { value: "http://169.254.169.254/latest/meta-data/" });
+      return response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const app = createApp({ lms: mockLms });
+
+    const response = await request(app).get("/api/image-proxy?url=https%3A%2F%2Fi.scdn.co%2Fimage%2Fredirected").expect(502);
+    expect(response.body.error).toMatch(/redirect/i);
+  });
+
   it("returns speaker connection setup guidance", async () => {
     const response = await request(createApp({ lms: mockLms })).get("/api/speaker/connect-guide").expect(200);
     expect(response.body.serverHost).toBeTruthy();

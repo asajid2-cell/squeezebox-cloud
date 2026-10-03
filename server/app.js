@@ -87,6 +87,23 @@ async function requireTapAccess(req, res, next) {
 // album from 0:00 (NFC fires readily; people tap twice).
 const tapPlayState = new Map();
 const TAP_DEBOUNCE_MS = Number(process.env.TAP_DEBOUNCE_MS || 3000);
+// An entry is only useful within the debounce window, so cap the map and drop
+// anything older than that rather than letting arbitrary tag ids accumulate.
+const tapPlayStateLimit = Number(process.env.TAP_PLAY_STATE_LIMIT || 1000);
+
+function recordTapPlay(tagId) {
+  const now = Date.now();
+  tapPlayState.set(tagId, { lastPlayedAt: now });
+  if (tapPlayState.size <= tapPlayStateLimit) return;
+  for (const [key, value] of tapPlayState) {
+    if (now - value.lastPlayedAt > TAP_DEBOUNCE_MS) tapPlayState.delete(key);
+    if (tapPlayState.size <= tapPlayStateLimit) return;
+  }
+  for (const key of tapPlayState.keys()) {
+    tapPlayState.delete(key);
+    if (tapPlayState.size <= tapPlayStateLimit) return;
+  }
+}
 // The resume-enabled tag whose content is (as far as Tap knows) on the speaker
 // right now. When a DIFFERENT tag is tapped we bookmark this one's position
 // first, so it can be picked up later — the "vinyl bookmark" behavior.
@@ -347,6 +364,9 @@ const adminLoginAttempts = new Map();
 const adminSessions = new Map();
 const adminLoginWindowMs = Number(process.env.CLOUD_SQUEEZE_ADMIN_LOGIN_WINDOW_MS || 60000);
 const adminLoginMaxAttempts = Number(process.env.CLOUD_SQUEEZE_ADMIN_LOGIN_MAX_ATTEMPTS || 8);
+// Entries expire after adminLoginWindowMs, but only lazily on their own key, so a
+// spray from many distinct IPs would grow this map forever. Cap it.
+const adminLoginAttemptsLimit = Number(process.env.CLOUD_SQUEEZE_ADMIN_LOGIN_TRACK_LIMIT || 10000);
 const securityPolicy = [
   "default-src 'self'",
   "script-src 'self'",
@@ -361,6 +381,11 @@ const securityPolicy = [
 const imageProxyMaxBytes = Number(process.env.IMAGE_PROXY_MAX_BYTES || 8 * 1024 * 1024);
 const imageProxyCacheTtlMs = Number(process.env.IMAGE_PROXY_CACHE_TTL_MS || 6 * 60 * 60 * 1000);
 const imageProxyCacheLimit = Number(process.env.IMAGE_PROXY_CACHE_LIMIT || 200);
+// Each in-flight proxy fetch can buffer up to imageProxyMaxBytes, so unbounded
+// concurrency is unbounded memory. Cap how many can be in flight at once.
+const imageProxyMaxConcurrent = Number(process.env.IMAGE_PROXY_MAX_CONCURRENT || 16);
+// Cap how many archived files the listing route will stat/return.
+const archiveListingMax = Number(process.env.ARCHIVE_LISTING_MAX || 5000);
 const serviceRefreshMs = 60000;
 const trackInfoRefreshMs = 30000;
 const trackInfoBudgetMs = Number(process.env.TRACK_INFO_BUDGET_MS || 1800);
@@ -431,12 +456,17 @@ const recentPlaybackMetadata = new Map();
 const recentPlaybackMetadataTtlMs = 5 * 60 * 1000;
 const recentPlaybackMetadataLimit = 100;
 const imageProxyCache = new Map();
+let imageProxyInFlight = 0;
 const enrichedLibraryResponseCache = new Map();
 const enrichedLibraryResponseCacheTtlMs = Number(process.env.ENRICHED_LIBRARY_RESPONSE_CACHE_TTL_MS || 15000);
 const enrichedLibraryResponseCacheLimit = 80;
 const debugLog = [];
 const debugLogLimit = 500;
 const debugLogPath = process.env.CLOUD_SQUEEZE_LOG_PATH || "/tmp/cloud-squeeze-events.jsonl";
+const debugLogMaxBytes = Number(process.env.CLOUD_SQUEEZE_LOG_MAX_BYTES || 8 * 1024 * 1024);
+let debugLogBytes = (() => {
+  try { return fs.statSync(debugLogPath).size; } catch { return 0; }
+})();
 const idleTrackInfo = {
   artistBio: "Connect a Squeezebox player, start a track, then enable the LMS Music and Artist Information plugin for live biographies, album reviews, and lyrics.",
   albumReview: "No album review is available until a real track is playing.",
@@ -1398,7 +1428,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
 
   app.get("/api/image-proxy", async (req, res) => {
     const url = String(req.query.url || "");
-    if (!/^https?:\/\/(i\.scdn\.co|mosaic\.scdn\.co|image-cdn-[a-z]+\.spotifycdn\.com|pickasso\.spotifycdn\.com|blend-playlist-covers\.spotifycdn\.com|seed-mix-image\.spotifycdn\.com|is\d+-ssl\.mzstatic\.com|coverartarchive\.org)\//i.test(url)) {
+    if (!isAllowedImageUrl(url)) {
       res.status(400).json({ error: "Unsupported image host" });
       return;
     }
@@ -1409,10 +1439,22 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       res.send(cached.bytes);
       return;
     }
+    if (imageProxyInFlight >= imageProxyMaxConcurrent) {
+      res.status(503).set("Retry-After", "1").json({ error: "Image proxy is busy" });
+      return;
+    }
+    imageProxyInFlight += 1;
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(4000) });
       if (!response.ok) {
         res.status(204).set("Cache-Control", "public, max-age=3600").end();
+        return;
+      }
+      // fetch follows redirects, so re-check the FINAL url: an allowed host
+      // must not be able to bounce the request to an internal address (SSRF).
+      // (A real fetch always populates response.url; a hand-built Response does not.)
+      if (response.url && !isAllowedImageUrl(response.url)) {
+        res.status(502).json({ error: "Image redirect left the allowed hosts" });
         return;
       }
       const contentType = response.headers.get("content-type") || "image/jpeg";
@@ -1436,6 +1478,8 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       res.send(bytes);
     } catch (error) {
       res.status(502).json({ error: error.message });
+    } finally {
+      imageProxyInFlight -= 1;
     }
   });
 
@@ -1955,9 +1999,12 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       const archiveDir = resolveArchiveDir();
       await fs.promises.mkdir(archiveDir, { recursive: true });
       const entries = await fs.promises.readdir(archiveDir);
+      const flacNames = entries.filter((name) => name.endsWith(".flac") && name !== "_current.flac");
+      // Guard against a pathological archive: don't stat/build an unbounded list.
+      const truncated = flacNames.length > archiveListingMax;
       const files = await Promise.all(
-        entries
-          .filter((name) => name.endsWith(".flac") && name !== "_current.flac")
+        flacNames
+          .slice(0, archiveListingMax)
           .map(async (name) => {
             const filePath = path.join(archiveDir, name);
             const stat = await fs.promises.stat(filePath).catch(() => null);
@@ -1977,7 +2024,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       files.sort((a, b) => (b.addedAt || "").localeCompare(a.addedAt || ""));
       // `files` stays flat for back-compat; `groups` splits them by source
       // (Manual + each watched "archive*" playlist) for the grouped view.
-      res.json({ files, groups: groupArchiveFiles(files), scan: getWatchStatus() });
+      res.json({ files, groups: groupArchiveFiles(files), scan: getWatchStatus(), truncated });
     } catch (error) {
       res.status(500).json({ error: error.message, files: [] });
     }
@@ -2303,7 +2350,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
     if (tag.playSpec?.kind === "visual") {
       try {
         const visual = await toggleVisualMode(lms, tag);
-        tapPlayState.set(tagId, { lastPlayedAt: Date.now() });
+        recordTapPlay(tagId);
         const updated = tapStore.recordTap(tagId);
         logEvent("tap.play.ok", { tagId, kind: "visual", flow: tag.playSpec.flow || "mirror", visualOn: visual.on });
         res.json({ ok: true, played: true, visual, tag: publicTapTag(updated) });
@@ -2410,7 +2457,7 @@ export function createApp({ lms = new LmsClient(), playlists = defaultPlaylistSt
       // delay lets the LMS settle on the new track before we read it.
       setTimeout(() => { refreshLms(lms, { force: true, skipTrackInfo: true }).catch(() => {}); }, 600).unref?.();
 
-      tapPlayState.set(tagId, { lastPlayedAt: Date.now() });
+      recordTapPlay(tagId);
       const updated = tapStore.recordTap(tagId);
       logEvent("tap.play.ok", { tagId, kind: tag.playSpec?.kind });
 
@@ -2541,7 +2588,24 @@ function logEvent(type, data = {}) {
   };
   debugLog.push(event);
   if (debugLog.length > debugLogLimit) debugLog.splice(0, debugLog.length - debugLogLimit);
-  fs.promises.appendFile(debugLogPath, `${JSON.stringify(event)}\n`).catch(() => null);
+  appendDebugLogLine(`${JSON.stringify(event)}\n`);
+}
+
+// The in-memory ring is capped (debugLogLimit), but the JSONL file used to be
+// appended forever - in /tmp, so unbounded growth is unbounded disk/RAM. Rotate
+// once at debugLogMaxBytes, keeping at most ~2x the cap on disk.
+async function appendDebugLogLine(line) {
+  try {
+    if (debugLogBytes + line.length > debugLogMaxBytes) {
+      await fs.promises.rm(`${debugLogPath}.1`, { force: true });
+      await fs.promises.rename(debugLogPath, `${debugLogPath}.1`).catch(() => null);
+      debugLogBytes = 0;
+    }
+    await fs.promises.appendFile(debugLogPath, line);
+    debugLogBytes += line.length;
+  } catch {
+    // Logging is best-effort; never let it throw into the request path.
+  }
 }
 
 function queueSummary() {
@@ -3076,9 +3140,23 @@ function recordAdminLoginFailure(req) {
   const attempt = adminLoginAttempts.get(key);
   if (!attempt || now - attempt.firstAt > adminLoginWindowMs) {
     adminLoginAttempts.set(key, { count: 1, firstAt: now });
+    pruneAdminLoginAttempts(now);
     return;
   }
   attempt.count += 1;
+}
+
+function pruneAdminLoginAttempts(now) {
+  if (adminLoginAttempts.size <= adminLoginAttemptsLimit) return;
+  for (const [key, attempt] of adminLoginAttempts) {
+    if (now - attempt.firstAt > adminLoginWindowMs) adminLoginAttempts.delete(key);
+    if (adminLoginAttempts.size <= adminLoginAttemptsLimit) return;
+  }
+  // Still over the cap (all fresh): drop oldest insertions first.
+  for (const key of adminLoginAttempts.keys()) {
+    adminLoginAttempts.delete(key);
+    if (adminLoginAttempts.size <= adminLoginAttemptsLimit) return;
+  }
 }
 
 function clearAdminLoginFailures(req) {
@@ -3621,12 +3699,35 @@ async function activateGeneratedQueue(lms, playerId, { smart = false, shuffle: s
 const discoverPools = new Map(); // seed -> { tracks: [], at: ms, building: bool }
 const DISCOVER_POOL_TTL_MS = 15 * 60 * 1000;
 const DISCOVER_POOL_TARGET = 15;
+// A pool is only warm for DISCOVER_POOL_TTL_MS, and seeds are arbitrary strings,
+// so cap the map and drop expired pools rather than growing per distinct seed.
+const DISCOVER_POOL_MAX = Number(process.env.DISCOVER_POOL_MAX || 200);
 
 function discoverPoolFor(seed) {
   const key = seed || "__taste__";
   let pool = discoverPools.get(key);
-  if (!pool) { pool = { tracks: [], at: 0, building: false }; discoverPools.set(key, pool); }
+  if (!pool) {
+    pool = { tracks: [], at: 0, building: false };
+    discoverPools.set(key, pool);
+    pruneDiscoverPools(key);
+  }
   return pool;
+}
+
+// keepKey is the pool just created; its `at` is still 0, so without the skip the
+// TTL pass would treat the brand-new pool as expired and evict it immediately.
+function pruneDiscoverPools(keepKey) {
+  if (discoverPools.size <= DISCOVER_POOL_MAX) return;
+  const now = Date.now();
+  for (const [key, pool] of discoverPools) {
+    if (key !== keepKey && now - pool.at > DISCOVER_POOL_TTL_MS && !pool.building) discoverPools.delete(key);
+    if (discoverPools.size <= DISCOVER_POOL_MAX) return;
+  }
+  for (const key of discoverPools.keys()) {
+    if (key === keepKey) continue;
+    discoverPools.delete(key);
+    if (discoverPools.size <= DISCOVER_POOL_MAX) return;
+  }
 }
 
 // Rebuild a seed's pool from the recommender (slow). Fire-and-forget friendly:
@@ -4286,6 +4387,10 @@ function lookupRecentPlaybackMetadata(track) {
     return entry.track;
   }
   return null;
+}
+
+function isAllowedImageUrl(url) {
+  return /^https?:\/\/(i\.scdn\.co|mosaic\.scdn\.co|image-cdn-[a-z]+\.spotifycdn\.com|pickasso\.spotifycdn\.com|blend-playlist-covers\.spotifycdn\.com|seed-mix-image\.spotifycdn\.com|is\d+-ssl\.mzstatic\.com|coverartarchive\.org)\//i.test(String(url || ""));
 }
 
 function getCachedProxyImage(url) {
