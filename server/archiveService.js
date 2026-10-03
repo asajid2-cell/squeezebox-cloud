@@ -204,11 +204,14 @@ async function kickWorker() {
  * per `encodeArgs`, written to `outPath`. Shared by archive (FLAC) and the local
  * browser stream cache (MP3).
  */
-function fetchAndEncode(uri, outPath, encodeArgs, label = "Worker", { timeoutMs = 0 } = {}) {
+async function fetchAndEncode(uri, outPath, encodeArgs, label = "Worker", { timeoutMs = 0 } = {}) {
   const bin = locateSpottyBin();
   if (!bin || !existsSync(bin)) {
     return Promise.reject(new Error("spotty helper binary not found"));
   }
+  // Ensure a current credential before every fetch — the local stream cache shares
+  // this path and would otherwise run on a stale (or wrong-account) credential.
+  await ensureCredentials();
   return new Promise((resolve, reject) => {
     let settled = false;
     let spottyClosed = false;
@@ -650,7 +653,10 @@ export const __archiveServiceTestHooks = {
     watchedPlaylists = [];
     lastScanAt = null;
     scanning = false;
-  }
+  },
+  // The credential-source paths are fixed at import time (CONFIG_DIR/ARCHIVE_DIR),
+  // so a test for account selection sets those env vars and re-imports the module.
+  prepareCredentialsForTests: prepareCredentials
 };
 
 // ---------------------------------------------------------------------------
@@ -669,18 +675,77 @@ function locateSpottyBin() {
   return path.join(base, "i386-linux/spotty-x86_64");
 }
 
-async function prepareCredentials() {
-  const base = path.join(CONFIG_DIR, "cache/spotty");
+// Spotty keeps ONE credentials.json per account: the ACTIVE account at
+// cache/spotty/credentials.json, and each account Spotty has cached at
+// cache/spotty/<md5(username)>/credentials.json. Copying "whichever directory
+// readdir happens to return first" silently downloads as an arbitrary account —
+// so selection is explicit and deterministic instead: ARCHIVE_SPOTTY_ACCOUNT
+// names the account to use (an md5 dir or a username); otherwise the active
+// credential is used. Never fall back to an unrequested cached account.
+const SPOTTY_CACHE_DIR = path.join(CONFIG_DIR, "cache/spotty");
+const SPOTTY_ACTIVE_CREDENTIALS = path.join(SPOTTY_CACHE_DIR, "credentials.json");
+
+// Spotty names an account's cache dir with the FIRST 8 hex chars of the
+// md5(username) — e.g. 12ca5b04 = md5("zf9qsa28…"). Accept either the 8-char dir,
+// a full 32-char md5, or the plain username.
+function spottyAccountDir(account) {
+  const s = String(account || "").trim();
+  if (!s) return "";
+  if (/^[0-9a-f]{8}$/i.test(s)) return s.toLowerCase();
+  if (/^[0-9a-f]{32}$/i.test(s)) return s.toLowerCase().slice(0, 8);
+  return crypto.createHash("md5").update(s).digest("hex").slice(0, 8);
+}
+
+// Credentials to try, in order: the account named by ARCHIVE_SPOTTY_ACCOUNT (if
+// any), then the active account. Never an unrequested cached account.
+function credentialCandidates() {
+  const dir = spottyAccountDir(process.env.ARCHIVE_SPOTTY_ACCOUNT);
+  return dir ? [path.join(SPOTTY_CACHE_DIR, dir, "credentials.json"), SPOTTY_ACTIVE_CREDENTIALS] : [SPOTTY_ACTIVE_CREDENTIALS];
+}
+
+// The account a credentials.json belongs to (for logging only — never the token).
+async function credentialAccount(file) {
   try {
-    for (const dir of await fs.readdir(base)) {
-      const src = path.join(base, dir, "credentials.json");
-      if (existsSync(src)) {
-        await fs.copyFile(src, path.join(CACHE_DIR, "credentials.json"));
-        return true;
-      }
-    }
-  } catch {}
+    return String(JSON.parse(await fs.readFile(file, "utf8"))?.username || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+async function copyFirstAvailable(dest) {
+  for (const src of credentialCandidates()) {
+    try {
+      await fs.copyFile(src, dest);
+      return true;
+    } catch {}
+  }
   return false;
+}
+
+/** Copy the credential Spotty should download with into CACHE_DIR, where the
+ *  spotty helper reads it. Deterministic (see above); false = nothing to copy. */
+async function prepareCredentials() {
+  const dest = path.join(CACHE_DIR, "credentials.json");
+  if (!(await copyFirstAvailable(dest))) return false;
+  console.log(`[archive] Spotty credential ready — account ${(await credentialAccount(dest)) || "?"}.`);
+  return true;
+}
+
+/** Refresh the credential before a fetch when Spotty's source is newer (a
+ *  re-auth or account switch), so a long-running container never downloads with
+ *  a stale credential. An explicitly named account is always (re)copied. */
+async function ensureCredentials() {
+  const dest = path.join(CACHE_DIR, "credentials.json");
+  if (spottyAccountDir(process.env.ARCHIVE_SPOTTY_ACCOUNT)) return copyFirstAvailable(dest);
+  try {
+    const source = await fs.stat(SPOTTY_ACTIVE_CREDENTIALS);
+    const current = await fs.stat(dest).catch(() => null);
+    if (current && current.mtimeMs >= source.mtimeMs) return true;
+    await fs.copyFile(SPOTTY_ACTIVE_CREDENTIALS, dest);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function normalizeUri(u) {

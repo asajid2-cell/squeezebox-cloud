@@ -183,3 +183,52 @@ describe("EASW email-convention parsing", () => {
     expect(emailFromTitle("")).toBe("");
   });
 });
+
+describe("Spotty credential selection", () => {
+  let root = "";
+
+  afterEach(async () => {
+    delete process.env.ARCHIVE_SPOTTY_ACCOUNT;
+    delete process.env.ARCHIVE_DIR;
+    delete process.env.LMS_CONFIG_DIR;
+    vi.resetModules();
+    if (root) await fs.rm(root, { recursive: true, force: true });
+    root = "";
+  });
+
+  // The credential-source dirs are fixed when the module loads (CONFIG_DIR /
+  // ARCHIVE_DIR), so a fresh module instance is imported with the temp env set.
+  async function freshArchiveService() {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-squeeze-cred-"));
+    const configDir = path.join(root, "config");
+    const archiveDir = path.join(root, "archive");
+    // Spotty caches each account under <md5(username)>/credentials.json; the ACTIVE
+    // account is the top-level credentials.json. Only a cached firehose account
+    // (12ca5b04 = zf9qsa28) exists here, alongside the active streaming credential.
+    await fs.mkdir(path.join(configDir, "cache", "spotty", "12ca5b04"), { recursive: true });
+    await fs.mkdir(path.join(archiveDir, ".spotty-cache"), { recursive: true });
+    await fs.writeFile(path.join(configDir, "cache", "spotty", "credentials.json"), JSON.stringify({ username: "ahmedsajid1995" }));
+    await fs.writeFile(path.join(configDir, "cache", "spotty", "12ca5b04", "credentials.json"), JSON.stringify({ username: "zf9qsa28" }));
+    process.env.ARCHIVE_DIR = archiveDir;
+    process.env.LMS_CONFIG_DIR = configDir;
+    vi.resetModules();
+    const mod: any = await import("../server/archiveService.js");
+    return { mod, archiveDir };
+  }
+
+  const copiedAccount = async (archiveDir: string) =>
+    JSON.parse(await fs.readFile(path.join(archiveDir, ".spotty-cache", "credentials.json"), "utf8")).username;
+
+  it("uses the active credential, never an unrequested cached account", async () => {
+    const { mod, archiveDir } = await freshArchiveService();
+    await expect(mod.__archiveServiceTestHooks.prepareCredentialsForTests()).resolves.toBe(true);
+    await expect(copiedAccount(archiveDir)).resolves.toBe("ahmedsajid1995");
+  });
+
+  it("honours an explicitly requested account", async () => {
+    const { mod, archiveDir } = await freshArchiveService();
+    process.env.ARCHIVE_SPOTTY_ACCOUNT = "zf9qsa28w4s0kfueudoyyu22w";
+    await expect(mod.__archiveServiceTestHooks.prepareCredentialsForTests()).resolves.toBe(true);
+    await expect(copiedAccount(archiveDir)).resolves.toBe("zf9qsa28");
+  });
+});
