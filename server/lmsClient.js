@@ -11,6 +11,9 @@ const spotifyBrowseDeadlineMs = Number(process.env.SPOTIFY_BROWSE_DEADLINE_MS ||
 const spotifyColdBrowseDeadlineMs = Number(process.env.SPOTIFY_COLD_BROWSE_DEADLINE_MS || 6500);
 const spotifyChildrenColdBrowseDeadlineMs = Number(process.env.SPOTIFY_CHILDREN_COLD_BROWSE_DEADLINE_MS || 4000);
 const spotifySearchCategoryDeadlineMs = Number(process.env.SPOTIFY_SEARCH_CATEGORY_DEADLINE_MS || 650);
+// LMS CLI replies are a line or two. Cap the buffer so a runaway/never-terminated
+// response cannot accumulate unbounded memory within the command timeout.
+const lmsCliMaxResponseBytes = Number(process.env.LMS_CLI_MAX_RESPONSE_BYTES || 1024 * 1024);
 
 // ---- Spotify track durations (progressive uri -> seconds cache) ---------------
 // Spotty's search/browse never carries a track length and the Web API is in
@@ -27,6 +30,9 @@ const spotifyDurationCacheFile = path.join(config.musicSourceDir, "cloud-squeeze
 // browse works straight after a restart.
 const spotifyBrowseIdsFile = path.join(config.musicSourceDir, "cloud-squeeze", "spotify-browse-ids.json");
 const spotifyDurationCache = new Map();   // "spotify:track:<id>" -> seconds
+// Grows one entry per distinct track ever played and is persisted to JSON, so cap
+// it (evict oldest) rather than letting the map and its file grow without bound.
+const spotifyDurationCacheMax = Number(process.env.SPOTIFY_DURATION_CACHE_MAX || 20000);
 let spotifyDurationCacheDirty = false;
 let spotifyDurationPersistTimer = null;
 
@@ -56,6 +62,12 @@ export function rememberSpotifyDuration(uri, seconds) {
   if (!key || value <= 0 || spotifyDurationCache.get(key) === value) return;
   spotifyDurationCache.set(key, value);
   spotifyDurationCacheDirty = true;
+  if (spotifyDurationCache.size > spotifyDurationCacheMax) {
+    for (const stale of spotifyDurationCache.keys()) {
+      spotifyDurationCache.delete(stale);
+      if (spotifyDurationCache.size <= spotifyDurationCacheMax) break;
+    }
+  }
   if (spotifyDurationPersistTimer) return;
   spotifyDurationPersistTimer = setTimeout(async () => {
     spotifyDurationPersistTimer = null;
@@ -143,6 +155,15 @@ export class LmsClient {
       socket.on("connect", () => socket.write(`${command}\n`));
       socket.on("data", (chunk) => {
         data += chunk;
+        if (data.length > lmsCliMaxResponseBytes) {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          clearTimeout(idleTimer);
+          socket.destroy();
+          reject(new Error(`LMS CLI response exceeded ${lmsCliMaxResponseBytes} bytes for command: ${command}`));
+          return;
+        }
         if (data.includes("\n")) {
           finish(data);
           return;
@@ -158,9 +179,14 @@ export class LmsClient {
         reject(error);
       });
       socket.on("close", () => {
-        if (data) finish(data);
+        if (settled) return;
+        if (data) { finish(data); return; }
+        // Closed without answering (LMS dropped mid-restart, proxy reset): fail the
+        // call instead of clearing the only deadline and leaving the caller pending.
+        settled = true;
         clearTimeout(timer);
         clearTimeout(idleTimer);
+        reject(new Error(`LMS CLI closed without a response for command: ${command}`));
       });
     });
   }
@@ -175,8 +201,21 @@ export class LmsClient {
       return { connected: false, online: true, detail: "LMS online, no player connected" };
     }
 
-    const playerIdResponse = await this.command("player id 0 ?");
-    const playerId = decodeURIComponent(lastToken(playerIdResponse));
+    // Pick the first non-headless player, so the CLI fallback targets the same real
+    // speaker the JSON path would (see statusFromJson) — index 0 may be the
+    // null-output archiver player.
+    const headless = String(process.env.HEADLESS_PLAYER_MAC || "").toLowerCase();
+    let playerId = "";
+    for (let i = 0; i < count; i += 1) {
+      const candidate = decodeURIComponent(lastToken(await this.command(`player id ${i} ?`)));
+      if (!candidate) continue;
+      if (headless && candidate.toLowerCase() === headless) continue;
+      playerId = candidate;
+      break;
+    }
+    if (!playerId) {
+      return { connected: false, online: true, detail: "LMS online, no player connected" };
+    }
     const nameResponse = await this.command(`${encodeURIComponent(playerId)} name ?`);
     const modeResponse = await this.command(`${encodeURIComponent(playerId)} mode ?`);
     const volumeResponse = await this.command(`${encodeURIComponent(playerId)} mixer volume ?`);

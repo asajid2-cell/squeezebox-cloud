@@ -132,6 +132,46 @@ describe("LMS client parsing", () => {
     await expect(client.status()).resolves.toMatchObject({ id: "player-1", name: "Boom", mode: "play", volume: 50 });
   });
 
+  it("skips the headless archiver player in the CLI status fallback", async () => {
+    const previous = process.env.HEADLESS_PLAYER_MAC;
+    process.env.HEADLESS_PLAYER_MAC = "02:42:ac:1f:00:01";
+    try {
+      const client = new LmsClient();
+      client.jsonRequest = async () => {
+        throw new Error("JSON unavailable");
+      };
+      client.command = async (command: string) => {
+        if (command === "player count ?") return "player count 2";
+        if (command === "player id 0 ?") return "player id 0 02:42:ac:1f:00:01";
+        if (command === "player id 1 ?") return "player id 1 00:04:20:1f:2c:56";
+        if (command.endsWith("name ?")) return "00%3A04%3A20%3A1f%3A2c%3A56 name Boom";
+        if (command.endsWith("mode ?")) return "00%3A04%3A20%3A1f%3A2c%3A56 mode play";
+        if (command.endsWith("mixer volume ?")) return "00%3A04%3A20%3A1f%3A2c%3A56 mixer volume 42";
+        return "ok";
+      };
+
+      await expect(client.status()).resolves.toMatchObject({ id: "00:04:20:1f:2c:56", name: "Boom", mode: "play", volume: 42 });
+    } finally {
+      if (previous === undefined) delete process.env.HEADLESS_PLAYER_MAC;
+      else process.env.HEADLESS_PLAYER_MAC = previous;
+    }
+  });
+
+  it("rejects (rather than hangs) when LMS closes the CLI socket with no reply", async () => {
+    const server = net.createServer((socket) => {
+      socket.once("data", () => socket.end());
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("No test server address");
+    try {
+      const client = new LmsClient({ host: "127.0.0.1", port: address.port, timeoutMs: 1000 });
+      await expect(client.command("player count ?")).rejects.toThrow(/closed without a response/);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it("merges rich LMS status into now playing", async () => {
     const client = new LmsClient();
     client.command = async (command: string) => {
